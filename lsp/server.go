@@ -144,32 +144,32 @@ func compactGlobalIndex(s *Server) {
 //   - clear TypeCache, Inferring, LuaDocCache, ActualReads, MutatedLocals
 //   - nil the Tree.Source pointer (Tree owns Source now)
 func evictClosedDocumentCaches(s *Server) {
-    if s == nil {
-        return
-    }
-    for uri, doc := range s.Documents {
-        if doc == nil {
-            continue
-        }
-        // Skip currently open documents
-        if s.OpenFiles != nil {
-            if open, ok := s.OpenFiles[uri]; ok && open {
-                continue
-            }
-        }
+	if s == nil {
+		return
+	}
+	for uri, doc := range s.Documents {
+		if doc == nil {
+			continue
+		}
+		// Skip currently open documents
+		if s.OpenFiles != nil {
+			if open, ok := s.OpenFiles[uri]; ok && open {
+				continue
+			}
+		}
 
-        // Evict large caches. Preserve AST (doc.Tree) and Resolver for cross-doc features.
-        doc.TypeCache = nil
-        doc.Inferring = nil
-        doc.LuaDocCache = nil
-        doc.ActualReads = nil
-        doc.MutatedLocals = nil
-        // Tree owns Source; free the underlying source buffer
-        if doc.Tree != nil {
-            doc.Tree.Source = nil
-        }
-        // Do not modify doc.Resolver or doc.Tree themselves
-    }
+		// Evict large caches. Preserve AST (doc.Tree) and Resolver for cross-doc features.
+		doc.TypeCache = nil
+		doc.Inferring = nil
+		doc.LuaDocCache = nil
+		doc.ActualReads = nil
+		doc.MutatedLocals = nil
+		// Tree owns Source; free the underlying source buffer
+		if doc.Tree != nil {
+			doc.Tree.Source = nil
+		}
+		// Do not modify doc.Resolver or doc.Tree themselves
+	}
 }
 
 func NewServer(version string) *Server {

@@ -190,18 +190,18 @@ func reindentNodeText(doc *Document, id ast.NodeID, targetIndent string) string 
 	}
 
 	node := doc.Tree.Nodes[id]
-    if node.Start >= node.End || node.End > uint32(len(doc.Source())) {
-        return ""
-    }
+	if node.Start >= node.End || node.End > uint32(len(doc.Source())) {
+		return ""
+	}
 
-    text := string(doc.Source()[node.Start:node.End])
+	text := string(doc.Source()[node.Start:node.End])
 
 	var baseIndent string
 
 	for i := int(node.Start) - 1; i >= 0; i-- {
-        c := doc.Source()[i]
+		c := doc.Source()[i]
 		if c == '\n' {
-        baseIndent = string(doc.Source()[i+1 : node.Start])
+			baseIndent = string(doc.Source()[i+1 : node.Start])
 
 			break
 		} else if c != ' ' && c != '\t' {
@@ -211,9 +211,9 @@ func reindentNodeText(doc *Document, id ast.NodeID, targetIndent string) string 
 		}
 	}
 
-    if len(baseIndent) == 0 && node.Start > 0 {
-        for i := 0; i < int(node.Start); i++ {
-            c := doc.Source()[i]
+	if len(baseIndent) == 0 && node.Start > 0 {
+		for i := 0; i < int(node.Start); i++ {
+			c := doc.Source()[i]
 
 			if c == ' ' || c == '\t' {
 				baseIndent += string(c)

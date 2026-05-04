@@ -127,7 +127,7 @@ func TestFiveMDedup_ManifestEntryMutationPropagates(t *testing.T) {
 func TestFiveMDedup_ResourceLookupByURIViaGraph(t *testing.T) {
 	t.Parallel()
 
-testCases := []struct {
+	testCases := []struct {
 		fixture       string
 		resourceRoot  string
 		resourceName  string
@@ -181,17 +181,17 @@ func TestFiveMDedup_ResourceLookupByNameViaGraph(t *testing.T) {
 	t.Parallel()
 
 	testCases := []struct {
-		fixture       string
+		fixture      string
 		resourceName string
 		expectedRoot string
 	}{
 		{
-			fixture:       "resource_client_server_shared",
+			fixture:      "resource_client_server_shared",
 			resourceName: "surface_resource",
 			expectedRoot: "surface_resource",
 		},
 		{
-			fixture:       "resource_dual_listed",
+			fixture:      "resource_dual_listed",
 			resourceName: "dual_resource",
 			expectedRoot: "dual_resource",
 		},

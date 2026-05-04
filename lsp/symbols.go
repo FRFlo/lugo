@@ -400,19 +400,19 @@ func (s *Server) handleDocumentSymbol(req Request) {
 						if paramIdx >= 0 && paramIdx < int(targetFuncNode.Count) {
 							if targetFuncNode.Extra+uint32(paramIdx) < uint32(len(targetDoc.Tree.ExtraList)) {
 								pID := targetDoc.Tree.ExtraList[targetFuncNode.Extra+uint32(paramIdx)]
-if int(pID) < len(targetDoc.Tree.Nodes) {
-								pNode := targetDoc.Tree.Nodes[pID]
-								src := targetDoc.Source()
-								if len(src) == 0 {
-									continue
-								}
-								if pNode.Start <= pNode.End && pNode.End <= uint32(len(src)) {
-									pNameStr := ast.String(src[pNode.Start:pNode.End])
-									if pNameStr != "" && pNameStr != "..." {
-										paramName = pNameStr
+								if int(pID) < len(targetDoc.Tree.Nodes) {
+									pNode := targetDoc.Tree.Nodes[pID]
+									src := targetDoc.Source()
+									if len(src) == 0 {
+										continue
+									}
+									if pNode.Start <= pNode.End && pNode.End <= uint32(len(src)) {
+										pNameStr := ast.String(src[pNode.Start:pNode.End])
+										if pNameStr != "" && pNameStr != "..." {
+											paramName = pNameStr
+										}
 									}
 								}
-							}
 							}
 						}
 					}

@@ -220,7 +220,7 @@ func newFiveMProfileTestServer(t *testing.T) (*Server, string) {
 
 	root := t.TempDir()
 	s := NewServer("test")
-    s.FeatureFiveM = true
+	s.FeatureFiveM = true
 	attachTestFiveMNativeBundleLoader(t, s)
 	s.setLibraryPaths([]string{materializeTestFiveMNativeLibrary(t, s)})
 
@@ -288,9 +288,9 @@ func mustFindIdentNode(t testing.TB, doc *Document, name string) ast.NodeID {
 
 	for id := 1; id < len(doc.Tree.Nodes); id++ {
 		node := doc.Tree.Nodes[id]
-        if node.Kind == ast.KindIdent && bytes.Equal(doc.Source()[node.Start:node.End], []byte(name)) {
-            return ast.NodeID(id)
-        }
+		if node.Kind == ast.KindIdent && bytes.Equal(doc.Source()[node.Start:node.End], []byte(name)) {
+			return ast.NodeID(id)
+		}
 	}
 
 	t.Fatalf("identifier %q not found in %s", name, doc.URI)

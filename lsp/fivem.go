@@ -381,12 +381,12 @@ const (
 )
 
 type FiveMResourceGraphExpansion struct {
-    Entry           *FiveMManifestEntry
-    Kind            FiveMResourceGraphExpansionKind
-    Pattern         string
-    Include         string
-    IncludeResource string
-    IncludePath     string
+	Entry           *FiveMManifestEntry
+	Kind            FiveMResourceGraphExpansionKind
+	Pattern         string
+	Include         string
+	IncludeResource string
+	IncludePath     string
 }
 
 type FiveMResourceGraphNode struct {
@@ -448,22 +448,22 @@ func parseFiveMResourceInclude(value string) (resourceName, path string, ok bool
 }
 
 func newFiveMResourceGraphExpansion(entry *FiveMManifestEntry) FiveMResourceGraphExpansion {
-    expansion := FiveMResourceGraphExpansion{Entry: entry}
+	expansion := FiveMResourceGraphExpansion{Entry: entry}
 
-    if entry != nil && strings.HasPrefix(entry.Value, "@") {
-        expansion.Kind = FiveMResourceGraphExpansionInclude
-        expansion.Include = entry.Value
-        expansion.IncludeResource, expansion.IncludePath, _ = parseFiveMResourceInclude(entry.Value)
+	if entry != nil && strings.HasPrefix(entry.Value, "@") {
+		expansion.Kind = FiveMResourceGraphExpansionInclude
+		expansion.Include = entry.Value
+		expansion.IncludeResource, expansion.IncludePath, _ = parseFiveMResourceInclude(entry.Value)
 
-        return expansion
-    }
+		return expansion
+	}
 
-    expansion.Kind = FiveMResourceGraphExpansionLocal
-    if entry != nil {
-        expansion.Pattern = entry.Value
-    }
+	expansion.Kind = FiveMResourceGraphExpansionLocal
+	if entry != nil {
+		expansion.Pattern = entry.Value
+	}
 
-    return expansion
+	return expansion
 }
 
 func newFiveMResourceGraphNode(res *FiveMResource) *FiveMResourceGraphNode {
@@ -512,30 +512,30 @@ func newFiveMResourceGraphNode(res *FiveMResource) *FiveMResourceGraphNode {
 		return node
 	}
 
-    for i := 0; i < len(res.Manifest.Entries); i++ {
-        entry := res.Manifest.Entries[i]
-        if entry.LoaderInjected || entry.ReservedKey {
-            continue
-        }
+	for i := 0; i < len(res.Manifest.Entries); i++ {
+		entry := res.Manifest.Entries[i]
+		if entry.LoaderInjected || entry.ReservedKey {
+			continue
+		}
 
-        switch entry.EmittedName {
-        case "dependency", "dependencie":
-            if entry.Value != "" {
-                node.Dependencies = append(node.Dependencies, entry.Value)
-            }
-        case "provide":
-            alias := normalizeFiveMResourceAlias(entry.Value)
-            if alias != "" {
-                node.Provides = append(node.Provides, alias)
-            }
-        case "client_script":
-            node.ClientEntries = append(node.ClientEntries, newFiveMResourceGraphExpansion(&res.Manifest.Entries[i]))
-        case "server_script":
-            node.ServerEntries = append(node.ServerEntries, newFiveMResourceGraphExpansion(&res.Manifest.Entries[i]))
-        case "shared_script", "file":
-            node.SharedEntries = append(node.SharedEntries, newFiveMResourceGraphExpansion(&res.Manifest.Entries[i]))
-        }
-    }
+		switch entry.EmittedName {
+		case "dependency", "dependencie":
+			if entry.Value != "" {
+				node.Dependencies = append(node.Dependencies, entry.Value)
+			}
+		case "provide":
+			alias := normalizeFiveMResourceAlias(entry.Value)
+			if alias != "" {
+				node.Provides = append(node.Provides, alias)
+			}
+		case "client_script":
+			node.ClientEntries = append(node.ClientEntries, newFiveMResourceGraphExpansion(&res.Manifest.Entries[i]))
+		case "server_script":
+			node.ServerEntries = append(node.ServerEntries, newFiveMResourceGraphExpansion(&res.Manifest.Entries[i]))
+		case "shared_script", "file":
+			node.SharedEntries = append(node.SharedEntries, newFiveMResourceGraphExpansion(&res.Manifest.Entries[i]))
+		}
+	}
 
 	return node
 }
@@ -1014,11 +1014,11 @@ func (s *Server) fiveMManifestNodeValue(doc *Document, nodeID ast.NodeID) (strin
 	}
 
 	node := doc.Tree.Nodes[nodeID]
-    if node.Start > node.End || node.End > uint32(len(doc.Source())) {
-        return "", "", Range{}, false
-    }
+	if node.Start > node.End || node.End > uint32(len(doc.Source())) {
+		return "", "", Range{}, false
+	}
 
-    raw := string(doc.Source()[node.Start:node.End])
+	raw := string(doc.Source()[node.Start:node.End])
 	value := raw
 
 	if node.Kind == ast.KindString {
@@ -1089,11 +1089,11 @@ func (s *Server) fiveMManifestEntriesForCall(doc *Document, nodeID ast.NodeID) (
 		return rawName, emittedName, normalizedName, entries, true
 	}
 
-    if left.Kind != ast.KindIdent || left.Start > left.End || left.End > uint32(len(doc.Source())) {
-        return "", "", "", nil, false
-    }
+	if left.Kind != ast.KindIdent || left.Start > left.End || left.End > uint32(len(doc.Source())) {
+		return "", "", "", nil, false
+	}
 
-    rawName = string(doc.Source()[left.Start:left.End])
+	rawName = string(doc.Source()[left.Start:left.End])
 	normalizedName = fiveMManifestNormalizedName(rawName)
 	emittedName = strings.ToLower(rawName)
 	callRange := getNodeRange(doc.Tree, nodeID)
@@ -1350,7 +1350,7 @@ func (s *Server) registerFiveMManifestResource(res *FiveMResource) *FiveMResourc
 		return nil
 	}
 
-    // FiveMResourceGraph is the single source of truth; no local map rebuild needed
+	// FiveMResourceGraph is the single source of truth; no local map rebuild needed
 
 	return active
 }
@@ -1384,9 +1384,9 @@ func (s *Server) getDocumentFiveMProfile(doc *Document) FiveMExecutionProfile {
 		profile.ResourceRoot = doc.URI[:strings.LastIndex(doc.URI, "/")]
 		profile.ResourceName = fiveMResourceNameFromRoot(profile.ResourceRoot)
 
-        if res := s.FiveMResourceGraph.ResourceByRoot(profile.ResourceRoot); res != nil && res.Name != "" {
-            profile.ResourceName = res.Name
-        }
+		if res := s.FiveMResourceGraph.ResourceByRoot(profile.ResourceRoot); res != nil && res.Name != "" {
+			profile.ResourceName = res.Name
+		}
 
 		doc.FiveMProfile = profile
 		doc.FiveMProfileCached = true
@@ -1448,13 +1448,13 @@ func (s *Server) getFiveMNativeSelection(doc *Document) FiveMNativeSelection {
 func (s *Server) findFiveMResource(doc *Document) (string, *FiveMResource) {
 	var bestRoot string
 
-    for root := range s.FiveMResourceGraph.ByRoot {
-        if strings.HasPrefix(doc.URI, root+"/") || doc.URI == root {
-            if len(root) > len(bestRoot) {
-                bestRoot = root
-            }
-        }
-    }
+	for root := range s.FiveMResourceGraph.ByRoot {
+		if strings.HasPrefix(doc.URI, root+"/") || doc.URI == root {
+			if len(root) > len(bestRoot) {
+				bestRoot = root
+			}
+		}
+	}
 
 	if bestRoot == "" {
 		return "", nil
@@ -1472,15 +1472,15 @@ func (s *Server) resolveFiveMResource(name string) *FiveMResource {
 }
 
 func (s *Server) resolveFiveMResourceByRoot(root string) *FiveMResource {
-    if s == nil || s.FiveMResourceGraph == nil {
-        return nil
-    }
+	if s == nil || s.FiveMResourceGraph == nil {
+		return nil
+	}
 
-    if res := s.FiveMResourceGraph.ResourceByRoot(root); res != nil {
-        return res
-    }
+	if res := s.FiveMResourceGraph.ResourceByRoot(root); res != nil {
+		return res
+	}
 
-    return nil
+	return nil
 }
 
 func (s *Server) getFiveMResourceGraphNode(root string) *FiveMResourceGraphNode {
@@ -1614,52 +1614,52 @@ func fiveMResourceNameFromRoot(root string) string {
 //   - Remove the resource node from the graph
 //   - Invalidate FiveMProfileCached for all documents under the resource root
 func removeFiveMResource(server *Server, uri URI) {
-    if server == nil {
-        return
-    }
-    uriStr := string(uri)
-    if server.FiveMResourceGraph == nil || len(server.FiveMResourceGraph.ByRoot) == 0 {
-        return
-    }
+	if server == nil {
+		return
+	}
+	uriStr := string(uri)
+	if server.FiveMResourceGraph == nil || len(server.FiveMResourceGraph.ByRoot) == 0 {
+		return
+	}
 
-    var targetRoot string
-    var targetRes *FiveMResource
-    // Search graph by root for the candidate resource
-    for root, node := range server.FiveMResourceGraph.ByRoot {
-        if root == "" || node == nil || node.Resource == nil {
-            continue
-        }
-        if uriStr == root || strings.HasPrefix(uriStr, root+"/") {
-            if targetRoot == "" || len(root) > len(targetRoot) {
-                targetRoot = root
-                targetRes = node.Resource
-            }
-        }
-    }
-    if targetRes == nil {
-        return
-    }
+	var targetRoot string
+	var targetRes *FiveMResource
+	// Search graph by root for the candidate resource
+	for root, node := range server.FiveMResourceGraph.ByRoot {
+		if root == "" || node == nil || node.Resource == nil {
+			continue
+		}
+		if uriStr == root || strings.HasPrefix(uriStr, root+"/") {
+			if targetRoot == "" || len(root) > len(targetRoot) {
+				targetRoot = root
+				targetRes = node.Resource
+			}
+		}
+	}
+	if targetRes == nil {
+		return
+	}
 
-    // Remove from graph
-    if targetRoot != "" {
-        if gnode := server.FiveMResourceGraph.NodeByRoot(targetRoot); gnode != nil {
-            server.FiveMResourceGraph.removeNode(gnode)
-        } else {
-            delete(server.FiveMResourceGraph.ByRoot, targetRoot)
-        }
-    }
-    if targetRes.Name != "" {
-        delete(server.FiveMResourceGraph.ByName, targetRes.Name)
-    }
-    // Invalidate affected documents
-    rootPrefix := targetRes.RootURI
-    for dURI, d := range server.Documents {
-        if d == nil {
-            continue
-        }
-        if strings.HasPrefix(dURI, rootPrefix+"/") || dURI == rootPrefix {
-            d.FiveMProfile = FiveMExecutionProfile{}
-            d.FiveMProfileCached = false
-        }
-    }
+	// Remove from graph
+	if targetRoot != "" {
+		if gnode := server.FiveMResourceGraph.NodeByRoot(targetRoot); gnode != nil {
+			server.FiveMResourceGraph.removeNode(gnode)
+		} else {
+			delete(server.FiveMResourceGraph.ByRoot, targetRoot)
+		}
+	}
+	if targetRes.Name != "" {
+		delete(server.FiveMResourceGraph.ByName, targetRes.Name)
+	}
+	// Invalidate affected documents
+	rootPrefix := targetRes.RootURI
+	for dURI, d := range server.Documents {
+		if d == nil {
+			continue
+		}
+		if strings.HasPrefix(dURI, rootPrefix+"/") || dURI == rootPrefix {
+			d.FiveMProfile = FiveMExecutionProfile{}
+			d.FiveMProfileCached = false
+		}
+	}
 }

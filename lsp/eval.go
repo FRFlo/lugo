@@ -226,7 +226,7 @@ func (doc *Document) evalNode(id ast.NodeID, depth int) (evalResult, bool) {
 
 	switch node.Kind {
 	case ast.KindNumber:
-        raw := ast.String(doc.Source()[node.Start:node.End])
+		raw := ast.String(doc.Source()[node.Start:node.End])
 
 		floatVal, err := strconv.ParseFloat(raw, 64)
 		if err != nil {
@@ -240,7 +240,7 @@ func (doc *Document) evalNode(id ast.NodeID, depth int) (evalResult, bool) {
 
 		return evalResult{kind: ast.KindNumber, num: floatVal}, true
 	case ast.KindString:
-        raw := ast.String(doc.Source()[node.Start:node.End])
+		raw := ast.String(doc.Source()[node.Start:node.End])
 		if len(raw) >= 2 && (raw[0] == '\'' || raw[0] == '"') {
 			unq, err := strconv.Unquote(raw)
 			if err == nil {
@@ -292,7 +292,7 @@ func (doc *Document) evalNode(id ast.NodeID, depth int) (evalResult, bool) {
 			return evalResult{}, false
 		}
 
-        src := doc.Source()[node.Start:node.End]
+		src := doc.Source()[node.Start:node.End]
 		if bytes.HasPrefix(src, []byte("-")) && right.kind == ast.KindNumber {
 			return evalResult{kind: ast.KindNumber, num: -right.num}, true
 		} else if bytes.HasPrefix(src, []byte("~")) && right.kind == ast.KindNumber {
