@@ -14,7 +14,7 @@ import (
 
 const (
 	fiveMColdAllocBudgetRatio             = 1.25
-	fiveMWarmReindexAllocBudgetRatio      = 0.15
+	fiveMWarmReindexAllocBudgetRatio      = 0.09
 	fiveMNativeActivationAllocBudgetRatio = 1.10
 )
 
