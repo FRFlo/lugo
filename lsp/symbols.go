@@ -400,15 +400,19 @@ func (s *Server) handleDocumentSymbol(req Request) {
 						if paramIdx >= 0 && paramIdx < int(targetFuncNode.Count) {
 							if targetFuncNode.Extra+uint32(paramIdx) < uint32(len(targetDoc.Tree.ExtraList)) {
 								pID := targetDoc.Tree.ExtraList[targetFuncNode.Extra+uint32(paramIdx)]
-								if int(pID) < len(targetDoc.Tree.Nodes) {
-									pNode := targetDoc.Tree.Nodes[pID]
-									if pNode.Start <= pNode.End && pNode.End <= uint32(len(targetDoc.Source())) {
-										pNameStr := ast.String(targetDoc.Source()[pNode.Start:pNode.End])
-										if pNameStr != "" && pNameStr != "..." {
-											paramName = pNameStr
-										}
+if int(pID) < len(targetDoc.Tree.Nodes) {
+								pNode := targetDoc.Tree.Nodes[pID]
+								src := targetDoc.Source()
+								if len(src) == 0 {
+									continue
+								}
+								if pNode.Start <= pNode.End && pNode.End <= uint32(len(src)) {
+									pNameStr := ast.String(src[pNode.Start:pNode.End])
+									if pNameStr != "" && pNameStr != "..." {
+										paramName = pNameStr
 									}
 								}
+							}
 							}
 						}
 					}
@@ -1312,9 +1316,14 @@ func (s *Server) iterateGlobalReferences(ctx *SymbolContext) iter.Seq[GlobalRefe
 				continue
 			}
 
+			src := dDoc.Source()
+			if len(src) == 0 {
+				continue
+			}
+
 			if ctx.GKey.ReceiverHash == 0 {
 				for _, id := range dDoc.Resolver.GlobalDefs {
-					if ast.HashBytes(dDoc.Source()[dDoc.Tree.Nodes[id].Start:dDoc.Tree.Nodes[id].End]) == ctx.GKey.PropHash {
+					if ast.HashBytes(src[dDoc.Tree.Nodes[id].Start:dDoc.Tree.Nodes[id].End]) == ctx.GKey.PropHash {
 						if !yield(GlobalReference{Doc: dDoc, URI: dUri, NodeID: id}) {
 							return
 						}
@@ -1322,7 +1331,7 @@ func (s *Server) iterateGlobalReferences(ctx *SymbolContext) iter.Seq[GlobalRefe
 				}
 
 				for _, id := range dDoc.Resolver.GlobalRefs {
-					if ast.HashBytes(dDoc.Source()[dDoc.Tree.Nodes[id].Start:dDoc.Tree.Nodes[id].End]) == ctx.GKey.PropHash {
+					if ast.HashBytes(src[dDoc.Tree.Nodes[id].Start:dDoc.Tree.Nodes[id].End]) == ctx.GKey.PropHash {
 						if dDoc.Resolver.References[id] == ast.InvalidNode {
 							if !yield(GlobalReference{Doc: dDoc, URI: dUri, NodeID: id}) {
 								return
@@ -1561,7 +1570,12 @@ func (s *Server) getGlobalAlias(hash uint64) uint64 {
 			return 0
 		}
 
-		return ast.HashBytes(doc.Source()[node.Start:node.End])
+		src := doc.Source()
+		if len(src) == 0 {
+			return 0
+		}
+
+		return ast.HashBytes(src[node.Start:node.End])
 	}
 
 	return 0

@@ -710,6 +710,11 @@ func (doc *Document) inferMemberExpr(node ast.Node) TypeSet {
 			return
 		}
 
+		src := tDoc.Source()
+		if len(src) == 0 {
+			return
+		}
+
 		tableNode := tDoc.Tree.Nodes[tableID]
 		if tableNode.Kind == ast.KindTableExpr {
 			for i := uint16(0); i < tableNode.Count; i++ {
@@ -719,8 +724,8 @@ func (doc *Document) inferMemberExpr(node ast.Node) TypeSet {
 				if field.Kind == ast.KindRecordField {
 					key := tDoc.Tree.Nodes[field.Left]
 
-					if key.Kind == ast.KindIdent {
-                    keyName := tDoc.Source()[key.Start:key.End]
+if key.Kind == ast.KindIdent {
+                                            keyName := src[key.Start:key.End]
 						if bytes.Equal(keyName, fieldName) {
 							mergeType(tDoc.InferType(field.Right))
 							return
@@ -733,7 +738,7 @@ func (doc *Document) inferMemberExpr(node ast.Node) TypeSet {
 		recDef := tDoc.getDefForValue(tableID)
 		if recDef != ast.InvalidNode {
             recDefNode := tDoc.Tree.Nodes[recDef]
-            recHash := ast.HashBytes(tDoc.Source()[recDefNode.Start:recDefNode.End])
+            recHash := ast.HashBytes(src[recDefNode.Start:recDefNode.End])
 
 			for _, fd := range tDoc.Resolver.FieldDefs {
 				if fd.ReceiverDef == recDef && fd.ReceiverHash == recHash && fd.PropHash == propHash {
