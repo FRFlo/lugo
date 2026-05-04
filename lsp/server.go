@@ -124,6 +124,16 @@ type Server struct {
 	CIErrorCount      int
 }
 
+// compactGlobalIndex removes empty/dead entries from GlobalIndex after document removal
+// to prevent unbounded map growth.
+func compactGlobalIndex(s *Server) {
+	for key, symbols := range s.GlobalIndex {
+		if len(symbols) == 0 {
+			delete(s.GlobalIndex, key)
+		}
+	}
+}
+
 // evictClosedDocumentCaches drops memory-heavy caches for documents that are closed
 // or not currently opened. This keeps AST + Resolver in memory for cross-document
 // features while freeing large in-memory caches tied to the source bytes.

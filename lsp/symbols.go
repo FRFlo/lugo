@@ -1543,6 +1543,8 @@ func (s *Server) removeDocumentGlobals(uri string, doc *Document) {
 			}
 		}
 	}
+
+	compactGlobalIndex(s)
 }
 
 func (s *Server) getGlobalAlias(hash uint64) uint64 {
