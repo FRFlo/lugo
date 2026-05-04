@@ -124,6 +124,44 @@ type Server struct {
 	CIErrorCount      int
 }
 
+// evictClosedDocumentCaches drops memory-heavy caches for documents that are closed
+// or not currently opened. This keeps AST + Resolver in memory for cross-document
+// features while freeing large in-memory caches tied to the source bytes.
+//
+// Rules:
+// - Do not touch Resolver or Tree (AST remains required for cross-document features)
+// - For each document not currently open (OpenFiles[uri] is false/absent):
+//   - clear TypeCache, Inferring, LuaDocCache, ActualReads, MutatedLocals
+//   - nil the Tree.Source pointer (Tree owns Source now)
+func evictClosedDocumentCaches(s *Server) {
+    if s == nil {
+        return
+    }
+    for uri, doc := range s.Documents {
+        if doc == nil {
+            continue
+        }
+        // Skip currently open documents
+        if s.OpenFiles != nil {
+            if open, ok := s.OpenFiles[uri]; ok && open {
+                continue
+            }
+        }
+
+        // Evict large caches. Preserve AST (doc.Tree) and Resolver for cross-doc features.
+        doc.TypeCache = nil
+        doc.Inferring = nil
+        doc.LuaDocCache = nil
+        doc.ActualReads = nil
+        doc.MutatedLocals = nil
+        // Tree owns Source; free the underlying source buffer
+        if doc.Tree != nil {
+            doc.Tree.Source = nil
+        }
+        // Do not modify doc.Resolver or doc.Tree themselves
+    }
+}
+
 func NewServer(version string) *Server {
 	return &Server{
 		Version: version,

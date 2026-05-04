@@ -104,16 +104,18 @@ func (s *Server) handleDidChange(req Request) {
 }
 
 func (s *Server) handleDidClose(req Request) {
-	var params DidCloseTextDocumentParams
+    var params DidCloseTextDocumentParams
 
 	err := json.Unmarshal(req.Params, &params)
 	if err != nil {
 		return
 	}
 
-	uri := s.normalizeURI(params.TextDocument.URI)
+    uri := s.normalizeURI(params.TextDocument.URI)
 
-	delete(s.OpenFiles, uri)
+    delete(s.OpenFiles, uri)
+    // Evict caches for documents that are no longer open to reclaim memory
+    evictClosedDocumentCaches(s)
 
 	path := s.uriToPath(uri)
 	if path != "" {
