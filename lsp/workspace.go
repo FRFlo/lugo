@@ -202,24 +202,24 @@ func (s *Server) handleDidChangeWatchedFiles(req Request) {
 
 			// Part B: Invalidate FiveM profile caches for non-manifest Lua deletes inside a resource root
 			// Compare URIs directly to resource roots (URIs) to determine affected documents
-			for root := range s.FiveMResources {
-				if strings.HasPrefix(uri, root+"/") || uri == root {
-					if strings.HasSuffix(uri, ".lua") && !(strings.HasSuffix(uri, "/fxmanifest.lua") || strings.HasSuffix(uri, "/__resource.lua")) {
-						// Invalidate documents under this resource root
-						for dURI, d := range s.Documents {
-							if d == nil {
-								continue
-							}
-							if strings.HasPrefix(dURI, root+"/") || dURI == root {
-								d.FiveMProfile = FiveMExecutionProfile{}
-								d.FiveMProfileCached = false
-							}
-						}
-						// Do not continue scanning other roots after invalidation
-						break
-					}
-				}
-			}
+            for root := range s.FiveMResourceGraph.ByRoot {
+                if strings.HasPrefix(uri, root+"/") || uri == root {
+                    if strings.HasSuffix(uri, ".lua") && !(strings.HasSuffix(uri, "/fxmanifest.lua") || strings.HasSuffix(uri, "/__resource.lua")) {
+                        // Invalidate documents under this resource root
+                        for dURI, d := range s.Documents {
+                            if d == nil {
+                                continue
+                            }
+                            if strings.HasPrefix(dURI, root+"/") || dURI == root {
+                                d.FiveMProfile = FiveMExecutionProfile{}
+                                d.FiveMProfileCached = false
+                            }
+                        }
+                        // Do not continue scanning other roots after invalidation
+                        break
+                    }
+                }
+            }
 		}
 	}
 
@@ -283,11 +283,10 @@ func (s *Server) refreshWorkspace() {
 		clear(s.activeURIs)
 	}
 
-	clear(s.FiveMResources)
-	clear(s.FiveMResourceByName)
-	if s.FiveMResourceGraph != nil {
-		s.FiveMResourceGraph.Clear()
-	}
+    // Graph-based state is authoritative; no local maps to clear
+    if s.FiveMResourceGraph != nil {
+        s.FiveMResourceGraph.Clear()
+    }
 
 	var (
 		total     int
@@ -1232,11 +1231,11 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 	}
 
 	if s.FeatureFiveM && doc.IsFiveMManifest {
-		res := s.parseFiveMManifest(doc)
-		oldRes := s.FiveMResources[res.RootURI]
+        res := s.parseFiveMManifest(doc)
+        oldRes := s.FiveMResourceGraph.ResourceByRoot(res.RootURI)
 		activeRes := s.registerFiveMManifestResource(res)
 
-		if !activeRes.Equal(oldRes) {
+        if oldRes == nil || (activeRes != nil && !activeRes.Equal(oldRes)) {
 			for dUri, d := range s.Documents {
 				if strings.HasPrefix(dUri, res.RootURI) {
 					d.FiveMProfile = FiveMExecutionProfile{}

@@ -97,10 +97,10 @@ func TestFiveMManifestProbePrecedence(t *testing.T) {
 		t.Fatalf("active client globs = %#v, want only modern.lua", activeRes.ClientGlobs)
 	}
 
-	rootURI := s.pathToURI(filepath.Join(root, "resource"))
-	if got := s.FiveMResources[rootURI]; got == nil || got.ManifestSource != FiveMManifestSourceFXManifest {
-		t.Fatalf("resource map winner = %+v, want fxmanifest.lua to win probe precedence", got)
-	}
+    rootURI := s.pathToURI(filepath.Join(root, "resource"))
+    if got := s.FiveMResourceGraph.ResourceByRoot(rootURI); got == nil || got.ManifestSource != FiveMManifestSourceFXManifest {
+        t.Fatalf("resource map winner = %+v, want fxmanifest.lua to win probe precedence", got)
+    }
 }
 
 func TestFiveMManifestDerivedSettings(t *testing.T) {

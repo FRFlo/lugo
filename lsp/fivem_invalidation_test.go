@@ -12,26 +12,26 @@ func TestFiveMInvalidation(t *testing.T) {
 		h := newFiveMFixtureHarness(t, "resource_client_server_shared")
 
 		// Verify initial FiveM state
-		resourceRoot := h.server.pathToURI(filepath.Join(h.root, "surface_resource"))
-		if h.server.FiveMResources[resourceRoot] == nil {
-			t.Fatal("resource should be registered before deletion")
-		}
-		if h.server.FiveMResourceGraph.ByRoot[resourceRoot] == nil {
-			t.Fatal("resource should be in graph before deletion")
-		}
+        resourceRoot := h.server.pathToURI(filepath.Join(h.root, "surface_resource"))
+        if h.server.FiveMResourceGraph.ByRoot[resourceRoot] == nil {
+            t.Fatal("resource should be registered before deletion")
+        }
+        if h.server.FiveMResourceGraph.ByRoot[resourceRoot] == nil {
+            t.Fatal("resource should be in graph before deletion")
+        }
 
 		// Delete the manifest via watched files
 		manifestURI := h.server.pathToURI(filepath.Join(h.root, "surface_resource", "fxmanifest.lua"))
 		h.simulateWatchedFileDelete(manifestURI)
 
-		// Verify FiveMResources cleaned
-		if h.server.FiveMResources[resourceRoot] != nil {
-			t.Fatal("FiveMResources should be empty after manifest delete")
+// Verify Graph ByRoot cleaned
+		if h.server.FiveMResourceGraph.ByRoot[resourceRoot] != nil {
+			t.Fatal("FiveMResourceGraph.ByRoot should be empty after manifest delete")
 		}
 
-		// Verify FiveMResourceByName cleaned
-		if h.server.FiveMResourceByName["surface_resource"] != nil {
-			t.Fatal("FiveMResourceByName should not contain resource after manifest delete")
+		// Verify graph name entry cleaned
+		if h.server.FiveMResourceGraph.ByName["surface_resource"] != nil {
+			t.Fatal("FiveMResourceGraph.ByName should not contain resource after manifest delete")
 		}
 
 		// Verify graph node removed
@@ -58,30 +58,30 @@ func TestFiveMInvalidation(t *testing.T) {
 		dualRoot := h.server.pathToURI(filepath.Join(h.root, "dual_resource"))
 		surfaceRoot := h.server.pathToURI(filepath.Join(h.root, "surface_resource"))
 
-		// Verify both resources are registered
-		if h.server.FiveMResources[surfaceRoot] == nil {
-			t.Fatal("surface_resource should be registered")
-		}
-		if h.server.FiveMResources[dualRoot] == nil {
-			t.Fatal("dual_resource should be registered")
-		}
+        // Verify both resources are registered
+        if h.server.FiveMResourceGraph.ByRoot[surfaceRoot] == nil {
+            t.Fatal("surface_resource should be registered")
+        }
+        if h.server.FiveMResourceGraph.ByRoot[dualRoot] == nil {
+            t.Fatal("dual_resource should be registered")
+        }
 
 		// Delete only surface_resource's manifest
 		manifestURI := h.server.pathToURI(filepath.Join(h.root, "surface_resource", "fxmanifest.lua"))
 		h.simulateWatchedFileDelete(manifestURI)
 
-		// Verify surface_resource is removed
-		if h.server.FiveMResources[surfaceRoot] != nil {
-			t.Fatal("surface_resource should be removed")
-		}
+        // Verify surface_resource is removed
+        if h.server.FiveMResourceGraph.ByRoot[surfaceRoot] != nil {
+            t.Fatal("surface_resource should be removed")
+        }
 
-		// Verify dual_resource is unaffected
-		if h.server.FiveMResources[dualRoot] == nil {
-			t.Fatal("dual_resource should be unaffected by surface_resource deletion")
-		}
-		if h.server.FiveMResourceByName["dual_resource"] == nil {
-			t.Fatal("dual_resource should still be in FiveMResourceByName")
-		}
+        // Verify dual_resource is unaffected
+        if h.server.FiveMResourceGraph.ByRoot[dualRoot] == nil {
+            t.Fatal("dual_resource should be unaffected by surface_resource deletion")
+        }
+        if h.server.FiveMResourceGraph.ByName["dual_resource"] == nil {
+            t.Fatal("dual_resource should still be in Graph.ByName")
+        }
 	})
 
 	t.Run("FeatureFiveMToggleOff_FiveMStateFullyCleaned", func(t *testing.T) {
@@ -89,23 +89,23 @@ func TestFiveMInvalidation(t *testing.T) {
 
 		resourceRoot := h.server.pathToURI(filepath.Join(h.root, "surface_resource"))
 
-		// Verify initial FiveM state
-		if h.server.FiveMResources[resourceRoot] == nil {
-			t.Fatal("resource should be registered")
-		}
+        // Verify initial FiveM state
+        if h.server.FiveMResourceGraph.ByRoot[resourceRoot] == nil {
+            t.Fatal("resource should be registered")
+        }
 
 		// Toggle FeatureFiveM off
 		h.setFeatureFiveM(false)
 
-		// Verify FiveMResources empty
-		if len(h.server.FiveMResources) != 0 {
-			t.Fatalf("FiveMResources should be empty after toggle off, got %d entries", len(h.server.FiveMResources))
-		}
+        // Verify Graph is empty after toggle off
+        if len(h.server.FiveMResourceGraph.ByRoot) != 0 {
+            t.Fatalf("Graph.ByRoot should be empty after toggle off, got %d entries", len(h.server.FiveMResourceGraph.ByRoot))
+        }
 
-		// Verify FiveMResourceByName empty
-		if len(h.server.FiveMResourceByName) != 0 {
-			t.Fatalf("FiveMResourceByName should be empty after toggle off, got %d entries", len(h.server.FiveMResourceByName))
-		}
+        // Verify Graph.ByName empty
+        if len(h.server.FiveMResourceGraph.ByName) != 0 {
+            t.Fatalf("Graph.ByName should be empty after toggle off, got %d entries", len(h.server.FiveMResourceGraph.ByName))
+        }
 
 		// Verify graph cleared
 		if len(h.server.FiveMResourceGraph.ByRoot) != 0 {
@@ -130,9 +130,9 @@ func TestFiveMInvalidation(t *testing.T) {
 		resourceRoot := h.server.pathToURI(filepath.Join(h.root, "surface_resource"))
 		clientURI := h.server.pathToURI(filepath.Join(h.root, "surface_resource", "client.lua"))
 
-		// Verify no FiveM state before toggle on
-		if len(h.server.FiveMResources) != 0 {
-			t.Fatal("FiveMResources should be empty before toggle on")
+// Verify no FiveM state before toggle on
+		if len(h.server.FiveMResourceGraph.ByRoot) != 0 {
+			t.Fatal("FiveMResourceGraph.ByRoot should be empty before toggle on")
 		}
 
 		// Verify client.lua has plain-lua profile cached (from pre-FiveM indexing)
@@ -148,13 +148,13 @@ func TestFiveMInvalidation(t *testing.T) {
 		// but does NOT retroactively re-classify already-cached documents
 		h.setFeatureFiveM(true)
 
-		// Verify FiveMResources and graph are rebuilt
-		if h.server.FiveMResources[resourceRoot] == nil {
-			t.Fatal("resource should be registered after toggle on")
-		}
-		if h.server.FiveMResourceGraph.ByRoot[resourceRoot] == nil {
-			t.Fatal("resource should be in graph after toggle on")
-		}
+        // Verify FiveMResources and graph are rebuilt
+        if h.server.FiveMResourceGraph.ByRoot[resourceRoot] == nil {
+            t.Fatal("resource should be registered after toggle on")
+        }
+        if h.server.FiveMResourceGraph.ByRoot[resourceRoot] == nil {
+            t.Fatal("resource should be in graph after toggle on")
+        }
 
 		// Note: client.lua still has plain-lua profile because its cache was set BEFORE
 		// FeatureFiveM was enabled. The current implementation does not retroactively re-classify.
@@ -171,12 +171,12 @@ func TestFiveMInvalidation(t *testing.T) {
 		resourceRoot := h.server.pathToURI(filepath.Join(h.root, "surface_resource"))
 		clientURI := h.server.pathToURI(filepath.Join(h.root, "surface_resource", "client.lua"))
 
-		// Get initial state
-		initialRes := h.server.FiveMResources[resourceRoot]
-		if initialRes == nil {
-			t.Fatal("resource should be registered")
-		}
-		initialResName := initialRes.Name
+        // Get initial state
+        initialRes := h.server.FiveMResourceGraph.ByRoot[resourceRoot]
+        if initialRes == nil {
+            t.Fatal("resource should be registered")
+        }
+        initialResName := initialRes.Name
 
 		clientDoc := h.server.Documents[clientURI]
 		initialProfileKind := clientDoc.FiveMProfile.Kind
@@ -184,18 +184,18 @@ func TestFiveMInvalidation(t *testing.T) {
 		// Record RPC output size before toggle-same
 		initialRPCLen := h.rpcOut.Len()
 
-		// Toggle FeatureFiveM to same value (true -> true)
-		h.setFeatureFiveM(true)
+        // Toggle FeatureFiveM to same value (true -> true)
+        h.setFeatureFiveM(true)
 
-		// Verify no reindex happened (RPC output should be minimal or none)
+        // Verify no reindex happened (RPC output should be minimal or none)
 		// The key assertion is that needsReindex was not set
 		// Since we can't directly check needsReindex, verify state unchanged
-		if h.server.FiveMResources[resourceRoot] == nil {
-			t.Fatal("resource should still be registered")
-		}
-		if h.server.FiveMResources[resourceRoot].Name != initialResName {
-			t.Fatal("resource name should be unchanged")
-		}
+        if h.server.FiveMResourceGraph.ByRoot[resourceRoot] == nil {
+            t.Fatal("resource should still be registered")
+        }
+        if h.server.FiveMResourceGraph.ByRoot[resourceRoot].Name != initialResName {
+            t.Fatal("resource name should be unchanged")
+        }
 
 		clientDocAfter := h.server.Documents[clientURI]
 		if clientDocAfter.FiveMProfile.Kind != initialProfileKind {
@@ -237,9 +237,9 @@ func TestFiveMInvalidation(t *testing.T) {
 			t.Fatal("server.lua should have FiveMProfileCached=false after sibling Lua deletion")
 		}
 
-		// Verify FiveMResources itself is NOT cleared (non-manifest delete doesn't remove resource)
-		if h.server.FiveMResources[resourceRoot] == nil {
-			t.Fatal("FiveMResources should still contain resource after non-manifest deletion")
+// Verify Graph state persists after non-manifest deletion
+		if h.server.FiveMResourceGraph.ByRoot[resourceRoot] == nil {
+			t.Fatal("FiveMResourceGraph.ByRoot should still contain resource after non-manifest deletion")
 		}
 	})
 }
@@ -277,5 +277,3 @@ func (h *fiveMFixtureHarness) setFeatureFiveM(enabled bool) {
 	h.resetRPC()
 	h.server.handleDidChangeConfiguration(Request{RPC: "2.0", ID: 1, Params: params})
 }
-
-

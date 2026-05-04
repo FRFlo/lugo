@@ -34,9 +34,7 @@ type Server struct {
 	OpenFiles           map[string]bool
 	activeURIs          map[string]bool
 	visitedDirs         map[string]bool
-	FiveMResources      map[string]*FiveMResource
-	FiveMResourceByName map[string]*FiveMResource
-	FiveMResourceGraph  *FiveMResourceGraph
+    FiveMResourceGraph  *FiveMResourceGraph
 	uriCache            map[string]string
 	symlinkCache        map[string]string
 
@@ -133,12 +131,10 @@ func NewServer(version string) *Server {
 		Writer:  os.Stdout,
 
 		// Workspace State
-		Documents:           make(map[string]*Document),
-		OpenFiles:           make(map[string]bool),
-		IsIndexing:          true,
-		FiveMResources:      make(map[string]*FiveMResource),
-		FiveMResourceByName: make(map[string]*FiveMResource),
-		FiveMResourceGraph:  NewFiveMResourceGraph(),
+        Documents:           make(map[string]*Document),
+        OpenFiles:           make(map[string]bool),
+        IsIndexing:          true,
+        FiveMResourceGraph:  NewFiveMResourceGraph(),
 		uriCache:            make(map[string]string, 1024),
 
 		// Global Index

@@ -220,9 +220,7 @@ func newFiveMProfileTestServer(t *testing.T) (*Server, string) {
 
 	root := t.TempDir()
 	s := NewServer("test")
-	s.FeatureFiveM = true
-	s.FiveMResources = make(map[string]*FiveMResource)
-	s.FiveMResourceByName = make(map[string]*FiveMResource)
+    s.FeatureFiveM = true
 	attachTestFiveMNativeBundleLoader(t, s)
 	s.setLibraryPaths([]string{materializeTestFiveMNativeLibrary(t, s)})
 

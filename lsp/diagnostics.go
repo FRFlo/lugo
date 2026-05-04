@@ -108,7 +108,7 @@ func (s *Server) publishDiagnostics(uri string) {
 
 	exportBridgeProfile := s.getFiveMExportBridgeProfile(doc)
 	if profile.HasResource() {
-		if res := s.FiveMResources[profile.ResourceRoot]; res != nil {
+        if res := s.FiveMResourceGraph.ResourceByRoot(profile.ResourceRoot); res != nil {
 			env := s.getDocFileEnv(res, doc)
 			if env == EnvUnknown && profile.Kind == FiveMProfilePlainLua {
 				if s.DiagFiveMUnaccountedFile {
