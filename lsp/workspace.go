@@ -202,24 +202,24 @@ func (s *Server) handleDidChangeWatchedFiles(req Request) {
 
 			// Part B: Invalidate FiveM profile caches for non-manifest Lua deletes inside a resource root
 			// Compare URIs directly to resource roots (URIs) to determine affected documents
-            for root := range s.FiveMResourceGraph.ByRoot {
-                if strings.HasPrefix(uri, root+"/") || uri == root {
-                    if strings.HasSuffix(uri, ".lua") && !(strings.HasSuffix(uri, "/fxmanifest.lua") || strings.HasSuffix(uri, "/__resource.lua")) {
-                        // Invalidate documents under this resource root
-                        for dURI, d := range s.Documents {
-                            if d == nil {
-                                continue
-                            }
-                            if strings.HasPrefix(dURI, root+"/") || dURI == root {
-                                d.FiveMProfile = FiveMExecutionProfile{}
-                                d.FiveMProfileCached = false
-                            }
-                        }
-                        // Do not continue scanning other roots after invalidation
-                        break
-                    }
-                }
-            }
+			for root := range s.FiveMResourceGraph.ByRoot {
+				if strings.HasPrefix(uri, root+"/") || uri == root {
+					if strings.HasSuffix(uri, ".lua") && !(strings.HasSuffix(uri, "/fxmanifest.lua") || strings.HasSuffix(uri, "/__resource.lua")) {
+						// Invalidate documents under this resource root
+						for dURI, d := range s.Documents {
+							if d == nil {
+								continue
+							}
+							if strings.HasPrefix(dURI, root+"/") || dURI == root {
+								d.FiveMProfile = FiveMExecutionProfile{}
+								d.FiveMProfileCached = false
+							}
+						}
+						// Do not continue scanning other roots after invalidation
+						break
+					}
+				}
+			}
 		}
 	}
 
@@ -283,10 +283,10 @@ func (s *Server) refreshWorkspace() {
 		clear(s.activeURIs)
 	}
 
-    // Graph-based state is authoritative; no local maps to clear
-    if s.FiveMResourceGraph != nil {
-        s.FiveMResourceGraph.Clear()
-    }
+	// Graph-based state is authoritative; no local maps to clear
+	if s.FiveMResourceGraph != nil {
+		s.FiveMResourceGraph.Clear()
+	}
 
 	var (
 		total     int
@@ -427,9 +427,9 @@ func (s *Server) refreshWorkspace() {
 
 	for uri, doc := range s.Documents {
 		if s.OpenFiles[uri] && !s.activeURIs[uri] {
-			total += len(doc.Source)
+			total += len(doc.Source())
 
-			s.updateDocument(uri, doc.Source)
+			s.updateDocument(uri, doc.Source())
 		}
 	}
 
@@ -574,7 +574,7 @@ func (s *Server) indexWorkspace(rootPathOrURI string, pendingJobs *[]*IndexJob, 
 
 				if existing, ok := s.Documents[uri]; ok {
 					existingTree = existing.Tree
-					existingSource = existing.Source
+					existingSource = existing.Source()
 					doc = existing
 				}
 
@@ -647,7 +647,7 @@ func (s *Server) updateDocument(uri string, source []byte) bool {
 	)
 
 	if existing, exists := s.Documents[uri]; exists {
-		if bytes.Equal(existing.Source, source) {
+		if bytes.Equal(existing.Tree.Source, source) {
 			return false
 		}
 
@@ -678,8 +678,8 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 	var needsWorkspaceRepublish bool
 
 	if doc != nil {
-		doc.Source = source
-
+		// Canonical source is owned by the Tree; ensure Tree reflects the latest source.
+		// Do not assign to doc.Source here.
 		s.removeDocumentGlobals(uri, doc)
 
 		doc.ExportedGlobalDefs = doc.ExportedGlobalDefs[:0]
@@ -689,7 +689,6 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 		doc = &Document{
 			Server:   s,
 			URI:      uri,
-			Source:   source,
 			Tree:     tree,
 			Resolver: semantic.New(tree),
 		}
@@ -747,13 +746,13 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 			if node.Kind == ast.KindCallExpr && int(node.Left) < len(tree.Nodes) {
 				leftNode := tree.Nodes[node.Left]
 				if leftNode.Kind == ast.KindIdent && doc.Resolver.References[node.Left] == ast.InvalidNode {
-					if bytes.Equal(doc.Source[leftNode.Start:leftNode.End], []byte("exports")) {
+					if bytes.Equal(doc.Source()[leftNode.Start:leftNode.End], []byte("exports")) {
 						if node.Count >= 2 && node.Extra+1 < uint32(len(tree.ExtraList)) {
 							arg1ID := tree.ExtraList[node.Extra]
 							arg2ID := tree.ExtraList[node.Extra+1]
 
 							if int(arg1ID) < len(tree.Nodes) && tree.Nodes[arg1ID].Kind == ast.KindString {
-								exportName := unquoteLuaString(string(doc.Source[tree.Nodes[arg1ID].Start:tree.Nodes[arg1ID].End]))
+								exportName := unquoteLuaString(string(doc.Source()[tree.Nodes[arg1ID].Start:tree.Nodes[arg1ID].End]))
 
 								doc.FiveMLuaExports = append(doc.FiveMLuaExports, FiveMLuaExport{
 									Name:   exportName,
@@ -971,7 +970,7 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 				localDefID := doc.Resolver.References[valID]
 
 				if localDefID != ast.InvalidNode {
-					localName := doc.Source[doc.Tree.Nodes[localDefID].Start:doc.Tree.Nodes[localDefID].End]
+					localName := doc.Source()[doc.Tree.Nodes[localDefID].Start:doc.Tree.Nodes[localDefID].End]
 					globalBytes := tree.Source[node.Start:node.End]
 
 					for _, fdIdx := range fieldDefsByLocal[localDefID] {
@@ -981,7 +980,7 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 						fdIsDep, fdDepMsg := doc.HasDeprecatedTag(fd.NodeID)
 
 						if bytes.Equal(fd.ReceiverName, localName) {
-							propBytes := doc.Source[doc.Tree.Nodes[fd.NodeID].Start:doc.Tree.Nodes[fd.NodeID].End]
+							propBytes := doc.Source()[doc.Tree.Nodes[fd.NodeID].Start:doc.Tree.Nodes[fd.NodeID].End]
 
 							var sb strings.Builder
 
@@ -996,7 +995,7 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 
 							newRecHash := ast.HashBytesConcat(globalBytes, []byte{'.'}, suffix)
 
-							propBytes := doc.Source[doc.Tree.Nodes[fd.NodeID].Start:doc.Tree.Nodes[fd.NodeID].End]
+							propBytes := doc.Source()[doc.Tree.Nodes[fd.NodeID].Start:doc.Tree.Nodes[fd.NodeID].End]
 
 							var sb strings.Builder
 
@@ -1040,7 +1039,7 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 				continue
 			}
 
-			propBytes := doc.Source[doc.Tree.Nodes[fd.NodeID].Start:doc.Tree.Nodes[fd.NodeID].End]
+			propBytes := doc.Source()[doc.Tree.Nodes[fd.NodeID].Start:doc.Tree.Nodes[fd.NodeID].End]
 
 			sep := byte('.')
 
@@ -1075,11 +1074,11 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 			exportDef := doc.Resolver.References[doc.ExportedNode]
 			if exportDef != ast.InvalidNode {
 				exportDefNode := doc.Tree.Nodes[exportDef]
-				exportHash := ast.HashBytes(doc.Source[exportDefNode.Start:exportDefNode.End])
+				exportHash := ast.HashBytes(doc.Source()[exportDefNode.Start:exportDefNode.End])
 
 				for _, fd := range doc.Resolver.FieldDefs {
 					if fd.ReceiverDef == exportDef && fd.ReceiverHash == exportHash {
-						propName := doc.Source[doc.Tree.Nodes[fd.NodeID].Start:doc.Tree.Nodes[fd.NodeID].End]
+						propName := doc.Source()[doc.Tree.Nodes[fd.NodeID].Start:doc.Tree.Nodes[fd.NodeID].End]
 
 						isRoot := isRootLevel(doc.Tree, fd.NodeID)
 						isDep, depMsg := doc.HasDeprecatedTag(fd.NodeID)
@@ -1100,8 +1099,8 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 					if field.Kind == ast.KindRecordField {
 						key := doc.Tree.Nodes[field.Left]
 						if key.Kind == ast.KindIdent {
-							propHash := ast.HashBytes(doc.Source[key.Start:key.End])
-							propName := doc.Source[key.Start:key.End]
+							propHash := ast.HashBytes(doc.Source()[key.Start:key.End])
+							propName := doc.Source()[key.Start:key.End]
 
 							isRoot := isRootLevel(doc.Tree, field.Left)
 							isDep, depMsg := doc.HasDeprecatedTag(field.Left)
@@ -1231,11 +1230,11 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 	}
 
 	if s.FeatureFiveM && doc.IsFiveMManifest {
-        res := s.parseFiveMManifest(doc)
-        oldRes := s.FiveMResourceGraph.ResourceByRoot(res.RootURI)
+		res := s.parseFiveMManifest(doc)
+		oldRes := s.FiveMResourceGraph.ResourceByRoot(res.RootURI)
 		activeRes := s.registerFiveMManifestResource(res)
 
-        if oldRes == nil || (activeRes != nil && !activeRes.Equal(oldRes)) {
+		if oldRes == nil || (activeRes != nil && !activeRes.Equal(oldRes)) {
 			for dUri, d := range s.Documents {
 				if strings.HasPrefix(dUri, res.RootURI) {
 					d.FiveMProfile = FiveMExecutionProfile{}

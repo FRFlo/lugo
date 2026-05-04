@@ -90,7 +90,7 @@ func (s *Server) handleCodeAction(req Request) {
 				defID := ast.NodeID(defIDFloat)
 				if int(defID) < len(doc.Tree.Nodes) {
 					node := doc.Tree.Nodes[defID]
-					nameBytes := doc.Source[node.Start:node.End]
+					nameBytes := doc.Source()[node.Start:node.End]
 
 					if len(nameBytes) > 1 && nameBytes[0] == '_' {
 						newNameBytes := nameBytes[1:]
@@ -177,7 +177,7 @@ func (s *Server) handleCodeAction(req Request) {
 
 			if defID != ast.InvalidNode && int(defID) < len(doc.Tree.Nodes) && doc.Resolver.References[defID] == defID {
 				node := doc.Tree.Nodes[defID]
-				nameBytes := doc.Source[node.Start:node.End]
+				nameBytes := doc.Source()[node.Start:node.End]
 				baseName := string(nameBytes)
 
 				safeName := s.generateSafeName(doc, defID, baseName, false)
@@ -349,9 +349,9 @@ func (s *Server) handleCodeAction(req Request) {
 				recNode := doc.Tree.Nodes[leftNode.Left]
 				propNode := doc.Tree.Nodes[leftNode.Right]
 
-				if recNode.Start <= recNode.End && recNode.End <= uint32(len(doc.Source)) && propNode.Start <= propNode.End && propNode.End <= uint32(len(doc.Source)) {
-					recName := doc.Source[recNode.Start:recNode.End]
-					propName := doc.Source[propNode.Start:propNode.End]
+				if recNode.Start <= recNode.End && recNode.End <= uint32(len(doc.Source())) && propNode.Start <= propNode.End && propNode.End <= uint32(len(doc.Source())) {
+					recName := doc.Source()[recNode.Start:recNode.End]
+					propName := doc.Source()[propNode.Start:propNode.End]
 
 					if bytes.Equal(recName, []byte("table")) && bytes.Equal(propName, []byte("insert")) {
 						targetTableInsert = curr
@@ -516,7 +516,7 @@ func (s *Server) handleCodeAction(req Request) {
 						if int(limitID) < len(doc.Tree.Nodes) {
 							limitNode := doc.Tree.Nodes[limitID]
 							if limitNode.Kind == ast.KindUnaryExpr {
-								limitSrc := doc.Source[limitNode.Start:limitNode.End]
+								limitSrc := doc.Source()[limitNode.Start:limitNode.End]
 								if bytes.HasPrefix(limitSrc, []byte("#")) {
 									targetForNum = curr
 
@@ -873,11 +873,11 @@ func (s *Server) resolveOptimizeTableInsert(doc *Document, nodeID ast.NodeID, ur
 			arg1Node := doc.Tree.Nodes[arg1ID]
 			arg2Node := doc.Tree.Nodes[arg2ID]
 
-			if arg1Node.Start <= arg1Node.End && arg1Node.End <= uint32(len(doc.Source)) &&
-				arg2Node.Start <= arg2Node.End && arg2Node.End <= uint32(len(doc.Source)) {
+			if arg1Node.Start <= arg1Node.End && arg1Node.End <= uint32(len(doc.Source())) &&
+				arg2Node.Start <= arg2Node.End && arg2Node.End <= uint32(len(doc.Source())) {
 
-				arg1 := ast.String(doc.Source[arg1Node.Start:arg1Node.End])
-				arg2 := ast.String(doc.Source[arg2Node.Start:arg2Node.End])
+				arg1 := ast.String(doc.Source()[arg1Node.Start:arg1Node.End])
+				arg2 := ast.String(doc.Source()[arg2Node.Start:arg2Node.End])
 
 				newText := fmt.Sprintf("%s[#%s+1] = %s", arg1, arg1, arg2)
 
@@ -905,11 +905,11 @@ func (s *Server) resolveConvertMethodSig(doc *Document, nodeID ast.NodeID, uri s
 			leftNode := doc.Tree.Nodes[nameNode.Left]
 			rightNode := doc.Tree.Nodes[nameNode.Right]
 
-			if leftNode.Start <= leftNode.End && leftNode.End <= uint32(len(doc.Source)) &&
-				rightNode.Start <= rightNode.End && rightNode.End <= uint32(len(doc.Source)) {
+			if leftNode.Start <= leftNode.End && leftNode.End <= uint32(len(doc.Source())) &&
+				rightNode.Start <= rightNode.End && rightNode.End <= uint32(len(doc.Source())) {
 
-				leftStr := ast.String(doc.Source[leftNode.Start:leftNode.End])
-				rightStr := ast.String(doc.Source[rightNode.Start:rightNode.End])
+				leftStr := ast.String(doc.Source()[leftNode.Start:leftNode.End])
+				rightStr := ast.String(doc.Source()[rightNode.Start:rightNode.End])
 
 				var newText string
 
@@ -958,11 +958,11 @@ func (s *Server) resolveMergeNestedIf(doc *Document, nodeID ast.NodeID, uri stri
 		}
 
 		condNode := doc.Tree.Nodes[condID]
-		if condNode.Start > condNode.End || condNode.End > uint32(len(doc.Source)) {
+		if condNode.Start > condNode.End || condNode.End > uint32(len(doc.Source())) {
 			return ""
 		}
 
-		condStr := ast.String(doc.Source[condNode.Start:condNode.End])
+		condStr := ast.String(doc.Source()[condNode.Start:condNode.End])
 		if condNode.Kind == ast.KindBinaryExpr && token.Kind(condNode.Extra) == token.Or {
 			return "(" + condStr + ")"
 		}
@@ -1038,8 +1038,8 @@ func (s *Server) resolveSplitMultiAssign(doc *Document, nodeID ast.NodeID, uri s
 			if int(lhsID) < len(doc.Tree.Nodes) {
 				lhsNode := doc.Tree.Nodes[lhsID]
 
-				if lhsNode.Start <= lhsNode.End && lhsNode.End <= uint32(len(doc.Source)) {
-					lhsText := ast.String(doc.Source[lhsNode.Start:lhsNode.End])
+				if lhsNode.Start <= lhsNode.End && lhsNode.End <= uint32(len(doc.Source())) {
+					lhsText := ast.String(doc.Source()[lhsNode.Start:lhsNode.End])
 					newText.WriteString(lhsText)
 
 					if isLocal {
@@ -1062,8 +1062,8 @@ func (s *Server) resolveSplitMultiAssign(doc *Document, nodeID ast.NodeID, uri s
 			if int(rhsID) < len(doc.Tree.Nodes) {
 				rhsNode := doc.Tree.Nodes[rhsID]
 
-				if rhsNode.Start <= rhsNode.End && rhsNode.End <= uint32(len(doc.Source)) {
-					rhsText := ast.String(doc.Source[rhsNode.Start:rhsNode.End])
+				if rhsNode.Start <= rhsNode.End && rhsNode.End <= uint32(len(doc.Source())) {
+					rhsText := ast.String(doc.Source()[rhsNode.Start:rhsNode.End])
 
 					newText.WriteString(rhsText)
 				} else {
@@ -1179,8 +1179,8 @@ func (s *Server) resolveRemoveParen(doc *Document, nodeID ast.NodeID, uri string
 	if parenNode.Left != ast.InvalidNode && int(parenNode.Left) < len(doc.Tree.Nodes) {
 		innerNode := doc.Tree.Nodes[parenNode.Left]
 
-		if innerNode.Start <= innerNode.End && innerNode.End <= uint32(len(doc.Source)) {
-			innerSrc := ast.String(doc.Source[innerNode.Start:innerNode.End])
+		if innerNode.Start <= innerNode.End && innerNode.End <= uint32(len(doc.Source())) {
+			innerSrc := ast.String(doc.Source()[innerNode.Start:innerNode.End])
 
 			return &WorkspaceEdit{
 				Changes: map[string][]TextEdit{
@@ -1202,8 +1202,8 @@ func (s *Server) resolveForNumToIpairs(doc *Document, nodeID ast.NodeID, uri str
 	if int(forNode.Left) < len(doc.Tree.Nodes) {
 		identNode := doc.Tree.Nodes[forNode.Left]
 
-		if identNode.Start <= identNode.End && identNode.End <= uint32(len(doc.Source)) {
-			identName := ast.String(doc.Source[identNode.Start:identNode.End])
+		if identNode.Start <= identNode.End && identNode.End <= uint32(len(doc.Source())) {
+			identName := ast.String(doc.Source()[identNode.Start:identNode.End])
 
 			indent := s.getIndent(doc, forNode.Start)
 
@@ -1243,8 +1243,8 @@ func (s *Server) resolveIndexToMember(doc *Document, nodeID ast.NodeID, uri stri
 
 	if int(indexNode.Left) < len(doc.Tree.Nodes) {
 		recNode := doc.Tree.Nodes[indexNode.Left]
-		if recNode.Start <= recNode.End && recNode.End <= uint32(len(doc.Source)) {
-			recStr := ast.String(doc.Source[recNode.Start:recNode.End])
+		if recNode.Start <= recNode.End && recNode.End <= uint32(len(doc.Source())) {
+			recStr := ast.String(doc.Source()[recNode.Start:recNode.End])
 
 			return &WorkspaceEdit{
 				Changes: map[string][]TextEdit{
@@ -1267,11 +1267,11 @@ func (s *Server) resolveMemberToIndex(doc *Document, nodeID ast.NodeID, uri stri
 		recNode := doc.Tree.Nodes[memberNode.Left]
 		propNode := doc.Tree.Nodes[memberNode.Right]
 
-		if recNode.Start <= recNode.End && recNode.End <= uint32(len(doc.Source)) &&
-			propNode.Start <= propNode.End && propNode.End <= uint32(len(doc.Source)) {
+		if recNode.Start <= recNode.End && recNode.End <= uint32(len(doc.Source())) &&
+			propNode.Start <= propNode.End && propNode.End <= uint32(len(doc.Source())) {
 
-			recStr := ast.String(doc.Source[recNode.Start:recNode.End])
-			propStr := ast.String(doc.Source[propNode.Start:propNode.End])
+			recStr := ast.String(doc.Source()[recNode.Start:recNode.End])
+			propStr := ast.String(doc.Source()[propNode.Start:propNode.End])
 
 			return &WorkspaceEdit{
 				Changes: map[string][]TextEdit{
@@ -1449,7 +1449,7 @@ func (s *Server) handleRename(req Request) {
 				for _, id := range dDoc.Resolver.GlobalDefs {
 					node := dDoc.Tree.Nodes[id]
 
-					if ast.HashBytes(dDoc.Source[node.Start:node.End]) == ctx.GKey.PropHash {
+					if ast.HashBytes(dDoc.Source()[node.Start:node.End]) == ctx.GKey.PropHash {
 						addEdit(dDoc, dUri, id)
 					}
 				}
@@ -1457,7 +1457,7 @@ func (s *Server) handleRename(req Request) {
 				for _, id := range dDoc.Resolver.GlobalRefs {
 					node := dDoc.Tree.Nodes[id]
 
-					if ast.HashBytes(dDoc.Source[node.Start:node.End]) == ctx.GKey.PropHash {
+					if ast.HashBytes(dDoc.Source()[node.Start:node.End]) == ctx.GKey.PropHash {
 						if dDoc.Resolver.References[id] == ast.InvalidNode {
 							addEdit(dDoc, dUri, id)
 						}
@@ -1566,7 +1566,7 @@ func (s *Server) getSafeFixesForDocument(doc *Document) []SafeFix {
 				continue
 			}
 
-			name := doc.Source[doc.Tree.Nodes[defID].Start:doc.Tree.Nodes[defID].End]
+			name := doc.Source()[doc.Tree.Nodes[defID].Start:doc.Tree.Nodes[defID].End]
 			if len(name) > 0 && name[0] != '_' {
 				unusedDefs[defID] = true
 
@@ -1635,7 +1635,7 @@ func (s *Server) getSafeFixesForDocument(doc *Document) []SafeFix {
 						exprNode := doc.Tree.Nodes[exprID]
 
 						if exprNode.Kind == ast.KindCallExpr || exprNode.Kind == ast.KindMethodCall {
-							callText := doc.Source[exprNode.Start:exprNode.End]
+							callText := doc.Source()[exprNode.Start:exprNode.End]
 
 							edit := TextEdit{
 								Range:   getNodeRange(doc.Tree, nodeID),
@@ -1679,8 +1679,8 @@ func (s *Server) getSafeFixesForDocument(doc *Document) []SafeFix {
 				recID := doc.Tree.Nodes[fnID].Left
 				propID := doc.Tree.Nodes[fnID].Right
 				if recID != ast.InvalidNode && propID != ast.InvalidNode {
-					recStr := doc.Source[doc.Tree.Nodes[recID].Start:doc.Tree.Nodes[recID].End]
-					propStr := doc.Source[doc.Tree.Nodes[propID].Start:doc.Tree.Nodes[propID].End]
+					recStr := doc.Source()[doc.Tree.Nodes[recID].Start:doc.Tree.Nodes[recID].End]
+					propStr := doc.Source()[doc.Tree.Nodes[propID].Start:doc.Tree.Nodes[propID].End]
 
 					if bytes.Equal(recStr, []byte("table")) && (bytes.Equal(propStr, []byte("insert")) || bytes.Equal(propStr, []byte("remove")) || bytes.Equal(propStr, []byte("sort"))) {
 						if node.Count > 0 {
@@ -1759,7 +1759,7 @@ func (s *Server) getSafeFixesForDocument(doc *Document) []SafeFix {
 
 							if lhsList.Count > 0 {
 								prevRhsID := doc.Tree.ExtraList[rhsList.Extra+uint32(lhsList.Count-1)]
-								startOff = s.findCommaBefore(doc.Source, doc.Tree.Nodes[firstRedundantID].Start, doc.Tree.Nodes[prevRhsID].End)
+								startOff = s.findCommaBefore(doc.Source(), doc.Tree.Nodes[firstRedundantID].Start, doc.Tree.Nodes[prevRhsID].End)
 							} else {
 								startOff = doc.Tree.Nodes[firstRedundantID].Start
 							}
@@ -1785,8 +1785,8 @@ func (s *Server) getSafeFixesForDocument(doc *Document) []SafeFix {
 					lID := doc.Tree.ExtraList[lhsList.Extra]
 					rID := doc.Tree.ExtraList[rhsList.Extra]
 
-					lSource := doc.Source[doc.Tree.Nodes[lID].Start:doc.Tree.Nodes[lID].End]
-					rSource := doc.Source[doc.Tree.Nodes[rID].Start:doc.Tree.Nodes[rID].End]
+					lSource := doc.Source()[doc.Tree.Nodes[lID].Start:doc.Tree.Nodes[lID].End]
+					rSource := doc.Source()[doc.Tree.Nodes[rID].Start:doc.Tree.Nodes[rID].End]
 
 					if bytes.Equal(lSource, rSource) {
 						fixes = append(fixes, SafeFix{
@@ -1815,7 +1815,7 @@ func (s *Server) getSafeFixesForDocument(doc *Document) []SafeFix {
 
 							if lhsList.Count > 0 {
 								prevRhsID := doc.Tree.ExtraList[rhsList.Extra+uint32(lhsList.Count-1)]
-								startOff = s.findCommaBefore(doc.Source, doc.Tree.Nodes[firstRedundantID].Start, doc.Tree.Nodes[prevRhsID].End)
+								startOff = s.findCommaBefore(doc.Source(), doc.Tree.Nodes[firstRedundantID].Start, doc.Tree.Nodes[prevRhsID].End)
 							} else {
 								startOff = doc.Tree.Nodes[firstRedundantID].Start
 							}
@@ -1878,7 +1878,7 @@ func (s *Server) getSafeFixesForDocument(doc *Document) []SafeFix {
 					firstExprID := doc.Tree.ExtraList[exprList.Extra]
 					firstExprNode := doc.Tree.Nodes[firstExprID]
 
-					gap := doc.Source[node.Start:firstExprNode.Start]
+					gap := doc.Source()[node.Start:firstExprNode.Start]
 
 					if bytes.IndexByte(gap, '\n') != -1 {
 						fixes = append(fixes, SafeFix{
@@ -2001,7 +2001,7 @@ func (s *Server) getSafeFixesForDocument(doc *Document) []SafeFix {
 								limit = doc.Tree.Nodes[node.Left].End
 							}
 
-							startOff := s.findCommaBefore(doc.Source, doc.Tree.Nodes[firstRedundantID].Start, limit)
+							startOff := s.findCommaBefore(doc.Source(), doc.Tree.Nodes[firstRedundantID].Start, limit)
 
 							fixes = append(fixes, SafeFix{
 								Coverage: []ast.NodeID{nodeID},
@@ -2164,7 +2164,7 @@ func (s *Server) processListForFixes(doc *Document, nameListID, exprListID ast.N
 
 					if exprNode.Kind == ast.KindCallExpr || exprNode.Kind == ast.KindMethodCall {
 						stmtID := nameList.Parent
-						callText := doc.Source[exprNode.Start:exprNode.End]
+						callText := doc.Source()[exprNode.Start:exprNode.End]
 
 						edits := []TextEdit{{
 							Range:   getNodeRange(doc.Tree, stmtID),
@@ -2214,7 +2214,7 @@ func (s *Server) processListForFixes(doc *Document, nameListID, exprListID ast.N
 						limit = doc.Tree.Nodes[exprListID].Start
 					}
 
-					startOff := s.findCommaBefore(doc.Source, doc.Tree.Nodes[firstRhsDrop].Start, limit)
+					startOff := s.findCommaBefore(doc.Source(), doc.Tree.Nodes[firstRhsDrop].Start, limit)
 
 					rhsEdits = append(rhsEdits, TextEdit{
 						Range:   getRange(doc.Tree, startOff, doc.Tree.Nodes[lastRhsDrop].End),
@@ -2229,7 +2229,7 @@ func (s *Server) processListForFixes(doc *Document, nameListID, exprListID ast.N
 			lastLhsDrop := doc.Tree.ExtraList[nameList.Extra+uint32(nameList.Count-1)]
 			prevLhsNode := doc.Tree.ExtraList[nameList.Extra+uint32(suffixStart-1)]
 
-			startOff := s.findCommaBefore(doc.Source, doc.Tree.Nodes[firstLhsDrop].Start, doc.Tree.Nodes[prevLhsNode].End)
+			startOff := s.findCommaBefore(doc.Source(), doc.Tree.Nodes[firstLhsDrop].Start, doc.Tree.Nodes[prevLhsNode].End)
 
 			edits := []TextEdit{{
 				Range:   getRange(doc.Tree, startOff, doc.Tree.Nodes[lastLhsDrop].End),
@@ -2308,8 +2308,8 @@ func (s *Server) processParamsForFixes(doc *Document, funcExprID ast.NodeID, unu
 		if suffixStart == 0 {
 			startOff = doc.Tree.Nodes[firstDrop].Start
 
-			for i := startOff - 1; i < uint32(len(doc.Source)); i-- {
-				if doc.Source[i] == '(' {
+			for i := startOff - 1; i < uint32(len(doc.Source())); i-- {
+				if doc.Source()[i] == '(' {
 					startOff = i + 1
 
 					break
@@ -2317,7 +2317,7 @@ func (s *Server) processParamsForFixes(doc *Document, funcExprID ast.NodeID, unu
 			}
 		} else {
 			prevNode := doc.Tree.ExtraList[funcNode.Extra+uint32(suffixStart-1)]
-			startOff = s.findCommaBefore(doc.Source, doc.Tree.Nodes[firstDrop].Start, doc.Tree.Nodes[prevNode].End)
+			startOff = s.findCommaBefore(doc.Source(), doc.Tree.Nodes[firstDrop].Start, doc.Tree.Nodes[prevNode].End)
 		}
 
 		endOff := doc.Tree.Nodes[lastDrop].End
@@ -2341,7 +2341,7 @@ func (s *Server) processParamsForFixes(doc *Document, funcExprID ast.NodeID, unu
 
 func (s *Server) createRenameFix(doc *Document, id ast.NodeID) SafeFix {
 	node := doc.Tree.Nodes[id]
-	name := ast.String(doc.Source[node.Start:node.End])
+	name := ast.String(doc.Source()[node.Start:node.End])
 
 	safeName := s.generateSafeName(doc, id, name, true)
 
@@ -2479,8 +2479,8 @@ func (s *Server) formatStatement(doc *Document, stmtID ast.NodeID, indent string
 		}
 
 		cNode := doc.Tree.Nodes[condID]
-		if cNode.Start <= cNode.End && cNode.End <= uint32(len(doc.Source)) {
-			return ast.String(doc.Source[cNode.Start:cNode.End])
+		if cNode.Start <= cNode.End && cNode.End <= uint32(len(doc.Source())) {
+			return ast.String(doc.Source()[cNode.Start:cNode.End])
 		}
 
 		return ""
@@ -2636,8 +2636,8 @@ func (s *Server) flattenBlock(doc *Document, blockID ast.NodeID, indent string, 
 				prevNode := doc.Tree.Nodes[prevID]
 				currNode := doc.Tree.Nodes[childID]
 
-				if prevNode.End <= currNode.Start && currNode.Start <= uint32(len(doc.Source)) {
-					gap = doc.Source[prevNode.End:currNode.Start]
+				if prevNode.End <= currNode.Start && currNode.Start <= uint32(len(doc.Source())) {
+					gap = doc.Source()[prevNode.End:currNode.Start]
 				}
 			}
 
@@ -2674,8 +2674,8 @@ func (s *Server) invertCondition(doc *Document, condID ast.NodeID) string {
 
 	var condStr string
 
-	if condNode.Start <= condNode.End && condNode.End <= uint32(len(doc.Source)) {
-		condStr = ast.String(doc.Source[condNode.Start:condNode.End])
+	if condNode.Start <= condNode.End && condNode.End <= uint32(len(doc.Source())) {
+		condStr = ast.String(doc.Source()[condNode.Start:condNode.End])
 	}
 
 	switch condNode.Kind {
@@ -2686,8 +2686,8 @@ func (s *Server) invertCondition(doc *Document, condID ast.NodeID) string {
 			if bytes.HasPrefix([]byte(condStr), []byte("not")) {
 				rightNode := doc.Tree.Nodes[condNode.Right]
 
-				if rightNode.Start <= rightNode.End && rightNode.End <= uint32(len(doc.Source)) {
-					return ast.String(doc.Source[rightNode.Start:rightNode.End])
+				if rightNode.Start <= rightNode.End && rightNode.End <= uint32(len(doc.Source())) {
+					return ast.String(doc.Source()[rightNode.Start:rightNode.End])
 				}
 			}
 		}
@@ -2726,15 +2726,15 @@ func (s *Server) invertCondition(doc *Document, condID ast.NodeID) string {
 
 		if int(condNode.Left) < len(doc.Tree.Nodes) {
 			lNode := doc.Tree.Nodes[condNode.Left]
-			if lNode.Start <= lNode.End && lNode.End <= uint32(len(doc.Source)) {
-				leftStr = ast.String(doc.Source[lNode.Start:lNode.End])
+			if lNode.Start <= lNode.End && lNode.End <= uint32(len(doc.Source())) {
+				leftStr = ast.String(doc.Source()[lNode.Start:lNode.End])
 			}
 		}
 
 		if int(condNode.Right) < len(doc.Tree.Nodes) {
 			rNode := doc.Tree.Nodes[condNode.Right]
-			if rNode.Start <= rNode.End && rNode.End <= uint32(len(doc.Source)) {
-				rightStr = ast.String(doc.Source[rNode.Start:rNode.End])
+			if rNode.Start <= rNode.End && rNode.End <= uint32(len(doc.Source())) {
+				rightStr = ast.String(doc.Source()[rNode.Start:rNode.End])
 			}
 		}
 
@@ -2764,7 +2764,7 @@ func (s *Server) invertCondition(doc *Document, condID ast.NodeID) string {
 func (s *Server) expandRemovalRange(doc *Document, start, end uint32) Range {
 	// Consume leading spaces/tabs on the same line
 	for start > 0 {
-		char := doc.Source[start-1]
+		char := doc.Source()[start-1]
 
 		if char == ' ' || char == '\t' {
 			start--
@@ -2774,8 +2774,8 @@ func (s *Server) expandRemovalRange(doc *Document, start, end uint32) Range {
 	}
 
 	// Consume optional trailing semicolon
-	for end < uint32(len(doc.Source)) {
-		char := doc.Source[end]
+	for end < uint32(len(doc.Source())) {
+		char := doc.Source()[end]
 
 		if char == ' ' || char == '\t' {
 			end++
@@ -2791,8 +2791,8 @@ func (s *Server) expandRemovalRange(doc *Document, start, end uint32) Range {
 	// Consume trailing spaces/tabs and exactly ONE newline
 	var hadNewline bool
 
-	for end < uint32(len(doc.Source)) {
-		char := doc.Source[end]
+	for end < uint32(len(doc.Source())) {
+		char := doc.Source()[end]
 
 		if char == ' ' || char == '\t' || char == '\r' {
 			end++
@@ -2810,16 +2810,16 @@ func (s *Server) expandRemovalRange(doc *Document, start, end uint32) Range {
 	if hadNewline {
 		prevLineEmpty := start == 0
 
-		if !prevLineEmpty && doc.Source[start-1] == '\n' {
+		if !prevLineEmpty && doc.Source()[start-1] == '\n' {
 			i := start - 1
-			if i > 0 && doc.Source[i-1] == '\r' {
+			if i > 0 && doc.Source()[i-1] == '\r' {
 				i--
 			}
 
 			isEmpty := true
 
 			for i > 0 {
-				char := doc.Source[i-1]
+				char := doc.Source()[i-1]
 
 				if char == ' ' || char == '\t' {
 					i--
@@ -2839,8 +2839,8 @@ func (s *Server) expandRemovalRange(doc *Document, start, end uint32) Range {
 		if prevLineEmpty {
 			tempEnd := end
 
-			for tempEnd < uint32(len(doc.Source)) {
-				char := doc.Source[tempEnd]
+			for tempEnd < uint32(len(doc.Source())) {
+				char := doc.Source()[tempEnd]
 
 				if char == ' ' || char == '\t' || char == '\r' {
 					tempEnd++
@@ -3162,8 +3162,8 @@ func (s *Server) getIndent(doc *Document, offset uint32) string {
 	lineStart := doc.Tree.LineOffsets[line]
 	end := lineStart
 
-	for end < offset && end < uint32(len(doc.Source)) {
-		if doc.Source[end] == ' ' || doc.Source[end] == '\t' {
+	for end < offset && end < uint32(len(doc.Source())) {
+		if doc.Source()[end] == ' ' || doc.Source()[end] == '\t' {
 			end++
 		} else {
 			break
@@ -3171,7 +3171,7 @@ func (s *Server) getIndent(doc *Document, offset uint32) string {
 	}
 
 	if end > lineStart {
-		return ast.String(doc.Source[lineStart:end])
+		return ast.String(doc.Source()[lineStart:end])
 	}
 
 	return ""

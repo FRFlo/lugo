@@ -1014,11 +1014,11 @@ func (s *Server) fiveMManifestNodeValue(doc *Document, nodeID ast.NodeID) (strin
 	}
 
 	node := doc.Tree.Nodes[nodeID]
-	if node.Start > node.End || node.End > uint32(len(doc.Source)) {
-		return "", "", Range{}, false
-	}
+    if node.Start > node.End || node.End > uint32(len(doc.Source())) {
+        return "", "", Range{}, false
+    }
 
-	raw := string(doc.Source[node.Start:node.End])
+    raw := string(doc.Source()[node.Start:node.End])
 	value := raw
 
 	if node.Kind == ast.KindString {
@@ -1089,11 +1089,11 @@ func (s *Server) fiveMManifestEntriesForCall(doc *Document, nodeID ast.NodeID) (
 		return rawName, emittedName, normalizedName, entries, true
 	}
 
-	if left.Kind != ast.KindIdent || left.Start > left.End || left.End > uint32(len(doc.Source)) {
-		return "", "", "", nil, false
-	}
+    if left.Kind != ast.KindIdent || left.Start > left.End || left.End > uint32(len(doc.Source())) {
+        return "", "", "", nil, false
+    }
 
-	rawName = string(doc.Source[left.Start:left.End])
+    rawName = string(doc.Source()[left.Start:left.End])
 	normalizedName = fiveMManifestNormalizedName(rawName)
 	emittedName = strings.ToLower(rawName)
 	callRange := getNodeRange(doc.Tree, nodeID)

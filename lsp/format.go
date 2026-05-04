@@ -109,7 +109,7 @@ func (s *Server) handleRangeFormatting(req Request) {
 // It enforces blank lines between unrelated statements, strips trailing semicolons safely,
 // expands minified code, and strictly enforces Lua indentation rules.
 func (f *Formatter) Format(doc *Document, formatRange *Range) []TextEdit {
-	source := doc.Source
+    source := doc.Source()
 	lex := lexer.New(source)
 
 	tokens := make([]token.Token, 0, len(source)/4)

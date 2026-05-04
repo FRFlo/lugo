@@ -27,7 +27,7 @@ type Document struct {
 	ActualReads        []uint16
 	MutatedLocals      []bool
 	ExportedGlobalDefs []ExportedSymbol
-	Source             []byte
+    // Source bytes are owned by the canonical Tree. Use Tree.Source as the authoritative source.
 	Errors             []parser.ParseError
 	URI                string
 	Path               string
@@ -43,7 +43,15 @@ type Document struct {
 	FiveMLuaExports    []FiveMLuaExport
 	FiveMProfileCached bool
 	ModTime            time.Time
-	DiagPragmas        DiagPragmas
+    DiagPragmas        DiagPragmas
+}
+
+// Source returns the canonical source bytes from the owning Tree.
+func (doc *Document) Source() []byte {
+    if doc != nil && doc.Tree != nil {
+        return doc.Tree.Source
+    }
+    return nil
 }
 
 func (doc *Document) parseDiagnosticPragmas() {
@@ -51,7 +59,7 @@ func (doc *Document) parseDiagnosticPragmas() {
 	doc.DiagPragmas.LineDisabled = make(map[uint32]map[string]bool)
 
 	for _, c := range doc.Tree.Comments {
-		src := doc.Source[c.Start:c.End]
+        src := doc.Source()[c.Start:c.End]
 
 		idx := bytes.Index(src, []byte("---@diagnostic"))
 		if idx == -1 {
@@ -241,7 +249,7 @@ func (doc *Document) getFunctionParams(funcExprID ast.NodeID, luadoc *LuaDoc) st
 		pID := doc.Tree.ExtraList[node.Extra+uint32(i)]
 		pNode := doc.Tree.Nodes[pID]
 
-		name := ast.String(doc.Source[pNode.Start:pNode.End])
+        name := ast.String(doc.Source()[pNode.Start:pNode.End])
 
 		if typ, ok := paramTypes[name]; ok && typ != "" {
 			params = append(params, name+": "+typ)
@@ -304,7 +312,7 @@ func (doc *Document) IterateCommentsAbove(id ast.NodeID) iter.Seq[token.Token] {
 		for i := idx; i >= 0; i-- {
 			c := doc.Tree.Comments[i]
 
-			gap := doc.Source[c.End:lastValidOffset]
+            gap := doc.Source()[c.End:lastValidOffset]
 
 			if bytes.Count(gap, []byte{'\n'}) <= 1 {
 				if !yield(c) {
@@ -336,7 +344,7 @@ func (doc *Document) getCommentsAbove(id ast.NodeID) []byte {
 
 	for i := len(validComments) - 1; i >= 0; i-- {
 		c := validComments[i]
-		rawC := doc.Source[c.Start:c.End]
+        rawC := doc.Source()[c.Start:c.End]
 
 		b = cleanLuaCommentBytes(b, rawC)
 
@@ -432,8 +440,8 @@ func (doc *Document) LocalsAt(offset uint32) iter.Seq2[[]byte, ast.NodeID] {
 								identID := doc.Tree.ExtraList[nameList.Extra+uint32(j)]
 								identNode := doc.Tree.Nodes[identID]
 
-								if identNode.Start <= identNode.End && identNode.End <= uint32(len(doc.Source)) {
-									if !yield(doc.Source[identNode.Start:identNode.End], identID) {
+                                if identNode.Start <= identNode.End && identNode.End <= uint32(len(doc.Source())) {
+                                    if !yield(doc.Source()[identNode.Start:identNode.End], identID) {
 										return
 									}
 								}
@@ -442,8 +450,8 @@ func (doc *Document) LocalsAt(offset uint32) iter.Seq2[[]byte, ast.NodeID] {
 					case ast.KindLocalFunction:
 						identNode := doc.Tree.Nodes[stmtNode.Left]
 
-						if identNode.Start <= identNode.End && identNode.End <= uint32(len(doc.Source)) {
-							if !yield(doc.Source[identNode.Start:identNode.End], stmtNode.Left) {
+                        if identNode.Start <= identNode.End && identNode.End <= uint32(len(doc.Source())) {
+                            if !yield(doc.Source()[identNode.Start:identNode.End], stmtNode.Left) {
 								return
 							}
 						}
@@ -469,8 +477,8 @@ func (doc *Document) LocalsAt(offset uint32) iter.Seq2[[]byte, ast.NodeID] {
 						paramID := doc.Tree.ExtraList[exprNode.Extra+uint32(i)]
 						paramNode := doc.Tree.Nodes[paramID]
 
-						if paramNode.Start <= paramNode.End && paramNode.End <= uint32(len(doc.Source)) {
-							if !yield(doc.Source[paramNode.Start:paramNode.End], paramID) {
+                        if paramNode.Start <= paramNode.End && paramNode.End <= uint32(len(doc.Source())) {
+                            if !yield(doc.Source()[paramNode.Start:paramNode.End], paramID) {
 								return
 							}
 						}
@@ -489,8 +497,8 @@ func (doc *Document) LocalsAt(offset uint32) iter.Seq2[[]byte, ast.NodeID] {
 				if offset > exprsEnd {
 					identNode := doc.Tree.Nodes[node.Left]
 
-					if identNode.Start <= identNode.End && identNode.End <= uint32(len(doc.Source)) {
-						if !yield(doc.Source[identNode.Start:identNode.End], node.Left) {
+                        if identNode.Start <= identNode.End && identNode.End <= uint32(len(doc.Source())) {
+                            if !yield(doc.Source()[identNode.Start:identNode.End], node.Left) {
 							return
 						}
 					}
@@ -504,8 +512,8 @@ func (doc *Document) LocalsAt(offset uint32) iter.Seq2[[]byte, ast.NodeID] {
 						identID := doc.Tree.ExtraList[nameList.Extra+uint32(i)]
 						identNode := doc.Tree.Nodes[identID]
 
-						if identNode.Start <= identNode.End && identNode.End <= uint32(len(doc.Source)) {
-							if !yield(doc.Source[identNode.Start:identNode.End], identID) {
+                        if identNode.Start <= identNode.End && identNode.End <= uint32(len(doc.Source())) {
+                            if !yield(doc.Source()[identNode.Start:identNode.End], identID) {
 								return
 							}
 						}
@@ -524,8 +532,8 @@ func (doc *Document) ExtractLuaDocFields(id ast.NodeID) iter.Seq[[]byte] {
 	return func(yield func([]byte) bool) {
 		fieldToken := []byte("@field")
 
-		for c := range doc.IterateCommentsAbove(id) {
-			raw := doc.Source[c.Start:c.End]
+        for c := range doc.IterateCommentsAbove(id) {
+            raw := doc.Source()[c.Start:c.End]
 
 			idx := bytes.Index(raw, fieldToken)
 
@@ -587,8 +595,8 @@ func (doc *Document) HasDeprecatedTag(id ast.NodeID) (bool, string) {
 		msg   string
 	)
 
-	for c := range doc.IterateCommentsAbove(id) {
-		raw := doc.Source[c.Start:c.End]
+    for c := range doc.IterateCommentsAbove(id) {
+        raw := doc.Source()[c.Start:c.End]
 
 		_, after, ok := bytes.Cut(raw, depToken)
 		if ok {

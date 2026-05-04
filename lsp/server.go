@@ -30,13 +30,13 @@ type Server struct {
 	Log    *plain.Plain
 
 	// Workspace State
-	Documents           map[string]*Document
-	OpenFiles           map[string]bool
-	activeURIs          map[string]bool
-	visitedDirs         map[string]bool
-    FiveMResourceGraph  *FiveMResourceGraph
-	uriCache            map[string]string
-	symlinkCache        map[string]string
+	Documents          map[string]*Document
+	OpenFiles          map[string]bool
+	activeURIs         map[string]bool
+	visitedDirs        map[string]bool
+	FiveMResourceGraph *FiveMResourceGraph
+	uriCache           map[string]string
+	symlinkCache       map[string]string
 
 	// Global Index & Resolution
 	GlobalIndex       map[GlobalKey][]GlobalSymbol
@@ -131,11 +131,11 @@ func NewServer(version string) *Server {
 		Writer:  os.Stdout,
 
 		// Workspace State
-        Documents:           make(map[string]*Document),
-        OpenFiles:           make(map[string]bool),
-        IsIndexing:          true,
-        FiveMResourceGraph:  NewFiveMResourceGraph(),
-		uriCache:            make(map[string]string, 1024),
+		Documents:          make(map[string]*Document),
+		OpenFiles:          make(map[string]bool),
+		IsIndexing:         true,
+		FiveMResourceGraph: NewFiveMResourceGraph(),
+		uriCache:           make(map[string]string, 1024),
 
 		// Global Index
 		GlobalIndex: make(map[GlobalKey][]GlobalSymbol),
@@ -558,7 +558,7 @@ func (s *Server) getRequireModName(doc *Document, callID ast.NodeID) string {
 		return ""
 	}
 
-	funcName := doc.Source[funcNode.Start:funcNode.End]
+	funcName := doc.Source()[funcNode.Start:funcNode.End]
 	if !bytes.Equal(funcName, []byte("require")) {
 		return ""
 	}

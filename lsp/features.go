@@ -25,9 +25,9 @@ func ctxDisplayNameForSignature(doc *Document, nodeID ast.NodeID) string {
 	}
 
 	node := doc.Tree.Nodes[nodeID]
-	if node.Start <= node.End && node.End <= uint32(len(doc.Source)) {
-		return ast.String(doc.Source[node.Start:node.End])
-	}
+    if node.Start <= node.End && node.End <= uint32(len(doc.Source())) {
+        return ast.String(doc.Source()[node.Start:node.End])
+    }
 
 	return ""
 }
@@ -97,10 +97,10 @@ func (s *Server) handleHover(req Request) {
 				vNode := ctx.TargetDoc.Tree.Nodes[valID]
 
 				switch vNode.Kind {
-				case ast.KindNumber, ast.KindString, ast.KindTrue, ast.KindFalse, ast.KindNil:
-					if vNode.Start <= vNode.End && vNode.End <= uint32(len(ctx.TargetDoc.Source)) {
-						valStr = " = " + ast.String(ctx.TargetDoc.Source[vNode.Start:vNode.End])
-					}
+                case ast.KindNumber, ast.KindString, ast.KindTrue, ast.KindFalse, ast.KindNil:
+                    if vNode.Start <= vNode.End && vNode.End <= uint32(len(ctx.TargetDoc.Source())) {
+                        valStr = " = " + ast.String(ctx.TargetDoc.Source()[vNode.Start:vNode.End])
+                    }
 				}
 			}
 
@@ -566,11 +566,11 @@ func (s *Server) handleCompletion(req Request) {
 			}
 
 			pNode := dDoc.Tree.Nodes[pID]
-			if pNode.Start > pNode.End || pNode.End > uint32(len(dDoc.Source)) {
-				continue
-			}
+            if pNode.Start > pNode.End || pNode.End > uint32(len(dDoc.Source())) {
+                continue
+            }
 
-			pName := ast.String(dDoc.Source[pNode.Start:pNode.End])
+            pName := ast.String(dDoc.Source()[pNode.Start:pNode.End])
 
 			if isMethod && i == 0 && pName == "self" {
 				continue
@@ -596,8 +596,8 @@ func (s *Server) handleCompletion(req Request) {
 			if pID != ast.InvalidNode {
 				pNode := doc.Tree.Nodes[pID]
 				if pNode.Kind == ast.KindIndexExpr && pNode.Right == currID {
-					if doc.Tree.Nodes[pNode.Left].Kind == ast.KindIdent {
-						identName := doc.Source[doc.Tree.Nodes[pNode.Left].Start:doc.Tree.Nodes[pNode.Left].End]
+        if doc.Tree.Nodes[pNode.Left].Kind == ast.KindIdent {
+                        identName := doc.Source()[doc.Tree.Nodes[pNode.Left].Start:doc.Tree.Nodes[pNode.Left].End]
 						if bytes.Equal(identName, []byte("exports")) && doc.Resolver.References[pNode.Left] == ast.InvalidNode {
 							for _, name := range s.getFiveMResourceNames() {
 								addCompletion(name, FieldCompletion, "resource", false, "1", name, PlainTextTextFormat)
@@ -629,8 +629,8 @@ func (s *Server) handleCompletion(req Request) {
 
 	i := int(offset) - 1
 
-	for i >= 0 {
-		c := doc.Source[i]
+    for i >= 0 {
+        c := doc.Source()[i]
 
 		isIdentChar := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'
 
@@ -641,8 +641,8 @@ func (s *Server) handleCompletion(req Request) {
 		i--
 	}
 
-	for i >= 0 {
-		c := doc.Source[i]
+    for i >= 0 {
+        c := doc.Source()[i]
 
 		if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
 			i--
@@ -651,14 +651,14 @@ func (s *Server) handleCompletion(req Request) {
 		}
 	}
 
-	if i >= 0 && (doc.Source[i] == '.' || doc.Source[i] == ':') {
-		isMember = true
-		isColon = doc.Source[i] == ':'
+        if i >= 0 && (doc.Source()[i] == '.' || doc.Source()[i] == ':') {
+        isMember = true
+        isColon = doc.Source()[i] == ':'
 
 		i--
 
-		for i >= 0 {
-			c := doc.Source[i]
+        for i >= 0 {
+            c := doc.Source()[i]
 
 			if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
 				i--
@@ -669,18 +669,18 @@ func (s *Server) handleCompletion(req Request) {
 
 		endId = i + 1
 
-		for i >= 0 {
-			c := doc.Source[i]
+            for i >= 0 {
+            c := doc.Source()[i]
 
 			if c == ']' {
 				bracketDepth := 1
 
 				i--
 
-				for i >= 0 {
-					if doc.Source[i] == ']' {
+            for i >= 0 {
+                if doc.Source()[i] == ']' {
 						bracketDepth++
-					} else if doc.Source[i] == '[' {
+                    } else if doc.Source()[i] == '[' {
 						bracketDepth--
 
 						if bracketDepth == 0 {
@@ -709,9 +709,9 @@ func (s *Server) handleCompletion(req Request) {
 
 		startId := i + 1
 
-		if startId < endId {
-			recName = doc.Source[startId:endId]
-		}
+        if startId < endId {
+            recName = doc.Source()[startId:endId]
+        }
 	}
 
 	s.Log.Printf("Completion requested at offset %d. isMember=%v, recName=%s\n", offset, isMember, ast.String(recName))
@@ -846,8 +846,8 @@ func (s *Server) handleCompletion(req Request) {
 			if recHash != 0 && fd.ReceiverHash == recHash && (recDef == ast.InvalidNode || fd.ReceiverDef == recDef) {
 				node := doc.Tree.Nodes[fd.NodeID]
 
-				kind := FieldCompletion
-				label := ast.String(doc.Source[node.Start:node.End])
+                kind := FieldCompletion
+                label := ast.String(doc.Source()[node.Start:node.End])
 				insertText := label
 				insertFormat := PlainTextTextFormat
 
@@ -930,7 +930,7 @@ func (s *Server) handleCompletion(req Request) {
 				if field.Kind == ast.KindRecordField {
 					key := tDoc.Tree.Nodes[field.Left]
 					if key.Kind == ast.KindIdent {
-						label := ast.String(tDoc.Source[key.Start:key.End])
+                label := ast.String(tDoc.Source()[key.Start:key.End])
 
 						kind := FieldCompletion
 						insertText := label
@@ -953,12 +953,12 @@ func (s *Server) handleCompletion(req Request) {
 			recDef := tDoc.getDefForValue(tableID)
 			if recDef != ast.InvalidNode {
 				recDefNode := tDoc.Tree.Nodes[recDef]
-				recHash := ast.HashBytes(tDoc.Source[recDefNode.Start:recDefNode.End])
+                recHash := ast.HashBytes(tDoc.Source()[recDefNode.Start:recDefNode.End])
 
 				for _, fd := range tDoc.Resolver.FieldDefs {
 					if fd.ReceiverDef == recDef && fd.ReceiverHash == recHash {
 						node := tDoc.Tree.Nodes[fd.NodeID]
-						label := ast.String(tDoc.Source[node.Start:node.End])
+                label := ast.String(tDoc.Source()[node.Start:node.End])
 
 						kind := FieldCompletion
 						insertText := label
@@ -1022,10 +1022,10 @@ func (s *Server) handleCompletion(req Request) {
 				sym := *visibleSym
 
 				if symDoc, ok := s.Documents[sym.URI]; ok {
-					node := symDoc.Tree.Nodes[sym.NodeID]
+                    node := symDoc.Tree.Nodes[sym.NodeID]
 
 					kind := FieldCompletion
-					label := ast.String(symDoc.Source[node.Start:node.End])
+                    label := ast.String(symDoc.Source()[node.Start:node.End])
 					insertText := label
 					insertFormat := PlainTextTextFormat
 
@@ -1087,9 +1087,9 @@ func (s *Server) handleCompletion(req Request) {
 				if symDoc, ok := s.Documents[sym.URI]; ok {
 					node := symDoc.Tree.Nodes[sym.NodeID]
 
-					if node.Kind == ast.KindIdent || node.Kind == ast.KindMethodName {
-						kind := VariableCompletion
-						label := ast.String(symDoc.Source[node.Start:node.End])
+                    if node.Kind == ast.KindIdent || node.Kind == ast.KindMethodName {
+                        kind := VariableCompletion
+                        label := ast.String(symDoc.Source()[node.Start:node.End])
 						insertText := label
 						insertFormat := PlainTextTextFormat
 
@@ -1127,7 +1127,7 @@ func (s *Server) handleCompletion(req Request) {
 					pNode := doc.Tree.Nodes[pID]
 					if pNode.Kind == ast.KindIndexExpr && pNode.Right == currID {
 						if int(pNode.Left) < len(doc.Tree.Nodes) && doc.Tree.Nodes[pNode.Left].Kind == ast.KindIdent {
-							identName := doc.Source[doc.Tree.Nodes[pNode.Left].Start:doc.Tree.Nodes[pNode.Left].End]
+                            identName := doc.Source()[doc.Tree.Nodes[pNode.Left].Start:doc.Tree.Nodes[pNode.Left].End]
 							if bytes.Equal(identName, []byte("exports")) && doc.Resolver.References[pNode.Left] == ast.InvalidNode {
 								for _, name := range s.getFiveMResourceNames() {
 									addCompletion(name, FieldCompletion, "resource", false, "1", name, PlainTextTextFormat)
@@ -1341,11 +1341,11 @@ func (s *Server) handleSignatureHelp(req Request) {
 				}
 
 				pNode := tDoc.Tree.Nodes[pID]
-				if pNode.Start > pNode.End || pNode.End > uint32(len(tDoc.Source)) {
-					continue
-				}
+                if pNode.Start > pNode.End || pNode.End > uint32(len(tDoc.Source())) {
+                    continue
+                }
 
-				pName := ast.String(tDoc.Source[pNode.Start:pNode.End])
+                pName := ast.String(tDoc.Source()[pNode.Start:pNode.End])
 
 				if i == 0 && paramOffset == 1 && pName == "self" {
 					continue
@@ -1609,9 +1609,9 @@ func (s *Server) handleInlayHint(req Request) {
 
 				var parenOff uint32
 
-				if nameNode.End != 0xFFFFFFFF && nameNode.End <= uint32(len(doc.Source)) {
-					for j := nameNode.End; j < uint32(len(doc.Source)); j++ {
-						if doc.Source[j] == '(' {
+                if nameNode.End != 0xFFFFFFFF && nameNode.End <= uint32(len(doc.Source())) {
+                    for j := nameNode.End; j < uint32(len(doc.Source())); j++ {
+                        if doc.Source()[j] == '(' {
 							parenOff = j + 1
 
 							break
@@ -1717,24 +1717,24 @@ func (s *Server) handleInlayHint(req Request) {
 				continue
 			}
 
-			if pNode.Start > pNode.End || pNode.End > uint32(len(ctx.TargetDoc.Source)) {
-				continue
-			}
+            if pNode.Start > pNode.End || pNode.End > uint32(len(ctx.TargetDoc.Source())) {
+                continue
+            }
 
-			pName := ctx.TargetDoc.Source[pNode.Start:pNode.End]
+            pName := ctx.TargetDoc.Source()[pNode.Start:pNode.End]
 
 			if bytes.Equal(pName, []byte("self")) {
 				continue
 			}
 
-			if s.InlaySuppressMatch && argNode.Kind == ast.KindIdent {
-				if argNode.Start <= argNode.End && argNode.End <= uint32(len(doc.Source)) {
-					argName := doc.Source[argNode.Start:argNode.End]
-					if bytes.Equal(pName, argName) {
-						continue
-					}
-				}
-			}
+            if s.InlaySuppressMatch && argNode.Kind == ast.KindIdent {
+                if argNode.Start <= argNode.End && argNode.End <= uint32(len(doc.Source())) {
+                    argName := doc.Source()[argNode.Start:argNode.End]
+                    if bytes.Equal(pName, argName) {
+                        continue
+                    }
+                }
+            }
 
 			if argNode.Start == 0xFFFFFFFF {
 				continue
@@ -1870,7 +1870,7 @@ func (s *Server) handleSemanticTokensFull(req Request) {
 		case ast.KindIdent:
 			tokenType = 0
 
-			identBytes := doc.Source[node.Start:node.End]
+            identBytes := doc.Source()[node.Start:node.End]
 
 			defID := doc.Resolver.References[i]
 			isDecl := ast.NodeID(i) == defID
@@ -1930,7 +1930,7 @@ func (s *Server) handleSemanticTokensFull(req Request) {
 					if tokenType == 1 && parentID != ast.InvalidNode {
 						pNode := doc.Tree.Nodes[parentID]
 						recID := pNode.Left
-						recBytes := doc.Source[doc.Tree.Nodes[recID].Start:doc.Tree.Nodes[recID].End]
+                        recBytes := doc.Source()[doc.Tree.Nodes[recID].Start:doc.Tree.Nodes[recID].End]
 						recHash = ast.HashBytes(recBytes)
 					}
 
@@ -2581,9 +2581,9 @@ func (s *Server) buildCallHierarchyItemFromDef(uri string, doc *Document, defID 
 
 	var name string
 
-	if node.Start <= node.End && node.End <= uint32(len(doc.Source)) {
-		name = ast.String(doc.Source[node.Start:node.End])
-	}
+    if node.Start <= node.End && node.End <= uint32(len(doc.Source())) {
+        name = ast.String(doc.Source()[node.Start:node.End])
+    }
 
 	if name == "" {
 		name = "<error>"
@@ -2623,7 +2623,7 @@ func (s *Server) buildCallHierarchyItemFromDef(uri string, doc *Document, defID 
 
 		if len(doc.Tree.LineOffsets) > 0 {
 			lastLine := uint32(len(doc.Tree.LineOffsets) - 1)
-			lastCol := uint32(len(doc.Source)) - doc.Tree.LineOffsets[lastLine]
+            lastCol := uint32(len(doc.Source())) - doc.Tree.LineOffsets[lastLine]
 
 			fullRange.End = Position{Line: lastLine, Character: lastCol}
 		}

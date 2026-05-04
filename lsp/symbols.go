@@ -192,7 +192,7 @@ func (s *Server) handleDocumentSymbol(req Request) {
 				keyNode := doc.Tree.Nodes[fieldNode.Left]
 				valNode := doc.Tree.Nodes[fieldNode.Right]
 
-				name := ast.String(doc.Source[keyNode.Start:keyNode.End])
+				name := ast.String(doc.Source()[keyNode.Start:keyNode.End])
 				if name == "" {
 					name = "<error>"
 				}
@@ -240,7 +240,7 @@ func (s *Server) handleDocumentSymbol(req Request) {
 		case ast.KindLocalFunction, ast.KindFunctionStmt:
 			nameNode := doc.Tree.Nodes[node.Left]
 
-			name := ast.String(doc.Source[nameNode.Start:nameNode.End])
+			name := ast.String(doc.Source()[nameNode.Start:nameNode.End])
 			if name == "" {
 				name = "<error>"
 			}
@@ -287,7 +287,7 @@ func (s *Server) handleDocumentSymbol(req Request) {
 						rNode = doc.Tree.Nodes[rID]
 					}
 
-					name := ast.String(doc.Source[lNode.Start:lNode.End])
+					name := ast.String(doc.Source()[lNode.Start:lNode.End])
 					if name == "" {
 						name = "<error>"
 					}
@@ -345,15 +345,15 @@ func (s *Server) handleDocumentSymbol(req Request) {
 					leftNode := doc.Tree.Nodes[node.Left]
 					rightNode := doc.Tree.Nodes[node.Right]
 
-					if leftNode.Start <= rightNode.End && rightNode.End <= uint32(len(doc.Source)) {
-						funcName = ast.String(doc.Source[leftNode.Start:rightNode.End])
+					if leftNode.Start <= rightNode.End && rightNode.End <= uint32(len(doc.Source())) {
+						funcName = ast.String(doc.Source()[leftNode.Start:rightNode.End])
 					}
 				}
 			} else {
 				if int(node.Left) < len(doc.Tree.Nodes) {
 					leftNode := doc.Tree.Nodes[node.Left]
-					if leftNode.Start <= leftNode.End && leftNode.End <= uint32(len(doc.Source)) {
-						funcName = ast.String(doc.Source[leftNode.Start:leftNode.End])
+					if leftNode.Start <= leftNode.End && leftNode.End <= uint32(len(doc.Source())) {
+						funcName = ast.String(doc.Source()[leftNode.Start:leftNode.End])
 					}
 
 					if leftNode.Kind == ast.KindMemberExpr {
@@ -402,8 +402,8 @@ func (s *Server) handleDocumentSymbol(req Request) {
 								pID := targetDoc.Tree.ExtraList[targetFuncNode.Extra+uint32(paramIdx)]
 								if int(pID) < len(targetDoc.Tree.Nodes) {
 									pNode := targetDoc.Tree.Nodes[pID]
-									if pNode.Start <= pNode.End && pNode.End <= uint32(len(targetDoc.Source)) {
-										pNameStr := ast.String(targetDoc.Source[pNode.Start:pNode.End])
+									if pNode.Start <= pNode.End && pNode.End <= uint32(len(targetDoc.Source())) {
+										pNameStr := ast.String(targetDoc.Source()[pNode.Start:pNode.End])
 										if pNameStr != "" && pNameStr != "..." {
 											paramName = pNameStr
 										}
@@ -608,11 +608,11 @@ func (s *Server) resolveSymbolNode(uri string, doc *Document, nodeID ast.NodeID)
 		return nil
 	}
 
-	if identNode.Start > identNode.End || identNode.End > uint32(len(doc.Source)) {
+	if identNode.Start > identNode.End || identNode.End > uint32(len(doc.Source())) {
 		return nil
 	}
 
-	identBytes := doc.Source[identNode.Start:identNode.End]
+	identBytes := doc.Source()[identNode.Start:identNode.End]
 	identName := ast.String(identBytes)
 
 	displayName := identName
@@ -642,12 +642,12 @@ func (s *Server) resolveSymbolNode(uri string, doc *Document, nodeID ast.NodeID)
 			if recID != ast.InvalidNode && int(recID) < len(doc.Tree.Nodes) {
 				recNode := doc.Tree.Nodes[recID]
 
-				if recNode.Start <= identNode.End && identNode.End <= uint32(len(doc.Source)) {
-					displayName = ast.String(doc.Source[recNode.Start:identNode.End])
+				if recNode.Start <= identNode.End && identNode.End <= uint32(len(doc.Source())) {
+					displayName = ast.String(doc.Source()[recNode.Start:identNode.End])
 				}
 
-				if recNode.Start <= recNode.End && recNode.End <= uint32(len(doc.Source)) {
-					recBytes := doc.Source[recNode.Start:recNode.End]
+				if recNode.Start <= recNode.End && recNode.End <= uint32(len(doc.Source())) {
+					recBytes := doc.Source()[recNode.Start:recNode.End]
 					gKey = GlobalKey{ReceiverHash: ast.HashBytes(recBytes), PropHash: ast.HashBytes(identBytes)}
 				}
 
@@ -884,16 +884,16 @@ func (s *Server) getFiveMExportResource(doc *Document, nodeID ast.NodeID) string
 	case ast.KindIndexExpr:
 		if int(node.Left) < len(doc.Tree.Nodes) && doc.Tree.Nodes[node.Left].Kind == ast.KindIdent {
 			leftNode := doc.Tree.Nodes[node.Left]
-			if leftNode.Start <= leftNode.End && leftNode.End <= uint32(len(doc.Source)) {
-				leftName := doc.Source[leftNode.Start:leftNode.End]
+			if leftNode.Start <= leftNode.End && leftNode.End <= uint32(len(doc.Source())) {
+				leftName := doc.Source()[leftNode.Start:leftNode.End]
 
 				if bytes.Equal(leftName, []byte("exports")) && doc.Resolver.References[node.Left] == ast.InvalidNode {
 					if int(node.Right) < len(doc.Tree.Nodes) {
 						rightNode := doc.Tree.Nodes[node.Right]
 
 						if rightNode.Kind == ast.KindString {
-							if rightNode.Start <= rightNode.End && rightNode.End <= uint32(len(doc.Source)) {
-								return strings.ToLower(unquoteLuaString(string(doc.Source[rightNode.Start:rightNode.End])))
+							if rightNode.Start <= rightNode.End && rightNode.End <= uint32(len(doc.Source())) {
+								return strings.ToLower(unquoteLuaString(string(doc.Source()[rightNode.Start:rightNode.End])))
 							}
 						}
 					}
@@ -903,16 +903,16 @@ func (s *Server) getFiveMExportResource(doc *Document, nodeID ast.NodeID) string
 	case ast.KindMemberExpr:
 		if int(node.Left) < len(doc.Tree.Nodes) && doc.Tree.Nodes[node.Left].Kind == ast.KindIdent {
 			leftNode := doc.Tree.Nodes[node.Left]
-			if leftNode.Start <= leftNode.End && leftNode.End <= uint32(len(doc.Source)) {
-				leftName := doc.Source[leftNode.Start:leftNode.End]
+			if leftNode.Start <= leftNode.End && leftNode.End <= uint32(len(doc.Source())) {
+				leftName := doc.Source()[leftNode.Start:leftNode.End]
 
 				if bytes.Equal(leftName, []byte("exports")) && doc.Resolver.References[node.Left] == ast.InvalidNode {
 					if int(node.Right) < len(doc.Tree.Nodes) {
 						rightNode := doc.Tree.Nodes[node.Right]
 
 						if rightNode.Kind == ast.KindIdent {
-							if rightNode.Start <= rightNode.End && rightNode.End <= uint32(len(doc.Source)) {
-								return strings.ToLower(string(doc.Source[rightNode.Start:rightNode.End]))
+							if rightNode.Start <= rightNode.End && rightNode.End <= uint32(len(doc.Source())) {
+								return strings.ToLower(string(doc.Source()[rightNode.Start:rightNode.End]))
 							}
 						}
 					}
@@ -1231,11 +1231,11 @@ func (s *Server) getReferences(ctx *SymbolContext, includeDeclaration bool) []Lo
 				}
 
 				rightNode := dDoc.Tree.Nodes[node.Right]
-				if rightNode.Start > rightNode.End || rightNode.End > uint32(len(dDoc.Source)) {
+				if rightNode.Start > rightNode.End || rightNode.End > uint32(len(dDoc.Source())) {
 					continue
 				}
 
-				if ast.String(dDoc.Source[rightNode.Start:rightNode.End]) != ctx.IdentName {
+				if ast.String(dDoc.Source()[rightNode.Start:rightNode.End]) != ctx.IdentName {
 					continue
 				}
 
@@ -1291,11 +1291,11 @@ func (s *Server) iterateGlobalReferences(ctx *SymbolContext) iter.Seq[GlobalRefe
 						}
 
 						right := dDoc.Tree.Nodes[node.Right]
-						if right.Start > right.End || right.End > uint32(len(dDoc.Source)) {
+						if right.Start > right.End || right.End > uint32(len(dDoc.Source())) {
 							continue
 						}
 
-						if ast.String(dDoc.Source[right.Start:right.End]) != ctx.IdentName {
+						if ast.String(dDoc.Source()[right.Start:right.End]) != ctx.IdentName {
 							continue
 						}
 
@@ -1314,7 +1314,7 @@ func (s *Server) iterateGlobalReferences(ctx *SymbolContext) iter.Seq[GlobalRefe
 
 			if ctx.GKey.ReceiverHash == 0 {
 				for _, id := range dDoc.Resolver.GlobalDefs {
-					if ast.HashBytes(dDoc.Source[dDoc.Tree.Nodes[id].Start:dDoc.Tree.Nodes[id].End]) == ctx.GKey.PropHash {
+					if ast.HashBytes(dDoc.Source()[dDoc.Tree.Nodes[id].Start:dDoc.Tree.Nodes[id].End]) == ctx.GKey.PropHash {
 						if !yield(GlobalReference{Doc: dDoc, URI: dUri, NodeID: id}) {
 							return
 						}
@@ -1322,7 +1322,7 @@ func (s *Server) iterateGlobalReferences(ctx *SymbolContext) iter.Seq[GlobalRefe
 				}
 
 				for _, id := range dDoc.Resolver.GlobalRefs {
-					if ast.HashBytes(dDoc.Source[dDoc.Tree.Nodes[id].Start:dDoc.Tree.Nodes[id].End]) == ctx.GKey.PropHash {
+					if ast.HashBytes(dDoc.Source()[dDoc.Tree.Nodes[id].Start:dDoc.Tree.Nodes[id].End]) == ctx.GKey.PropHash {
 						if dDoc.Resolver.References[id] == ast.InvalidNode {
 							if !yield(GlobalReference{Doc: dDoc, URI: dUri, NodeID: id}) {
 								return
@@ -1561,7 +1561,7 @@ func (s *Server) getGlobalAlias(hash uint64) uint64 {
 			return 0
 		}
 
-		return ast.HashBytes(doc.Source[node.Start:node.End])
+		return ast.HashBytes(doc.Source()[node.Start:node.End])
 	}
 
 	return 0
@@ -1578,8 +1578,8 @@ func (s *Server) getGlobalPath(doc *Document, id ast.NodeID, depth int) []byte {
 	case ast.KindIdent:
 		defID := doc.Resolver.References[id]
 		if defID == ast.InvalidNode {
-			if node.Start <= node.End && node.End <= uint32(len(doc.Source)) {
-				return doc.Source[node.Start:node.End]
+			if node.Start <= node.End && node.End <= uint32(len(doc.Source())) {
+				return doc.Source()[node.Start:node.End]
 			}
 			return nil
 		}
@@ -1599,8 +1599,8 @@ func (s *Server) getGlobalPath(doc *Document, id ast.NodeID, depth int) []byte {
 
 			rightNode := doc.Tree.Nodes[node.Right]
 
-			if rightNode.Start <= rightNode.End && rightNode.End <= uint32(len(doc.Source)) {
-				rightBytes := doc.Source[rightNode.Start:rightNode.End]
+			if rightNode.Start <= rightNode.End && rightNode.End <= uint32(len(doc.Source())) {
+				rightBytes := doc.Source()[rightNode.Start:rightNode.End]
 
 				buf := make([]byte, 0, len(leftPath)+1+len(rightBytes))
 				buf = append(buf, leftPath...)

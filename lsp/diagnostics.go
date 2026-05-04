@@ -136,16 +136,16 @@ func (s *Server) publishDiagnostics(uri string) {
 							errNode    ast.NodeID
 						)
 
-						switch node.Kind {
-						case ast.KindMethodCall:
-							rightNode := doc.Tree.Nodes[node.Right]
-							methodName = string(doc.Source[rightNode.Start:rightNode.End])
-							errNode = node.Right
-						case ast.KindMemberExpr:
-							rightNode := doc.Tree.Nodes[node.Right]
-							methodName = string(doc.Source[rightNode.Start:rightNode.End])
-							errNode = node.Right
-						}
+                        switch node.Kind {
+                        case ast.KindMethodCall:
+                            rightNode := doc.Tree.Nodes[node.Right]
+                            methodName = string(doc.Source()[rightNode.Start:rightNode.End])
+                            errNode = node.Right
+                        case ast.KindMemberExpr:
+                            rightNode := doc.Tree.Nodes[node.Right]
+                            methodName = string(doc.Source()[rightNode.Start:rightNode.End])
+                            errNode = node.Right
+                        }
 
 						if methodName != "" {
 							_, isExported := s.getFiveMResourceExportDefinitions(resObj, methodName)
@@ -166,21 +166,21 @@ func (s *Server) publishDiagnostics(uri string) {
 			if exportBridgeProfile.Kind == FiveMProfileExportBridge && (node.Kind == ast.KindMemberExpr || node.Kind == ast.KindIndexExpr) {
 				if doc.Tree.Nodes[node.Left].Kind == ast.KindIdent {
 					leftNode := doc.Tree.Nodes[node.Left]
-					if bytes.Equal(doc.Source[leftNode.Start:leftNode.End], []byte("exports")) && doc.Resolver.References[node.Left] == ast.InvalidNode {
+            if bytes.Equal(doc.Source()[leftNode.Start:leftNode.End], []byte("exports")) && doc.Resolver.References[node.Left] == ast.InvalidNode {
 						var (
 							resName string
 							errNode ast.NodeID
 						)
 
 						switch node.Kind {
-						case ast.KindMemberExpr:
-							rightNode := doc.Tree.Nodes[node.Right]
-							resName = string(doc.Source[rightNode.Start:rightNode.End])
-							errNode = node.Right
+                        case ast.KindMemberExpr:
+                            rightNode := doc.Tree.Nodes[node.Right]
+                            resName = string(doc.Source()[rightNode.Start:rightNode.End])
+                            errNode = node.Right
 						case ast.KindIndexExpr:
 							rightNode := doc.Tree.Nodes[node.Right]
 							if rightNode.Kind == ast.KindString {
-								resName = unquoteLuaString(string(doc.Source[rightNode.Start:rightNode.End]))
+                            resName = unquoteLuaString(string(doc.Source()[rightNode.Start:rightNode.End]))
 								errNode = node.Right
 							}
 						}
@@ -230,12 +230,12 @@ func (s *Server) publishDiagnostics(uri string) {
 		suggestCache := s.suggestCache
 
 		for _, refID := range doc.Resolver.GlobalRefs {
-			node := doc.Tree.Nodes[refID]
-			if node.Start >= node.End || node.End > uint32(len(doc.Source)) {
+            node := doc.Tree.Nodes[refID]
+            if node.Start >= node.End || node.End > uint32(len(doc.Source())) {
 				continue
 			}
 
-			identBytes := doc.Source[node.Start:node.End]
+            identBytes := doc.Source()[node.Start:node.End]
 
 			if len(identBytes) == 1 && identBytes[0] == '_' {
 				continue
@@ -301,11 +301,11 @@ func (s *Server) publishDiagnostics(uri string) {
 		for _, defID := range doc.Resolver.GlobalDefs {
 			node := doc.Tree.Nodes[defID]
 
-			if node.Start >= node.End || node.End > uint32(len(doc.Source)) {
+        if node.Start >= node.End || node.End > uint32(len(doc.Source())) {
 				continue
 			}
 
-			identBytes := doc.Source[node.Start:node.End]
+            identBytes := doc.Source()[node.Start:node.End]
 
 			if len(identBytes) == 1 && identBytes[0] == '_' {
 				continue
@@ -359,11 +359,11 @@ func (s *Server) publishDiagnostics(uri string) {
 
 		for _, defID := range doc.Resolver.LocalDefs {
 			node := doc.Tree.Nodes[defID]
-			if node.Start >= node.End || node.End > uint32(len(doc.Source)) {
+        if node.Start >= node.End || node.End > uint32(len(doc.Source())) {
 				continue
 			}
 
-			nameBytes := doc.Source[node.Start:node.End]
+            nameBytes := doc.Source()[node.Start:node.End]
 			isIgnoredVar := len(nameBytes) > 0 && nameBytes[0] == '_'
 
 			r := getNodeRange(doc.Tree, defID)
@@ -483,7 +483,7 @@ func (s *Server) publishDiagnostics(uri string) {
 			}
 
 			node := doc.Tree.Nodes[pair.Shadowing]
-			nameBytes := doc.Source[node.Start:node.End]
+            nameBytes := doc.Source()[node.Start:node.End]
 			nameStr := ast.String(nameBytes)
 
 			var related []DiagnosticRelatedInformation
@@ -545,7 +545,7 @@ func (s *Server) publishDiagnostics(uri string) {
 
 				info := checkDep(doc, defID)
 				if info.IsDep {
-					identBytes := doc.Source[doc.Tree.Nodes[i].Start:doc.Tree.Nodes[i].End]
+                    identBytes := doc.Source()[doc.Tree.Nodes[i].Start:doc.Tree.Nodes[i].End]
 					diagMsg := fmt.Sprintf("Use of deprecated symbol '%s'", ast.String(identBytes))
 
 					if info.Msg != "" {
@@ -567,7 +567,7 @@ func (s *Server) publishDiagnostics(uri string) {
 
 		// Check unresolved global references
 		for _, refID := range doc.Resolver.GlobalRefs {
-			identBytes := doc.Source[doc.Tree.Nodes[refID].Start:doc.Tree.Nodes[refID].End]
+            identBytes := doc.Source()[doc.Tree.Nodes[refID].Start:doc.Tree.Nodes[refID].End]
 			hash := ast.HashBytes(identBytes)
 
 			if syms, ok := s.getGlobalSymbols(doc, 0, hash); ok && len(syms) > 0 && syms[0].NodeID != ast.InvalidNode {
@@ -598,7 +598,7 @@ func (s *Server) publishDiagnostics(uri string) {
 				if syms, ok := s.getGlobalSymbols(doc, pf.ReceiverHash, pf.PropHash); ok && len(syms) > 0 && syms[0].NodeID != ast.InvalidNode {
 					sym := syms[0]
 					if sym.IsDeprecated {
-						identBytes := doc.Source[doc.Tree.Nodes[pf.PropNodeID].Start:doc.Tree.Nodes[pf.PropNodeID].End]
+            identBytes := doc.Source()[doc.Tree.Nodes[pf.PropNodeID].Start:doc.Tree.Nodes[pf.PropNodeID].End]
 						diagMsg := fmt.Sprintf("Use of deprecated symbol '%s'", ast.String(identBytes))
 
 						if sym.DeprecatedMsg != "" {
@@ -628,7 +628,7 @@ func (s *Server) publishDiagnostics(uri string) {
 				continue
 			}
 
-			name := ast.String(doc.Source[node.Start:node.End])
+            name := ast.String(doc.Source()[node.Start:node.End])
 			if reason, ok := s.BannedSymbols[name]; ok {
 				msg := "Usage of banned symbol '" + name + "'."
 				if reason != "" {
@@ -645,7 +645,7 @@ func (s *Server) publishDiagnostics(uri string) {
 		}
 
 		for _, pf := range doc.Resolver.PendingFields {
-			propName := ast.String(doc.Source[doc.Tree.Nodes[pf.PropNodeID].Start:doc.Tree.Nodes[pf.PropNodeID].End])
+            propName := ast.String(doc.Source()[doc.Tree.Nodes[pf.PropNodeID].Start:doc.Tree.Nodes[pf.PropNodeID].End])
 			fullName := string(pf.ReceiverName) + "." + propName
 
 			if reason, ok := s.BannedSymbols[fullName]; ok {
@@ -677,7 +677,7 @@ func (s *Server) publishDiagnostics(uri string) {
 					firstExprID := doc.Tree.ExtraList[exprList.Extra]
 					firstExprNode := doc.Tree.Nodes[firstExprID]
 
-					gap := doc.Source[node.Start:firstExprNode.Start]
+                    gap := doc.Source()[node.Start:firstExprNode.Start]
 
 					if bytes.IndexByte(gap, '\n') != -1 {
 						lastExprID := doc.Tree.ExtraList[exprList.Extra+uint32(exprList.Count-1)]
@@ -808,8 +808,8 @@ func (s *Server) publishDiagnostics(uri string) {
 						lID := doc.Tree.ExtraList[lhsList.Extra+uint32(j)]
 						rID := doc.Tree.ExtraList[rhsList.Extra+uint32(j)]
 
-						lSource := doc.Source[doc.Tree.Nodes[lID].Start:doc.Tree.Nodes[lID].End]
-						rSource := doc.Source[doc.Tree.Nodes[rID].Start:doc.Tree.Nodes[rID].End]
+            lSource := doc.Source()[doc.Tree.Nodes[lID].Start:doc.Tree.Nodes[lID].End]
+            rSource := doc.Source()[doc.Tree.Nodes[rID].Start:doc.Tree.Nodes[rID].End]
 
 						if bytes.Equal(lSource, rSource) {
 							s.diagBuf = append(s.diagBuf, Diagnostic{
@@ -846,7 +846,7 @@ func (s *Server) publishDiagnostics(uri string) {
 
 								if lhsList.Count > 0 {
 									prevRhsID := doc.Tree.ExtraList[rhsList.Extra+uint32(lhsList.Count-1)]
-									startOff = s.findCommaBefore(doc.Source, doc.Tree.Nodes[firstRedundantID].Start, doc.Tree.Nodes[prevRhsID].End)
+                    startOff = s.findCommaBefore(doc.Source(), doc.Tree.Nodes[firstRedundantID].Start, doc.Tree.Nodes[prevRhsID].End)
 								} else {
 									startOff = doc.Tree.Nodes[firstRedundantID].Start
 								}
@@ -935,7 +935,7 @@ func (s *Server) publishDiagnostics(uri string) {
 					if fieldNode.Kind == ast.KindRecordField {
 						keyNode := doc.Tree.Nodes[fieldNode.Left]
 						if keyNode.Kind == ast.KindIdent {
-							keyBytes := doc.Source[keyNode.Start:keyNode.End]
+        keyBytes := doc.Source()[keyNode.Start:keyNode.End]
 							hash := ast.HashBytes(keyBytes)
 
 							if prevID, exists := seenKeys[hash]; exists {
@@ -1196,7 +1196,7 @@ func (s *Server) publishDiagnostics(uri string) {
 									limit = doc.Tree.Nodes[node.Left].End
 								}
 
-								startOff := s.findCommaBefore(doc.Source, doc.Tree.Nodes[firstRedundantID].Start, limit)
+                                startOff := s.findCommaBefore(doc.Source(), doc.Tree.Nodes[firstRedundantID].Start, limit)
 
 								s.diagBuf = append(s.diagBuf, Diagnostic{
 									Range:    getRange(doc.Tree, startOff, doc.Tree.Nodes[lastArgID].End),
@@ -1230,11 +1230,11 @@ func (s *Server) publishDiagnostics(uri string) {
 								recNode := doc.Tree.Nodes[recID]
 								propNode := doc.Tree.Nodes[propID]
 
-								if recNode.Start <= recNode.End && recNode.End <= uint32(len(doc.Source)) &&
-									propNode.Start <= propNode.End && propNode.End <= uint32(len(doc.Source)) {
+                                if recNode.Start <= recNode.End && recNode.End <= uint32(len(doc.Source())) &&
+                                    propNode.Start <= propNode.End && propNode.End <= uint32(len(doc.Source())) {
 
-									recBytes := doc.Source[recNode.Start:recNode.End]
-									propBytes := doc.Source[propNode.Start:propNode.End]
+                                    recBytes := doc.Source()[recNode.Start:recNode.End]
+                                    propBytes := doc.Source()[propNode.Start:propNode.End]
 
 									if bytes.Equal(recBytes, []byte("string")) && bytes.Equal(propBytes, []byte("format")) {
 										isFormatCall = true
@@ -1253,8 +1253,8 @@ func (s *Server) publishDiagnostics(uri string) {
 						recNode := doc.Tree.Nodes[node.Left]
 						propNode := doc.Tree.Nodes[node.Right]
 
-						if propNode.Start <= propNode.End && propNode.End <= uint32(len(doc.Source)) {
-							propBytes := doc.Source[propNode.Start:propNode.End]
+                        if propNode.Start <= propNode.End && propNode.End <= uint32(len(doc.Source())) {
+                            propBytes := doc.Source()[propNode.Start:propNode.End]
 
 							if recNode.Kind == ast.KindString && bytes.Equal(propBytes, []byte("format")) {
 								isFormatCall = true
@@ -1268,7 +1268,7 @@ func (s *Server) publishDiagnostics(uri string) {
 
 				if isFormatCall && formatStringNode != ast.InvalidNode && int(formatStringNode) < len(doc.Tree.Nodes) {
 					fmtNode := doc.Tree.Nodes[formatStringNode]
-					if fmtNode.Kind == ast.KindString && fmtNode.Start <= fmtNode.End && fmtNode.End <= uint32(len(doc.Source)) {
+                    if fmtNode.Kind == ast.KindString && fmtNode.Start <= fmtNode.End && fmtNode.End <= uint32(len(doc.Source())) {
 						var hasDynamicArgs bool
 
 						for j := uint16(0); j < node.Count; j++ {
@@ -1288,7 +1288,7 @@ func (s *Server) publishDiagnostics(uri string) {
 						}
 
 						if !hasDynamicArgs {
-							fmtBytes := doc.Source[fmtNode.Start:fmtNode.End]
+                            fmtBytes := doc.Source()[fmtNode.Start:fmtNode.End]
 
 							var (
 								expectedArgs int
@@ -1347,7 +1347,7 @@ func (s *Server) publishDiagnostics(uri string) {
 	if s.DiagDuplicateLocal {
 		for _, defID := range doc.Resolver.DuplicateLocals {
 			node := doc.Tree.Nodes[defID]
-			nameBytes := doc.Source[node.Start:node.End]
+            nameBytes := doc.Source()[node.Start:node.End]
 
 			s.diagBuf = append(s.diagBuf, Diagnostic{
 				Range:    getNodeRange(doc.Tree, defID),
@@ -1527,7 +1527,7 @@ func (s *Server) isDirectExistenceCheck(doc *Document, refID ast.NodeID) bool {
 	}
 
 	if parentNode.Kind == ast.KindUnaryExpr && parentNode.Right == refID {
-		src := doc.Source[parentNode.Start:parentNode.End]
+    src := doc.Source()[parentNode.Start:parentNode.End]
 		if bytes.HasPrefix(src, []byte("not")) {
 			return true
 		}
@@ -1567,7 +1567,7 @@ func (s *Server) checksForGlobal(doc *Document, condID ast.NodeID, nameBytes []b
 	}
 
 	if node.Kind == ast.KindIdent {
-		src := doc.Source[node.Start:node.End]
+    src := doc.Source()[node.Start:node.End]
 		return bytes.Equal(src, nameBytes)
 	}
 
@@ -1579,11 +1579,11 @@ func (s *Server) checksForGlobal(doc *Document, condID ast.NodeID, nameBytes []b
 			rNode := doc.Tree.Nodes[node.Right]
 
 			if lNode.Kind == ast.KindIdent && rNode.Kind == ast.KindNil {
-				return bytes.Equal(doc.Source[lNode.Start:lNode.End], nameBytes)
+        return bytes.Equal(doc.Source()[lNode.Start:lNode.End], nameBytes)
 			}
 
 			if rNode.Kind == ast.KindIdent && lNode.Kind == ast.KindNil {
-				return bytes.Equal(doc.Source[rNode.Start:rNode.End], nameBytes)
+        return bytes.Equal(doc.Source()[rNode.Start:rNode.End], nameBytes)
 			}
 		}
 
@@ -1606,8 +1606,8 @@ func (s *Server) checksForGlobalNegative(doc *Document, condID ast.NodeID, nameB
 		return s.checksForGlobalNegative(doc, node.Left, nameBytes)
 	}
 
-	if node.Kind == ast.KindUnaryExpr {
-		src := doc.Source[node.Start:node.End]
+    if node.Kind == ast.KindUnaryExpr {
+        src := doc.Source()[node.Start:node.End]
 
 		if bytes.HasPrefix(src, []byte("not")) {
 			return s.checksForGlobal(doc, node.Right, nameBytes)
@@ -1621,12 +1621,12 @@ func (s *Server) checksForGlobalNegative(doc *Document, condID ast.NodeID, nameB
 			lNode := doc.Tree.Nodes[node.Left]
 			rNode := doc.Tree.Nodes[node.Right]
 
-			if lNode.Kind == ast.KindIdent && rNode.Kind == ast.KindNil {
-				return bytes.Equal(doc.Source[lNode.Start:lNode.End], nameBytes)
+            if lNode.Kind == ast.KindIdent && rNode.Kind == ast.KindNil {
+                return bytes.Equal(doc.Source()[lNode.Start:lNode.End], nameBytes)
 			}
 
-			if rNode.Kind == ast.KindIdent && lNode.Kind == ast.KindNil {
-				return bytes.Equal(doc.Source[rNode.Start:rNode.End], nameBytes)
+            if rNode.Kind == ast.KindIdent && lNode.Kind == ast.KindNil {
+                return bytes.Equal(doc.Source()[rNode.Start:rNode.End], nameBytes)
 			}
 		}
 
@@ -1695,25 +1695,25 @@ func (s *Server) isSideEffectFree(doc *Document, id ast.NodeID) bool {
 		var nameBytes []byte
 
 		if node.Kind == ast.KindMethodCall {
-			if node.Right != ast.InvalidNode && int(node.Right) < len(doc.Tree.Nodes) {
-				nameNode := doc.Tree.Nodes[node.Right]
-				if nameNode.Start <= nameNode.End && nameNode.End <= uint32(len(doc.Source)) {
-					nameBytes = doc.Source[nameNode.Start:nameNode.End]
-				}
-			}
+            if node.Right != ast.InvalidNode && int(node.Right) < len(doc.Tree.Nodes) {
+                nameNode := doc.Tree.Nodes[node.Right]
+            if nameNode.Start <= nameNode.End && nameNode.End <= uint32(len(doc.Source())) {
+                    nameBytes = doc.Source()[nameNode.Start:nameNode.End]
+                }
+            }
 		} else {
 			if node.Left != ast.InvalidNode && int(node.Left) < len(doc.Tree.Nodes) {
 				leftNode := doc.Tree.Nodes[node.Left]
 
-				if leftNode.Kind == ast.KindIdent {
-					if leftNode.Start <= leftNode.End && leftNode.End <= uint32(len(doc.Source)) {
-						nameBytes = doc.Source[leftNode.Start:leftNode.End]
-					}
-				} else if leftNode.Kind == ast.KindMemberExpr && leftNode.Right != ast.InvalidNode && int(leftNode.Right) < len(doc.Tree.Nodes) {
-					if leftNode.Start <= leftNode.End && leftNode.End <= uint32(len(doc.Source)) {
-						nameBytes = doc.Source[leftNode.Start:leftNode.End]
-					}
-				}
+                if leftNode.Kind == ast.KindIdent {
+                    if leftNode.Start <= leftNode.End && leftNode.End <= uint32(len(doc.Source())) {
+                        nameBytes = doc.Source()[leftNode.Start:leftNode.End]
+                    }
+                } else if leftNode.Kind == ast.KindMemberExpr && leftNode.Right != ast.InvalidNode && int(leftNode.Right) < len(doc.Tree.Nodes) {
+                    if leftNode.Start <= leftNode.End && leftNode.End <= uint32(len(doc.Source())) {
+                        nameBytes = doc.Source()[leftNode.Start:leftNode.End]
+                    }
+                }
 			}
 		}
 

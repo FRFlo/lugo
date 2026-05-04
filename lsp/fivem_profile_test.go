@@ -288,9 +288,9 @@ func mustFindIdentNode(t testing.TB, doc *Document, name string) ast.NodeID {
 
 	for id := 1; id < len(doc.Tree.Nodes); id++ {
 		node := doc.Tree.Nodes[id]
-		if node.Kind == ast.KindIdent && bytes.Equal(doc.Source[node.Start:node.End], []byte(name)) {
-			return ast.NodeID(id)
-		}
+        if node.Kind == ast.KindIdent && bytes.Equal(doc.Source()[node.Start:node.End], []byte(name)) {
+            return ast.NodeID(id)
+        }
 	}
 
 	t.Fatalf("identifier %q not found in %s", name, doc.URI)
