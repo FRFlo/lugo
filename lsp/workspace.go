@@ -191,7 +191,35 @@ func (s *Server) handleDidChangeWatchedFiles(req Request) {
 				}
 			}
 		case 3: // Deleted
+			// If a manifest file is deleted, evict its FiveM resource state before
+			// removing the document from the workspace cache.
+			if strings.HasSuffix(uri, "/fxmanifest.lua") || strings.HasSuffix(uri, "/__resource.lua") {
+				removeFiveMResource(s, URI(uri))
+			}
+
+			// Always remove the document from the workspace cache
 			s.clearDocument(uri)
+
+			// Part B: Invalidate FiveM profile caches for non-manifest Lua deletes inside a resource root
+			// Compare URIs directly to resource roots (URIs) to determine affected documents
+			for root := range s.FiveMResources {
+				if strings.HasPrefix(uri, root+"/") || uri == root {
+					if strings.HasSuffix(uri, ".lua") && !(strings.HasSuffix(uri, "/fxmanifest.lua") || strings.HasSuffix(uri, "/__resource.lua")) {
+						// Invalidate documents under this resource root
+						for dURI, d := range s.Documents {
+							if d == nil {
+								continue
+							}
+							if strings.HasPrefix(dURI, root+"/") || dURI == root {
+								d.FiveMProfile = FiveMExecutionProfile{}
+								d.FiveMProfileCached = false
+							}
+						}
+						// Do not continue scanning other roots after invalidation
+						break
+					}
+				}
+			}
 		}
 	}
 

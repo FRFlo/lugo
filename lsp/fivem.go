@@ -9,6 +9,12 @@ import (
 	"github.com/coalaura/lugo/ast"
 )
 
+// Go-friendly alias for LSP URI values used across the FiveM integration.
+// This keeps type-consistent signatures without introducing a new concrete type.
+type URI = string
+
+// (helper function moved below to proper imports block)
+
 type FileEnv int
 
 const (
@@ -1604,4 +1610,57 @@ func fiveMResourceNameFromRoot(root string) string {
 	}
 
 	return strings.ToLower(root[idx+1:])
+}
+
+// removeFiveMResource removes a FiveM resource associated with the given URI from
+// the server state. It performs the following steps:
+//   - Locate the resource by its root URI inferred from the document URI
+//   - Remove the resource from FiveMResources and FiveMResourceByName maps
+//   - Remove the resource node from the graph
+//   - Invalidate FiveMProfileCached for all documents under the resource root
+func removeFiveMResource(server *Server, uri URI) {
+	if server == nil {
+		return
+	}
+	uriStr := string(uri)
+	if server.FiveMResourceGraph == nil && len(server.FiveMResources) == 0 {
+		return
+	}
+	var targetRoot string
+	var targetRes *FiveMResource
+	for root, res := range server.FiveMResources {
+		if root == "" || res == nil {
+			continue
+		}
+		if uriStr == root || strings.HasPrefix(uriStr, root+"/") {
+			if targetRoot == "" || len(root) > len(targetRoot) {
+				targetRoot = root
+				targetRes = res
+			}
+		}
+	}
+	if targetRes == nil {
+		return
+	}
+	if targetRes.RootURI != "" {
+		delete(server.FiveMResources, targetRes.RootURI)
+	}
+	if targetRes.Name != "" {
+		delete(server.FiveMResourceByName, targetRes.Name)
+	}
+	if server.FiveMResourceGraph != nil {
+		if node := server.FiveMResourceGraph.NodeByRoot(targetRes.RootURI); node != nil {
+			server.FiveMResourceGraph.removeNode(node)
+		}
+	}
+	rootPrefix := targetRes.RootURI
+	for dURI, d := range server.Documents {
+		if d == nil {
+			continue
+		}
+		if strings.HasPrefix(dURI, rootPrefix+"/") || dURI == rootPrefix {
+			d.FiveMProfile = FiveMExecutionProfile{}
+			d.FiveMProfileCached = false
+		}
+	}
 }
