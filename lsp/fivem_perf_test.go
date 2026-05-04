@@ -318,3 +318,151 @@ func ratioUint64(lhs, rhs uint64) float64 {
 	}
 	return float64(lhs) / float64(rhs)
 }
+
+// BenchmarkFiveMDocumentFootprint measures the per-document memory allocation
+// when opening and processing a typical FiveM Lua file through finalizeDocumentUpdate.
+// This baseline reflects the optimized state after Tasks 10-13 (closed doc eviction).
+func BenchmarkFiveMDocumentFootprint(b *testing.B) {
+	// Typical FiveM Lua code: exports, natives, manifest references, 200 lines
+	fiveMDocSource := `-- [[@fixture: fivem_doc]]
+-- FiveM resource client script
+-- @meta client
+
+local M = {}
+
+exports("GetPlayerData", function()
+    return {
+        identifier = GetPlayerIdentifier(),
+        name = GetPlayerName(),
+    }
+end)
+
+-- Native calls (Citizen framework)
+local function waitForPlayer()
+    while not IsPlayerActive() do
+        Wait(100)
+    end
+    return true
+end
+
+-- Manifest-referenced local functions
+function M.init()
+    RegisterNetEvent("playerJoined", function(source, name)
+        print("[DEBUG] Player joined: " .. name)
+        SetTimeout(5000, function()
+            TriggerServerEvent("playerReady", source)
+        end)
+    end)
+end
+
+function M.cleanup()
+    RemoveAllHandlers("playerJoined")
+    print("[CLEANUP] Resources released")
+end
+
+-- Table with mixed types (tests type inference)
+M.playerData = {
+    health = 100,
+    armor = 0,
+    weapons = {},
+    position = vector3(0, 0, 0),
+    metadata = {
+        level = 1,
+        xp = 0,
+        banned = false,
+    },
+}
+
+-- Deep table access (tests field resolution)
+local function processPlayerData()
+    local data = M.playerData
+    if data and data.metadata then
+        local meta = data.metadata
+        if meta.level then
+            print("Level: " .. tostring(meta.level))
+        end
+    end
+end
+
+-- Conditional type narrowing
+local function handlePlayer(self, event)
+    if type(event) == "table" and event.type == "join" then
+        local player = event.player
+        if player and player.name then
+            print("Welcome, " .. player.name)
+        end
+    end
+end
+
+-- Loop variable unpacking (ipairs/pairs)
+function M.getWeaponList()
+    local weapons = {}
+    for i = 1, #weapons do
+        local w = weapons[i]
+        if w and w.id then
+            print("Weapon: " .. w.id)
+        end
+    end
+    return weapons
+end
+
+return M
+`
+
+	// Use the test native loader and library setup
+	b.Run("open", func(b *testing.B) {
+		b.ReportAllocs()
+
+		for i := 0; i < b.N; i++ {
+			b.StopTimer()
+
+			// Setup: create server with FeatureFiveM enabled
+			s := NewServer("benchmark")
+			s.FeatureFiveM = true
+
+			// Setup: attach native bundle loader
+			attachTestFiveMNativeBundleLoader(b, s)
+
+			// Setup: create a temporary directory with fxmanifest.lua
+			root := b.TempDir()
+			manifestPath := filepath.Join(root, "fxmanifest.lua")
+			err := os.WriteFile(manifestPath, []byte(`
+fx_version 'cerulean'
+game 'gta5'
+client_script 'client.lua'
+`), 0644)
+			if err != nil {
+				b.Fatalf("write manifest: %v", err)
+			}
+
+			// Setup: write the FiveM Lua document
+			clientPath := filepath.Join(root, "client.lua")
+			err = os.WriteFile(clientPath, []byte(fiveMDocSource), 0644)
+			if err != nil {
+				b.Fatalf("write client.lua: %v", err)
+			}
+
+			// Setup: configure library paths
+			s.setLibraryPaths([]string{materializeTestFiveMNativeLibrary(b, s)})
+			s.setIgnoreGlobs(nil)
+			s.IsIndexing = true
+
+			uri := s.pathToURI(clientPath)
+
+			b.StartTimer()
+
+			// Measure: update document (this calls finalizeDocumentUpdate internally)
+			var before, after runtime.MemStats
+			runtime.GC()
+			runtime.ReadMemStats(&before)
+
+			s.updateDocument(uri, []byte(fiveMDocSource))
+
+			runtime.ReadMemStats(&after)
+			b.StopTimer()
+
+			allocatedBytes := after.TotalAlloc - before.TotalAlloc
+			b.ReportMetric(float64(allocatedBytes), "bytes/doc")
+		}
+	})
+}

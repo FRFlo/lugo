@@ -1,0 +1,7 @@
+goos: windows
+goarch: amd64
+pkg: github.com/coalaura/lugo/lsp
+cpu: Intel(R) Core(TM) i7-10750H CPU @ 2.60GHz
+BenchmarkFiveMDocumentFootprint/open-12         	    1370	    992176 ns/op	    183272 bytes/doc	  183272 B/op	      58 allocs/op
+PASS
+ok  	github.com/coalaura/lugo/lsp	26.314s
