@@ -59,12 +59,14 @@ func (s *Server) handleHover(req Request) {
 	}
 
 	uri := s.normalizeURI(params.TextDocument.URI)
-
 	doc, ok := s.Documents[uri]
 	if !ok {
 		WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: nil})
+
 		return
 	}
+
+	s.ensureFiveMNativeBundleLoaded(doc)
 
 	offset := doc.Tree.Offset(params.Position.Line, params.Position.Character)
 	ctx := s.resolveSymbolAt(uri, offset)
@@ -1845,6 +1847,8 @@ func (s *Server) handleSemanticTokensFull(req Request) {
 
 		return
 	}
+
+	s.ensureFiveMNativeBundleLoaded(doc)
 
 	s.semTokensBuf = s.semTokensBuf[:0]
 

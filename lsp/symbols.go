@@ -600,6 +600,8 @@ func (s *Server) resolveSymbolNode(uri string, doc *Document, nodeID ast.NodeID)
 		return nil
 	}
 
+	s.ensureFiveMNativeBundleLoaded(doc)
+
 	identNode := doc.Tree.Nodes[nodeID]
 
 	if identNode.Kind != ast.KindIdent && identNode.Kind != ast.KindVararg {

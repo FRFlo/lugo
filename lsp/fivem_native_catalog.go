@@ -71,6 +71,11 @@ func (s *Server) ensureFiveMNativeSymbol(doc *Document, name string) bool {
 		return false
 	}
 
+	bundleURI := s.ensureFiveMNativeBundleLoaded(doc)
+	if bundleURI == "" {
+		return false
+	}
+
 	key := GlobalKey{ReceiverHash: 0, PropHash: ast.HashBytes([]byte(name))}
 	syms, ok := s.GlobalIndex[key]
 	if !ok {
@@ -90,11 +95,6 @@ func (s *Server) ensureFiveMNativeSymbol(doc *Document, name string) bool {
 		if s.canSeeSymbol(doc, tgtDoc) {
 			return true
 		}
-	}
-
-	bundleURI := s.ensureFiveMNativeBundleLoaded(doc)
-	if bundleURI == "" {
-		return false
 	}
 
 	for _, sym := range syms {

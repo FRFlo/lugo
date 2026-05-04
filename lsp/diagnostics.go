@@ -48,6 +48,8 @@ func (s *Server) publishDiagnostics(uri string) {
 		return
 	}
 
+	s.ensureFiveMNativeBundleLoaded(doc)
+
 	emitDiagnostics := func(diags []Diagnostic) {
 		if s.IsCI {
 			s.printCIDiagnostics(uri, diags)
