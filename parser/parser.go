@@ -24,11 +24,10 @@ const (
 )
 
 var (
-	stopBlockIf     = token.NewTokenSet(token.ElseIf, token.Else, token.End)
+	stopBlockIf    = token.NewTokenSet(token.ElseIf, token.Else, token.End)
 	stopBlockEnd    = token.NewTokenSet(token.End)
 	stopBlockUntil  = token.NewTokenSet(token.Until)
 	stopBlockEOF    = token.NewTokenSet(token.EOF)
-	stopBlockElseIf = token.NewTokenSet() // Handled dynamically if needed
 )
 
 var precedences = [256]int{
@@ -193,6 +192,7 @@ func (p *Parser) sync() {
 		switch p.curr.Kind {
 		case token.Local, token.Function, token.If, token.For, token.While, token.Repeat, token.Return, token.Do, token.Break, token.End, token.Goto, token.DoubleColon:
 			return
+		default:
 		}
 
 		// identifiers almost always start an assignment or function call.
@@ -1203,6 +1203,9 @@ func (p *Parser) parseCallArgs(left ast.NodeID, callToken token.Kind) ast.NodeID
 		p.listStack = append(p.listStack, arg)
 
 		end = p.tree.Nodes[arg].End
+	default:
+		// For other token types, just advance and continue
+		p.nextToken()
 	}
 
 	extraStart, count := p.flushListStack(stackStart)

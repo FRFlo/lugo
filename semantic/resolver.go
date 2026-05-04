@@ -363,6 +363,8 @@ func (r *Resolver) buildMemberName(id ast.NodeID, buf []byte) []byte {
 		buf = append(buf, '.')
 
 		buf = r.buildMemberName(node.Right, buf)
+	default:
+		return buf
 	}
 
 	return buf
@@ -657,6 +659,8 @@ func (r *Resolver) visit(id ast.NodeID) {
 		for i := uint16(0); i < node.Count; i++ {
 			r.visit(r.Tree.ExtraList[node.Extra+uint32(i)])
 		}
+	default:
+		return
 	}
 }
 

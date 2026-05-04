@@ -158,7 +158,9 @@ func fetchCatalog(client *http.Client, url string) (sourceCatalog, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fetch %s: %w", url, err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("fetch %s: unexpected status %s", url, resp.Status)
@@ -625,29 +627,29 @@ func isNonReturnPointerNative(name string) bool {
 }
 
 var nonReturnPointerNatives = map[string]struct{}{
-	"DELETE_ENTITY":                        {},
-	"SET_ENTITY_AS_NO_LONGER_NEEDED":      {},
-	"SET_PED_AS_NO_LONGER_NEEDED":         {},
-	"DELETE_PED":                          {},
-	"REMOVE_PED_ELEGANTLY":                {},
-	"SET_VEHICLE_AS_NO_LONGER_NEEDED":     {},
-	"DELETE_MISSION_TRAIN":                {},
-	"DELETE_VEHICLE":                      {},
-	"SET_MISSION_TRAIN_AS_NO_LONGER_NEEDED": {},
-	"DELETE_OBJECT":                       {},
-	"SET_OBJECT_AS_NO_LONGER_NEEDED":      {},
-	"SET_PLAYER_WANTED_CENTRE_POSITION":   {},
-	"_START_SHAPE_TEST_SURROUNDING_COORDS": {},
-	"REMOVE_BLIP":                         {},
-	"SET_BIT":                             {},
-	"CLEAR_BIT":                           {},
+	"DELETE_ENTITY":                           {},
+	"SET_ENTITY_AS_NO_LONGER_NEEDED":          {},
+	"SET_PED_AS_NO_LONGER_NEEDED":             {},
+	"DELETE_PED":                              {},
+	"REMOVE_PED_ELEGANTLY":                    {},
+	"SET_VEHICLE_AS_NO_LONGER_NEEDED":         {},
+	"DELETE_MISSION_TRAIN":                    {},
+	"DELETE_VEHICLE":                          {},
+	"SET_MISSION_TRAIN_AS_NO_LONGER_NEEDED":   {},
+	"DELETE_OBJECT":                           {},
+	"SET_OBJECT_AS_NO_LONGER_NEEDED":          {},
+	"SET_PLAYER_WANTED_CENTRE_POSITION":       {},
+	"_START_SHAPE_TEST_SURROUNDING_COORDS":    {},
+	"REMOVE_BLIP":                             {},
+	"SET_BIT":                                 {},
+	"CLEAR_BIT":                               {},
 	"SET_SCALEFORM_MOVIE_AS_NO_LONGER_NEEDED": {},
-	"DELETE_ROPE":                         {},
-	"DOES_ROPE_EXIST":                    {},
-	"CLEAR_SEQUENCE_TASK":                {},
+	"DELETE_ROPE":                             {},
+	"DOES_ROPE_EXIST":                         {},
+	"CLEAR_SEQUENCE_TASK":                     {},
 }
 
 func fatal(err error) {
-	fmt.Fprintln(os.Stderr, err)
+	_, _ = fmt.Fprintln(os.Stderr, err)
 	os.Exit(1)
 }

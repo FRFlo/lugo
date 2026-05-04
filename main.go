@@ -28,7 +28,7 @@ func main() {
 	go func() {
 		<-ctx.Done()
 
-		os.Stdin.Close()
+		_ = os.Stdin.Close()
 	}()
 
 	err := server.Start()
