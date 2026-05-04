@@ -286,18 +286,9 @@ func (s *Server) buildConfiguredLibraryPaths(paths []string, featureFiveM bool) 
 		return configured
 	}
 
-	runtimePath, err := ensureRuntimeFiveMNativeLibraryPath()
-	if err != nil || strings.TrimSpace(runtimePath) == "" {
-		return configured
-	}
-
-	for _, existing := range configured {
-		if filepath.Clean(existing) == filepath.Clean(runtimePath) {
-			return configured
-		}
-	}
-
-	return append(configured, runtimePath)
+	// Native bundles are loaded on-demand via ensureFiveMNativeBundleLoaded,
+	// not eagerly indexed via LibraryPaths during refreshWorkspace.
+	return configured
 }
 
 func (s *Server) setKnownGlobals(globals []string) bool {
