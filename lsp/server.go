@@ -142,8 +142,10 @@ func compactGlobalIndex(s *Server) {
 // features while freeing large in-memory caches tied to the source bytes.
 //
 // Rules:
-// - Do not touch Resolver or Tree (AST remains required for cross-document features)
-// - For each document not currently open (OpenFiles[uri] is false/absent):
+//   - Do not touch Resolver or Tree (AST remains required for cross-document features)
+//   - Preserve library document source/caches so std/runtime hover and signature metadata
+//     remain available after unrelated workspace files are closed/reopened.
+//   - For each non-library document not currently open (OpenFiles[uri] is false/absent):
 //   - clear TypeCache, Inferring, LuaDocCache, ActualReads, MutatedLocals
 //   - nil the Tree.Source pointer (Tree owns Source now)
 func evictClosedDocumentCaches(s *Server) {
@@ -152,6 +154,9 @@ func evictClosedDocumentCaches(s *Server) {
 	}
 	for uri, doc := range s.Documents {
 		if doc == nil {
+			continue
+		}
+		if doc.IsLibrary {
 			continue
 		}
 		// Skip currently open documents
