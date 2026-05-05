@@ -194,6 +194,7 @@ func newFiveMFixtureHarnessWithoutIndex(t testing.TB, fixtureNames ...string) *f
 	s.DiagFiveMEventDirection = true
 	s.DiagFiveMUnregisteredNetEvent = true
 	s.DiagFiveMUnknownEvent = true
+	s.FeatureCodeLens = true
 	s.SuggestFunctionParams = true
 	attachTestFiveMNativeBundleLoader(t, s)
 	s.setLibraryPaths([]string{materializeTestFiveMNativeLibrary(t, s)})
@@ -477,6 +478,37 @@ func (h *fiveMFixtureHarness) signatureHelp(markerName string) *SignatureHelp {
 	return &help
 }
 
+func (h *fiveMFixtureHarness) inlayHints(markerName string) []InlayHint {
+	h.t.Helper()
+
+	marker := h.requireMarker(markerName)
+	params, err := json.Marshal(InlayHintParams{
+		TextDocument: TextDocumentIdentifier{URI: marker.URI},
+		Range:        Range{Start: marker.Position, End: marker.Position},
+	})
+	if err != nil {
+		h.t.Fatalf("marshal inlay hint params for %s: %v", markerName, err)
+	}
+
+	h.resetRPC()
+	h.server.handleInlayHint(Request{RPC: "2.0", ID: 1, Params: params})
+
+	body := h.lastResponse(1)
+	var envelope struct {
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		h.t.Fatalf("decode inlay hint response for %s: %v", markerName, err)
+	}
+
+	var hints []InlayHint
+	if err := json.Unmarshal(envelope.Result, &hints); err != nil {
+		h.t.Fatalf("decode inlay hints for %s: %v", markerName, err)
+	}
+
+	return hints
+}
+
 func (h *fiveMFixtureHarness) semanticTokens(relPath string) []semanticTokenHit {
 	h.t.Helper()
 
@@ -608,6 +640,61 @@ func (h *fiveMFixtureHarness) codeActions(relPath string, rng Range, diags []Dia
 	}
 
 	return actions
+}
+
+func (h *fiveMFixtureHarness) codeLenses(relPath string) []CodeLens {
+	h.t.Helper()
+
+	uri := h.server.pathToURI(filepath.Join(h.root, filepath.FromSlash(relPath)))
+	params, err := json.Marshal(CodeLensParams{TextDocument: TextDocumentIdentifier{URI: uri}})
+	if err != nil {
+		h.t.Fatalf("marshal code lens params for %s: %v", relPath, err)
+	}
+
+	h.resetRPC()
+	h.server.handleCodeLens(Request{RPC: "2.0", ID: 1, Params: params})
+
+	body := h.lastResponse(1)
+	var envelope struct {
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		h.t.Fatalf("decode code lens response for %s: %v", relPath, err)
+	}
+
+	var lenses []CodeLens
+	if err := json.Unmarshal(envelope.Result, &lenses); err != nil {
+		h.t.Fatalf("decode code lenses for %s: %v", relPath, err)
+	}
+
+	return lenses
+}
+
+func (h *fiveMFixtureHarness) resolveCodeLens(lens CodeLens) CodeLens {
+	h.t.Helper()
+
+	params, err := json.Marshal(lens)
+	if err != nil {
+		h.t.Fatalf("marshal code lens resolve params: %v", err)
+	}
+
+	h.resetRPC()
+	h.server.handleCodeLensResolve(Request{RPC: "2.0", ID: 1, Params: params})
+
+	body := h.lastResponse(1)
+	var envelope struct {
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		h.t.Fatalf("decode code lens resolve response: %v", err)
+	}
+
+	var resolved CodeLens
+	if err := json.Unmarshal(envelope.Result, &resolved); err != nil {
+		h.t.Fatalf("decode resolved code lens: %v", err)
+	}
+
+	return resolved
 }
 
 func (h *fiveMFixtureHarness) requireSingleDefinitionAt(refMarkerName, defMarkerName string) {
