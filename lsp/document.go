@@ -41,6 +41,7 @@ type Document struct {
 	IsWorkspace        bool
 	IsFiveMManifest    bool
 	FiveMLuaExports    []FiveMLuaExport
+	FiveMEvents        []FiveMEventInfo
 	FiveMProfileCached bool
 	ModTime            time.Time
 	DiagPragmas        DiagPragmas
@@ -124,6 +125,23 @@ func (doc *Document) parseDiagnosticPragmas() {
 type FiveMLuaExport struct {
 	Name   string
 	NodeID ast.NodeID
+}
+
+type FiveMEventKind int
+
+const (
+	FiveMEventAddHandler FiveMEventKind = iota
+	FiveMEventRegisterNet
+	FiveMEventTriggerLocal
+	FiveMEventTriggerServer
+	FiveMEventTriggerClient
+)
+
+type FiveMEventInfo struct {
+	Name      string
+	Kind      FiveMEventKind
+	NodeID    ast.NodeID
+	HandlerID ast.NodeID
 }
 
 func (doc *Document) getAssignedValue(id ast.NodeID) ast.NodeID {

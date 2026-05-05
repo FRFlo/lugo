@@ -44,6 +44,7 @@ func TestFiveMFixtureHarness(t *testing.T) {
 		"manifest_restricted",
 		"resource_client_server_shared",
 		"resource_dual_listed",
+		"resource_events",
 		"resource_exports",
 		"resource_provides",
 		"resource_bridges",
@@ -190,6 +191,9 @@ func newFiveMFixtureHarnessWithoutIndex(t testing.TB, fixtureNames ...string) *f
 	s.DiagFiveMUnaccountedFile = true
 	s.DiagFiveMUnknownExport = true
 	s.DiagFiveMUnknownResource = true
+	s.DiagFiveMEventDirection = true
+	s.DiagFiveMUnregisteredNetEvent = true
+	s.DiagFiveMUnknownEvent = true
 	s.SuggestFunctionParams = true
 	attachTestFiveMNativeBundleLoader(t, s)
 	s.setLibraryPaths([]string{materializeTestFiveMNativeLibrary(t, s)})

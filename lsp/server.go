@@ -116,12 +116,17 @@ type Server struct {
 	FeatureFiveM             bool
 	DiagFiveMUnaccountedFile bool
 	DiagFiveMUnknownExport   bool
-	DiagFiveMUnknownResource bool
+	DiagFiveMUnknownResource   bool
+	DiagFiveMEventDirection       bool
+	DiagFiveMUnregisteredNetEvent bool
+	DiagFiveMUnknownEvent         bool
 	fiveMNativeBundleLoader  func(name string) ([]byte, error)
 
 	IsCI              bool
 	CIDiagnosticCount int
 	CIErrorCount      int
+
+	FiveMEventIndex map[uint64][]*FiveMEventRef
 }
 
 // compactGlobalIndex removes empty/dead entries from GlobalIndex after document removal
@@ -187,6 +192,9 @@ func NewServer(version string) *Server {
 
 		// Global Index
 		GlobalIndex: make(map[GlobalKey][]GlobalSymbol),
+
+		// FiveM Event Index
+		FiveMEventIndex: make(map[uint64][]*FiveMEventRef),
 
 		// Shared Buffers
 		sharedParser:     parser.New(nil, ast.NewTree(nil), 50),
@@ -313,6 +321,9 @@ func (s *Server) applyInitializationOptions(opts InitializationOptions) (needsRe
 	setCfg(&s.DiagFiveMUnaccountedFile, opts.DiagFiveMUnaccountedFile, &needsRepublish)
 	setCfg(&s.DiagFiveMUnknownExport, opts.DiagFiveMUnknownExport, &needsRepublish)
 	setCfg(&s.DiagFiveMUnknownResource, opts.DiagFiveMUnknownResource, &needsRepublish)
+	setCfg(&s.DiagFiveMEventDirection, opts.DiagFiveMEventDirection, &needsRepublish)
+	setCfg(&s.DiagFiveMUnregisteredNetEvent, opts.DiagFiveMUnregisteredNetEvent, &needsRepublish)
+	setCfg(&s.DiagFiveMUnknownEvent, opts.DiagFiveMUnknownEvent, &needsRepublish)
 
 	return needsReindex, needsRepublish
 }

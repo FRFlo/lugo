@@ -400,6 +400,18 @@ type FiveMResourceGraphNode struct {
 	ClientEntries  []FiveMResourceGraphExpansion
 	ServerEntries  []FiveMResourceGraphExpansion
 	SharedEntries  []FiveMResourceGraphExpansion
+	ServerHandlers []FiveMEventRef
+	ClientHandlers []FiveMEventRef
+	SharedHandlers []FiveMEventRef
+	ServerTriggers []FiveMEventRef
+	ClientTriggers []FiveMEventRef
+	SharedTriggers []FiveMEventRef
+}
+
+type FiveMEventRef struct {
+	Name string
+	URI  string
+	Kind FiveMEventKind
 }
 
 type FiveMResourceGraph struct {
@@ -414,6 +426,91 @@ func NewFiveMResourceGraph() *FiveMResourceGraph {
 		ByName:    make(map[string]*FiveMResourceGraphNode),
 		ByProvide: make(map[string][]*FiveMResourceGraphNode),
 	}
+}
+
+type FiveMBuiltinEvent struct {
+	Name        string
+	Subset      string
+	Description string
+	Payload     string
+}
+
+var EventsBuiltin = map[string]FiveMBuiltinEvent{
+	"playerConnecting": {
+		Subset:      "SERVER",
+		Description: "Fires when a player is connecting to the server. Use this to deny or allow the connection.",
+		Payload:     "(source: number, name: string, setKickReason: function, deferrals: table)",
+	},
+	"playerJoining": {
+		Subset:      "SERVER",
+		Description: "Fires when a player has successfully joined and is being assigned to a slot.",
+		Payload:     "(source: number, name: string, id: number)",
+	},
+	"playerDropped": {
+		Subset:      "SERVER",
+		Description: "Fires when a player disconnects or is dropped from the server.",
+		Payload:     "(source: number, reason: string)",
+	},
+	"entityCreating": {
+		Subset:      "SERVER",
+		Description: "Fires before an entity is created. Return false to cancel creation.",
+		Payload:     "(entityId: number)",
+	},
+	"entityCreated": {
+		Subset:      "SERVER",
+		Description: "Fires after an entity has been created.",
+		Payload:     "(entityId: number)",
+	},
+	"entityRemoved": {
+		Subset:      "SERVER",
+		Description: "Fires when an entity is removed from the world.",
+		Payload:     "(entityId: number)",
+	},
+	"weaponDamageEvent": {
+		Subset:      "SHARED",
+		Description: "Fires when a weapon damage is dealt. Can be used to modify damage or cancel.",
+		Payload:     "(victim: number, attacker: number, weaponHash: number, damage: number, isAutoRestart: boolean)",
+	},
+	"onResourceStarting": {
+		Subset:      "SHARED",
+		Description: "Fires before a resource starts. Return false to prevent starting.",
+		Payload:     "(resourceName: string)",
+	},
+	"onResourceStart": {
+		Subset:      "SHARED",
+		Description: "Fires when a resource starts.",
+		Payload:     "(resourceName: string)",
+	},
+	"onResourceStop": {
+		Subset:      "SHARED",
+		Description: "Fires when a resource stops.",
+		Payload:     "(resourceName: string)",
+	},
+	"playerSpawned": {
+		Subset:      "SHARED",
+		Description: "Fires when a player spawns in the world.",
+		Payload:     "(spawnData: table)",
+	},
+	"characterUnloaded": {
+		Subset:      "SHARED",
+		Description: "Fires when a character's data is unloaded.",
+		Payload:     "(characterId: number)",
+	},
+	"gameEventTriggered": {
+		Subset:      "CLIENT",
+		Description: "Fires when a game event is triggered by the engine.",
+		Payload:     "(eventName: string, eventPayload: table)",
+	},
+	"entityDamaged": {
+		Subset:      "CLIENT",
+		Description: "Fires when an entity takes damage.",
+		Payload:     "(entityId: number, damage: number, initiator: number)",
+	},
+	"sessionInitialized": {
+		Subset:      "SHARED",
+		Description: "Fires when the game session is fully initialized.",
+		Payload:     "()",
+	},
 }
 
 func (g *FiveMResourceGraph) Clear() {
