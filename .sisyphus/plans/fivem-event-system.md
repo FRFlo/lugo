@@ -593,7 +593,7 @@ Wave FINAL (After ALL tasks — 4 parallel reviews, then user okay):
   - Message: `feat(fivem): add event data structures and built-in definitions`
   - Files: `lsp/testdata/fivem/resource_events/*.lua`, `lsp/fivem_fixture_harness_test.go`
 
-- [ ] 5. Event call scanner in finalizeDocumentUpdate — TDD
+- [x] 5. Event call scanner in finalizeDocumentUpdate — TDD
 
   **What to do**:
 
@@ -712,7 +712,7 @@ Wave FINAL (After ALL tasks — 4 parallel reviews, then user okay):
   - Message: `feat(fivem): implement event scanner and diagnostics`
   - Files: `lsp/workspace.go`, `lsp/fivem_events_test.go`
 
-- [ ] 6. Event direction diagnostic — TDD
+- [x] 6. Event direction diagnostic — TDD
 
   **What to do**:
 
@@ -810,7 +810,7 @@ Wave FINAL (After ALL tasks — 4 parallel reviews, then user okay):
   - Message: `feat(fivem): implement event scanner and diagnostics`
   - Files: `lsp/diagnostics.go`, `lsp/fivem_events_test.go`
 
-- [ ] 7. Unregistered net event diagnostic — TDD
+- [x] 7. Unregistered net event diagnostic — TDD
 
   **What to do**:
 
@@ -891,7 +891,7 @@ Wave FINAL (After ALL tasks — 4 parallel reviews, then user okay):
   - Message: `feat(fivem): implement event scanner and diagnostics`
   - Files: `lsp/diagnostics.go`, `lsp/fivem_events_test.go`
 
-- [ ] 8. Unknown event diagnostic — TDD
+- [x] 8. Unknown event diagnostic — TDD
 
   **What to do**:
 
@@ -986,7 +986,7 @@ Wave FINAL (After ALL tasks — 4 parallel reviews, then user okay):
   - Message: `feat(fivem): implement event scanner and diagnostics`
   - Files: `lsp/diagnostics.go`, `lsp/fivem_events_test.go`
 
-- [ ] 9. Hover on event name strings — TDD
+- [x] 9. Hover on event name strings — TDD
 
   **What to do**:
 
@@ -1096,7 +1096,7 @@ Wave FINAL (After ALL tasks — 4 parallel reviews, then user okay):
   - Message: `feat(fivem): wire event LSP features`
   - Files: `lsp/features.go`, `lsp/fivem_events_test.go`
 
-- [ ] 10. Completion for event names — TDD
+- [x] 10. Completion for event names — TDD
 
   **What to do**:
 
@@ -1196,7 +1196,7 @@ Wave FINAL (After ALL tasks — 4 parallel reviews, then user okay):
   - Message: `feat(fivem): wire event LSP features`
   - Files: `lsp/features.go`, `lsp/fivem_events_test.go`
 
-- [ ] 11. Go-to-definition on event names — TDD
+- [x] 11. Go-to-definition on event names — TDD
 
   **What to do**:
 
@@ -1275,7 +1275,7 @@ Wave FINAL (After ALL tasks — 4 parallel reviews, then user okay):
   - Message: `feat(fivem): wire event LSP features`
   - Files: `lsp/features.go`, `lsp/fivem_events_test.go`
 
-- [ ] 12. Find-references on event names — TDD
+- [x] 12. Find-references on event names — TDD
 
   **What to do**:
 
@@ -1340,7 +1340,7 @@ Wave FINAL (After ALL tasks — 4 parallel reviews, then user okay):
   - Message: `feat(fivem): wire event LSP features`
   - Files: `lsp/features.go`, `lsp/fivem_events_test.go`
 
-- [ ] 13. Workspace symbols for events — TDD
+- [x] 13. Workspace symbols for events — TDD
 
   **What to do**:
 
@@ -1409,7 +1409,7 @@ Wave FINAL (After ALL tasks — 4 parallel reviews, then user okay):
   - Message: `feat(fivem): wire event LSP features`
   - Files: `lsp/symbols.go`, `lsp/fivem_events_test.go`
 
-- [ ] 14. Code Lens for events — TDD
+- [x] 14. Code Lens for events — TDD
 
   **What to do**:
 
@@ -1486,7 +1486,7 @@ Wave FINAL (After ALL tasks — 4 parallel reviews, then user okay):
   - Message: `feat(fivem): wire event LSP features`
   - Files: `lsp/features.go`, `lsp/fivem_events_test.go`
 
-- [ ] 15. Shared file ambiguity handling — TDD
+- [x] 15. Shared file ambiguity handling — TDD
 
   **What to do**:
 
@@ -1559,7 +1559,7 @@ Wave FINAL (After ALL tasks — 4 parallel reviews, then user okay):
   - Message: `feat(fivem): handle event edge cases and perf budget`
   - Files: `lsp/workspace.go`, `lsp/diagnostics.go`, `lsp/fivem_events_test.go`
 
-- [ ] 16. Manifest invalidation re-scans events — TDD
+- [x] 16. Manifest invalidation re-scans events — TDD
 
   **What to do**:
 
@@ -1639,7 +1639,7 @@ Wave FINAL (After ALL tasks — 4 parallel reviews, then user okay):
   - Message: `feat(fivem): handle event edge cases and perf budget`
   - Files: `lsp/fivem_events_test.go`
 
-- [ ] 17. Perf budget for event scanning — TDD
+- [x] 17. Perf budget for event scanning — TDD
 
   **What to do**:
 
@@ -1718,19 +1718,19 @@ Wave FINAL (After ALL tasks — 4 parallel reviews, then user okay):
 
 ## Final Verification Wave
 
-- [ ] F1. **Plan Compliance Audit** — `oracle`
+- [x] F1. **Plan Compliance Audit** — `oracle`
   Read the plan end-to-end. For each "Must Have": verify implementation exists (read file, `go test`). For each "Must NOT Have": search codebase for forbidden patterns — reject with file:line if found. Check evidence files exist in `.sisyphus/evidence/`. Compare deliverables against plan.
   Output: `Must Have [N/N] | Must NOT Have [N/N] | Tasks [N/N] | VERDICT: APPROVE/REJECT`
 
-- [ ] F2. **Code Quality Review** — `unspecified-high`
+- [x] F2. **Code Quality Review** — `unspecified-high`
   Run `go vet ./lsp/`. Review all changed files for: `any` usage, empty `if err != nil { continue }` without logging, commented-out code, unused imports. Check AI slop: excessive comments, over-abstraction, generic names.
   Output: `Vet [PASS/FAIL] | Files [N clean/N issues] | VERDICT`
 
-- [ ] F3. **Real Manual QA** — `unspecified-high`
+- [x] F3. **Real Manual QA** — `unspecified-high`
   Start from clean state. Execute EVERY QA scenario from EVERY task — follow exact steps, capture evidence. Test cross-task integration (events working together, not isolation). Test edge cases: empty workspace, shared files, manifest change. Save to `.sisyphus/evidence/final-qa/`.
   Output: `Scenarios [N/N pass] | Integration [N/N] | Edge Cases [N tested] | VERDICT`
 
-- [ ] F4. **Scope Fidelity Check** — `deep`
+- [x] F4. **Scope Fidelity Check** — `deep`
   For each task: read "What to do", read actual diff. Verify 1:1 — everything in spec was built (no missing), nothing beyond spec was built (no creep). Check "Must NOT do" compliance. Detect cross-task contamination. Flag unaccounted changes.
   Output: `Tasks [N/N compliant] | Contamination [CLEAN/N issues] | Unaccounted [CLEAN/N files] | VERDICT`
 
@@ -1754,8 +1754,8 @@ go vet ./lsp/                                                          # Expecte
 ```
 
 ### Final Checklist
-- [ ] All "Must Have" present
-- [ ] All "Must NOT Have" absent
-- [ ] All tests pass (`go test ./lsp/`)
-- [ ] No regressions in existing FiveM fixtures
-- [ ] Perf budget not exceeded
+- [x] All "Must Have" present
+- [x] All "Must NOT Have" absent
+- [x] All tests pass (`go test ./lsp/`)
+- [x] No regressions in existing FiveM fixtures
+- [x] Perf budget not exceeded

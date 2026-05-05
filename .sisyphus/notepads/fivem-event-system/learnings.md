@@ -1,120 +1,25 @@
-# FiveM Event Intelligence System - Task 3 Learnings
+# FiveM Unknown Event Diagnostics - Learnings
 
-## Completed: Diagnostic Config Flags
+- Implemented a new diagnostic: fivem-unknown-event (Information) that flags AddEventHandler events that have no corresponding built-in or TriggerEvent/Trigger* in the workspace.
+- Diagnostic is gated behind feature flags: FeatureFiveM and DiagFiveMUnknownEvent.
+- The diagnostic checks each doc's FiveMEvents for AddHandler entries, skips wildcard events, and resolves against the global EventsBuiltin map and other documents' TriggerEvent definitions.
+- Test coverage added: TestFiveMUnknownEventDiagnostic validates diagnostics for resource_events fixture (client/server/shared AddEventHandler events) and ensures wildcard handler does not produce diagnostics.
+Add diagnostic for unregistered FiveM network events (TriggerServerEvent/TriggerClientEvent) within the same resource.
+- Implemented diagFiveMUnregisteredNetEvent in lsp/diagnostics.go gated by FeatureFiveM and DiagFiveMUnregisteredNetEvent.
+- Implemented diag logic to scan doc.FiveMEvents and resource graph to find missing RegisterNetEvent within the same resource.
+- Added unit test TestFiveMUnregisteredNetEvent and fixture resource_events_unregistered/server.lua to exercise the case.
+- Updated test harness to verify code 'fivem-unregistered-net-event' diagnostic appears when unregistered events are triggered.
 
-### Files Modified
-- `lsp/server.go` - Added 3 fields to `Server` struct and 3 `setCfg` calls
-- `lsp/messages.go` - Added 3 fields to `GlobalSettingsOptions`
-- `lsp/fivem_fixture_harness_test.go` - Enabled all 3 flags in test harness
+- Task 12: FiveM event find-references should resolve from doc.fiveMEventAtOffset and return doc.fiveMEventNameRange for every matching doc.FiveMEvents entry across s.Documents, gated by FeatureFiveM. The fixture esource_events has four shared:requestSync references: client trigger, server RegisterNetEvent, server TriggerServerEvent, and shared AddEventHandler.
 
-### Fields Added (Server struct)
-```go
-DiagFiveMEventDirection       bool
-DiagFiveMUnregisteredNetEvent bool
-DiagFiveMUnknownEvent         bool
-```
+- Task 15: Shared-file FiveM events rely on the existing EnvShared classification and completion filtering (EnvShared allowed for both TriggerServerEvent and TriggerClientEvent). Regression coverage lives in lsp/fivem_events_test.go::TestFiveMSharedFileEvents, using shared:bidirectionalNet from lsp/testdata/fivem/resource_events/shared.lua to verify no direction diagnostic plus client/server completion and hover visibility.
 
-### Fields Added (GlobalSettingsOptions)
-```go
-DiagFiveMEventDirection       bool `json:"diagFiveMEventDirection"`
-DiagFiveMUnregisteredNetEvent bool `json:"diagFiveMUnregisteredNetEvent"`
-DiagFiveMUnknownEvent         bool `json:"diagFiveMUnknownEvent"`
-```
+- Task 17 added BenchmarkFiveMEventScanning in lsp/fivem_perf_test.go. It builds a realistic 320-group FiveM Lua source with RegisterNetEvent, AddEventHandler, TriggerEvent, TriggerServerEvent, and TriggerClientEvent calls, then measures the existing updateDocument/finalizeDocumentUpdate path and asserts 1,600 scanned events. Verification on Windows amd64: go test -run=^$ -bench=BenchmarkFiveM -count=1 ./lsp passed; BenchmarkFiveMEventScanning-12 reported 2,845,565 ns/op, 5,425,576 B/op, 1,670 allocs/op.
 
-### setCfg Calls Added
-```go
-setCfg(&s.DiagFiveMEventDirection, opts.DiagFiveMEventDirection, &needsRepublish)
-setCfg(&s.DiagFiveMUnregisteredNetEvent, opts.DiagFiveMUnregisteredNetEvent, &needsRepublish)
-setCfg(&s.DiagFiveMUnknownEvent, opts.DiagFiveMUnknownEvent, &needsRepublish)
-```
+- Task 16: Manifest changes for an existing FiveM resource must clear affected documents' FiveMEvents when their FiveMProfileCached state is invalidated; initial manifest registration (oldRes == nil) should not clear event scans because Lua files may already have been finalized during initial indexing.
 
-### Build Status
-- Pre-existing error in `lsp/document.go:44:23` - undefined `FiveMEventInfo` type
-  - This is unrelated to Task 3 changes (likely from Task 5 or later work)
-  - All 3 modified files pass `lsp_diagnostics` with zero errors
+- Final Wave F2 fixes applied:
+  - Ran `gofmt -w` on lsp/diagnostics.go, lsp/server.go, lsp/fivem.go, lsp/features.go to fix space indentation (Go standard uses tabs).
+  - Fixed regex compilation inside loop in handleCodeLens (features.go): replaced `regexp.MustCompile()` called per document with simple `strings.Count()` for TriggerEvent/TriggerServerEvent/TriggerClientEvent pattern matching. Removed unused "regexp" import.
 
-## Pattern Followed
-All additions follow exact existing patterns for `DiagFiveMUnaccountedFile`, `DiagFiveMUnknownExport`, `DiagFiveMUnknownResource`.
-
-## Completed: Task 4 - Test Fixtures Directory
-
-### Files Created
-- `lsp/testdata/fivem/resource_events/fxmanifest.lua`
-- `lsp/testdata/fivem/resource_events/client.lua`
-- `lsp/testdata/fivem/resource_events/server.lua`
-- `lsp/testdata/fivem/resource_events/shared.lua`
-
-### fxmanifest.lua Contents
-```lua
-fx_version 'cerulean'
-game 'gta5'
-
-client_scripts {'client.lua'}
-server_script 'server.lua'
-shared_script 'shared.lua'
-```
-
-### client.lua Markers
-- `@client_registration` - before `AddEventHandler("client:playerLoaded", ...)`
-- `@client_hover` - before `TriggerServerEvent("shared:requestSync")`
-- `@client_net_registration` - before `RegisterNetEvent("shared:syncData", ...)`
-- `@client_handler_def` - inside callback before `print("synced", data)`
-
-### server.lua Markers
-- `@server_registration` - before `AddEventHandler("server:playerReady", ...)`
-- `@server_hover` - before `TriggerClientEvent("shared:syncData", ...)`
-- `@server_net_registration` - before `RegisterNetEvent("shared:requestSync")`
-- `@server_direction_error` - before `TriggerServerEvent("shared:requestSync")` (direction error case)
-
-### shared.lua Markers
-- `@shared_registration` - before `AddEventHandler("shared:configLoaded", ...)`
-- `@shared_hover` - before `TriggerEvent("shared:reloadUI")`
-- `@shared_wildcard` - before `AddEventHandler("*", ...)`
-
-### File Modified
-- `lsp/fivem_fixture_harness_test.go` - Added `"resource_events"` to fixture list at line 47
-
-### New Test File
-- `lsp/fivem_events_test.go` - Contains `TestFiveMEventFixtureLoading` that verifies all 11 markers
-
-### Test Results
-- `TestFiveMEventFixtureLoading` - PASS
-- `TestFiveMFixtureHarness` (regression) - PASS
-- All FiveM tests - PASS
-
----
-
-## Task 2: FiveMBuiltinEvent Struct and EventsBuiltin Map
-
-### Struct Definition
-```go
-type FiveMBuiltinEvent struct {
-    Name        string
-    Subset      string
-    Description string
-    Payload     string
-}
-```
-
-### EventsBuiltin Map (15 entries total)
-| Event Name | Subset | Description |
-|------------|--------|-------------|
-| playerConnecting | SERVER | Fires when a player is connecting to the server. Use this to deny or allow the connection. |
-| playerJoining | SERVER | Fires when a player has successfully joined and is being assigned to a slot. |
-| playerDropped | SERVER | Fires when a player disconnects or is dropped from the server. |
-| entityCreating | SERVER | Fires before an entity is created. Return false to cancel creation. |
-| entityCreated | SERVER | Fires after an entity has been created. |
-| entityRemoved | SERVER | Fires when an entity is removed from the world. |
-| weaponDamageEvent | SHARED | Fires when a weapon damage is dealt. Can be used to modify damage or cancel. |
-| onResourceStarting | SHARED | Fires before a resource starts. Return false to prevent starting. |
-| onResourceStart | SHARED | Fires when a resource starts. |
-| onResourceStop | SHARED | Fires when a resource stops. |
-| playerSpawned | SHARED | Fires when a player spawns in the world. |
-| characterUnloaded | SHARED | Fires when a character's data is unloaded. |
-| gameEventTriggered | CLIENT | Fires when a game event is triggered by the engine. |
-| entityDamaged | CLIENT | Fires when an entity takes damage. |
-| sessionInitialized | SHARED | Fires when the game session is fully initialized. |
-
-### Build Verification
-- `go build ./lsp/` → success
-- `go vet ./lsp/` → success (no warnings)
+- 2026-05-05: FiveM event completion deduplication must add RegisterNetEvent entries before AddEventHandler entries so network handler detail wins deterministically when both declarations share an event name. FiveM CodeLens should derive counts from the existing document fallback path and skip zero-reference lenses rather than keeping a separate Server event index.
