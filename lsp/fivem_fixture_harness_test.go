@@ -379,6 +379,33 @@ func (h *fiveMFixtureHarness) completion(markerName string) CompletionList {
 	return completion
 }
 
+func (h *fiveMFixtureHarness) workspaceSymbols(query string) []SymbolInformation {
+	h.t.Helper()
+
+	params, err := json.Marshal(WorkspaceSymbolParams{Query: query})
+	if err != nil {
+		h.t.Fatalf("marshal workspace symbol params for %q: %v", query, err)
+	}
+
+	h.resetRPC()
+	h.server.handleWorkspaceSymbol(Request{RPC: "2.0", ID: 1, Params: params})
+
+	body := h.lastResponse(1)
+	var envelope struct {
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		h.t.Fatalf("decode workspace symbol response for %q: %v", query, err)
+	}
+
+	var symbols []SymbolInformation
+	if err := json.Unmarshal(envelope.Result, &symbols); err != nil {
+		h.t.Fatalf("decode workspace symbol result for %q: %v", query, err)
+	}
+
+	return symbols
+}
+
 func (h *fiveMFixtureHarness) references(markerName string, includeDeclaration bool) []Location {
 	h.t.Helper()
 

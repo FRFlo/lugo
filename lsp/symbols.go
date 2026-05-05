@@ -93,6 +93,12 @@ func (s *Server) handleDefinition(req Request) {
 	}
 
 	offset := doc.Tree.Offset(params.Position.Line, params.Position.Character)
+	if locs := s.getFiveMEventDefinitionLocations(doc, offset); len(locs) > 0 {
+		WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: locs})
+
+		return
+	}
+
 	ctx := s.resolveSymbolAt(uri, offset)
 
 	if ctx != nil {
@@ -124,6 +130,141 @@ func (s *Server) handleDefinition(req Request) {
 	WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: nil})
 }
 
+func (s *Server) getFiveMEventDefinitionLocations(doc *Document, offset uint32) []Location {
+	if s == nil || !s.FeatureFiveM || doc == nil || doc.Tree == nil {
+		return nil
+	}
+
+	sourceEvent, ok := doc.fiveMEventAtOffset(offset)
+	if !ok {
+		return nil
+	}
+
+	type eventDefinitionKey struct {
+		URI    string
+		NodeID ast.NodeID
+	}
+
+	var locs []Location
+	seen := make(map[eventDefinitionKey]struct{})
+	sourceURI := s.documentURI(doc)
+	addLocation := func(targetDoc *Document, targetURI string, target FiveMEventInfo) {
+		if targetDoc == nil || target.NodeID == ast.InvalidNode {
+			return
+		}
+
+		key := eventDefinitionKey{URI: targetURI, NodeID: target.NodeID}
+		if _, ok := seen[key]; ok {
+			return
+		}
+
+		seen[key] = struct{}{}
+		locs = append(locs, Location{
+			URI:   targetURI,
+			Range: targetDoc.fiveMEventNameRange(target.NodeID),
+		})
+	}
+
+	addMatching := func(kinds ...FiveMEventKind) {
+		for targetURI, targetDoc := range s.Documents {
+			if targetDoc == nil {
+				continue
+			}
+
+			for _, target := range targetDoc.FiveMEvents {
+				if target.Name != sourceEvent.Name || target.NodeID == ast.InvalidNode {
+					continue
+				}
+
+				if targetURI == sourceURI && target.NodeID == sourceEvent.NodeID {
+					continue
+				}
+
+				for _, kind := range kinds {
+					if target.Kind == kind {
+						addLocation(targetDoc, targetURI, target)
+						break
+					}
+				}
+			}
+		}
+	}
+
+	switch sourceEvent.Kind {
+	case FiveMEventTriggerLocal, FiveMEventTriggerServer, FiveMEventTriggerClient:
+		addMatching(FiveMEventAddHandler)
+		if len(locs) == 0 {
+			addMatching(FiveMEventRegisterNet)
+		}
+	case FiveMEventAddHandler:
+		addMatching(FiveMEventRegisterNet)
+		if len(locs) == 0 {
+			addMatching(FiveMEventAddHandler)
+		}
+	case FiveMEventRegisterNet:
+		addMatching(FiveMEventAddHandler)
+	}
+
+	return locs
+}
+
+func (doc *Document) fiveMEventAtOffset(offset uint32) (FiveMEventInfo, bool) {
+	if doc == nil || doc.Tree == nil {
+		return FiveMEventInfo{}, false
+	}
+
+	for _, ev := range doc.FiveMEvents {
+		if ev.NodeID == ast.InvalidNode || int(ev.NodeID) >= len(doc.Tree.Nodes) {
+			continue
+		}
+
+		node := doc.Tree.Nodes[ev.NodeID]
+		if node.Kind != ast.KindString {
+			continue
+		}
+
+		start, end := doc.fiveMEventNameOffsets(ev.NodeID)
+		if start <= offset && offset <= end {
+			return ev, true
+		}
+	}
+
+	return FiveMEventInfo{}, false
+}
+
+func (doc *Document) fiveMEventNameRange(nodeID ast.NodeID) Range {
+	start, end := doc.fiveMEventNameOffsets(nodeID)
+
+	return getRange(doc.Tree, start, end)
+}
+
+func (doc *Document) fiveMEventNameOffsets(nodeID ast.NodeID) (uint32, uint32) {
+	node := doc.Tree.Nodes[nodeID]
+	start := node.Start
+	end := node.End
+	src := doc.Source()
+
+	if start < end && end <= uint32(len(src)) {
+		first := src[start]
+		if (first == '\'' || first == '"') && src[end-1] == first {
+			start++
+			end--
+		}
+	}
+
+	return start, end
+}
+
+func (s *Server) documentURI(doc *Document) string {
+	for uri, candidate := range s.Documents {
+		if candidate == doc {
+			return uri
+		}
+	}
+
+	return ""
+}
+
 func (s *Server) handleReferences(req Request) {
 	var params ReferenceParams
 
@@ -142,6 +283,16 @@ func (s *Server) handleReferences(req Request) {
 	}
 
 	offset := doc.Tree.Offset(params.Position.Line, params.Position.Character)
+	if locations := s.getFiveMEventReferenceLocations(doc, offset); len(locations) > 0 {
+		WriteMessage(s.Writer, Response{
+			RPC:    "2.0",
+			ID:     req.ID,
+			Result: locations,
+		})
+
+		return
+	}
+
 	ctx := s.resolveSymbolAt(uri, offset)
 
 	if ctx == nil {
@@ -574,6 +725,58 @@ func (s *Server) handleWorkspaceSymbol(req Request) {
 
 		if count >= MaxWorkspaceResults {
 			break
+		}
+	}
+
+	if s.FeatureFiveM && count < MaxWorkspaceResults {
+		seen := make(map[string]struct{}, len(results))
+		for _, result := range results {
+			seen[result.Name] = struct{}{}
+		}
+
+		addEventSymbol := func(name string, location Location) bool {
+			if !containsFold(name, queryLower) {
+				return false
+			}
+			if _, ok := seen[name]; ok {
+				return false
+			}
+
+			results = append(results, SymbolInformation{
+				Name:     name,
+				Kind:     SymbolKindEvent,
+				Location: location,
+			})
+			seen[name] = struct{}{}
+			count++
+
+			return count >= MaxWorkspaceResults
+		}
+
+		builtinLocation := Location{
+			URI: "builtin://fivem/events",
+			Range: Range{
+				Start: Position{Line: 0, Character: 0},
+				End:   Position{Line: 0, Character: 0},
+			},
+		}
+		for eventName := range EventsBuiltin {
+			if addEventSymbol(eventName, builtinLocation) {
+				break
+			}
+		}
+
+		if count < MaxWorkspaceResults {
+			for uri, doc := range s.Documents {
+				for _, event := range doc.FiveMEvents {
+					if addEventSymbol(event.Name, Location{URI: uri, Range: getNodeRange(doc.Tree, event.NodeID)}) {
+						break
+					}
+				}
+				if count >= MaxWorkspaceResults {
+					break
+				}
+			}
 		}
 	}
 

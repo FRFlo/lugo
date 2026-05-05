@@ -147,10 +147,10 @@ type InitializationOptions struct {
 	SuggestFunctionParams bool `json:"suggestFunctionParams"`
 	FeatureFormatAlerts   bool `json:"featureFormatAlerts"`
 
-	FeatureFiveM             bool `json:"featureFiveM"`
-	DiagFiveMUnaccountedFile bool `json:"diagFiveMUnaccountedFile"`
-	DiagFiveMUnknownExport   bool `json:"diagFiveMUnknownExport"`
-	DiagFiveMUnknownResource   bool `json:"diagFiveMUnknownResource"`
+	FeatureFiveM                  bool `json:"featureFiveM"`
+	DiagFiveMUnaccountedFile      bool `json:"diagFiveMUnaccountedFile"`
+	DiagFiveMUnknownExport        bool `json:"diagFiveMUnknownExport"`
+	DiagFiveMUnknownResource      bool `json:"diagFiveMUnknownResource"`
 	DiagFiveMEventDirection       bool `json:"diagFiveMEventDirection"`
 	DiagFiveMUnregisteredNetEvent bool `json:"diagFiveMUnregisteredNetEvent"`
 	DiagFiveMUnknownEvent         bool `json:"diagFiveMUnknownEvent"`
@@ -435,6 +435,7 @@ const (
 	SymbolKindField    SymbolKind = 8
 	SymbolKindFunction SymbolKind = 12
 	SymbolKindVariable SymbolKind = 13
+	SymbolKindEvent    SymbolKind = 24
 )
 
 type SymbolTag int

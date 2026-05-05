@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -30,6 +31,105 @@ func ctxDisplayNameForSignature(doc *Document, nodeID ast.NodeID) string {
 	}
 
 	return ""
+}
+
+func fiveMEventCompletionCall(doc *Document, offset uint32) (string, bool) {
+	if doc == nil || doc.Tree == nil {
+		return "", false
+	}
+
+	currID := doc.Tree.NodeAt(offset)
+	if currID == ast.InvalidNode || int(currID) >= len(doc.Tree.Nodes) {
+		return "", false
+	}
+
+	currNode := doc.Tree.Nodes[currID]
+	if currNode.Kind != ast.KindString || offset < currNode.Start || offset > currNode.End {
+		return "", false
+	}
+
+	callID := currNode.Parent
+	if callID == ast.InvalidNode || int(callID) >= len(doc.Tree.Nodes) {
+		return "", false
+	}
+
+	callNode := doc.Tree.Nodes[callID]
+	if callNode.Kind != ast.KindCallExpr || callNode.Count == 0 || callNode.Extra >= uint32(len(doc.Tree.ExtraList)) {
+		return "", false
+	}
+
+	if doc.Tree.ExtraList[callNode.Extra] != currID {
+		return "", false
+	}
+
+	if callNode.Left == ast.InvalidNode || int(callNode.Left) >= len(doc.Tree.Nodes) {
+		return "", false
+	}
+
+	leftNode := doc.Tree.Nodes[callNode.Left]
+	if leftNode.Kind != ast.KindIdent || leftNode.Start > leftNode.End || leftNode.End > uint32(len(doc.Source())) {
+		return "", false
+	}
+
+	callName := ast.String(doc.Source()[leftNode.Start:leftNode.End])
+	switch callName {
+	case "AddEventHandler", "TriggerEvent", "TriggerServerEvent", "TriggerClientEvent":
+		return callName, true
+	default:
+		return "", false
+	}
+}
+
+func (s *Server) getFiveMEventReferenceLocations(doc *Document, offset uint32) []Location {
+	if s == nil || !s.FeatureFiveM || doc == nil || doc.Tree == nil {
+		return nil
+	}
+
+	sourceEvent, ok := doc.fiveMEventAtOffset(offset)
+	if !ok || sourceEvent.Name == "" {
+		return nil
+	}
+
+	type eventReferenceKey struct {
+		URI    string
+		NodeID ast.NodeID
+	}
+
+	var locations []Location
+	seen := make(map[eventReferenceKey]struct{})
+
+	for targetURI, targetDoc := range s.Documents {
+		if targetDoc == nil || targetDoc.Tree == nil {
+			continue
+		}
+
+		for _, target := range targetDoc.FiveMEvents {
+			if target.Name != sourceEvent.Name || target.NodeID == ast.InvalidNode {
+				continue
+			}
+
+			key := eventReferenceKey{URI: targetURI, NodeID: target.NodeID}
+			if _, ok := seen[key]; ok {
+				continue
+			}
+
+			seen[key] = struct{}{}
+			locations = append(locations, Location{
+				URI:   targetURI,
+				Range: targetDoc.fiveMEventNameRange(target.NodeID),
+			})
+		}
+	}
+
+	slices.SortFunc(locations, func(a, b Location) int {
+		return cmp.Or(
+			cmp.Compare(a.URI, b.URI),
+			cmp.Compare(a.Range.Start.Line, b.Range.Start.Line),
+			cmp.Compare(a.Range.Start.Character, b.Range.Start.Character),
+		)
+	})
+
+	return locations
 }
 
 func (s *Server) lookupFiveMExportDefs(doc *Document, exportRes, funcName string) []GlobalSymbol {
@@ -69,6 +169,64 @@ func (s *Server) handleHover(req Request) {
 	s.ensureFiveMNativeBundleLoaded(doc)
 
 	offset := doc.Tree.Offset(params.Position.Line, params.Position.Character)
+	// FiveM event hover: if cursor is on a first-argument event name string in AddEventHandler/RegisterNetEvent/TriggerEvent/TriggerServerEvent/TriggerClientEvent
+	if doc != nil {
+		if currID := doc.Tree.NodeAt(offset); currID != ast.InvalidNode {
+			currNode := doc.Tree.Nodes[currID]
+			if currNode.Kind == ast.KindString {
+				parID := currNode.Parent
+				if parID != ast.InvalidNode {
+					if parNode := doc.Tree.Nodes[parID]; parNode.Kind == ast.KindCallExpr || parNode.Kind == ast.KindMethodCall {
+						if int(parNode.Extra) < len(doc.Tree.ExtraList) {
+							arg1ID := doc.Tree.ExtraList[parNode.Extra]
+							if arg1ID == currID {
+								if int(parNode.Left) < len(doc.Tree.Nodes) {
+									leftNode := doc.Tree.Nodes[parNode.Left]
+									if leftNode.Kind == ast.KindIdent {
+										fname := string(doc.Source()[leftNode.Start:leftNode.End])
+										switch fname {
+										case "AddEventHandler", "RegisterNetEvent", "TriggerEvent", "TriggerServerEvent", "TriggerClientEvent":
+											eventName := string(doc.Source()[currNode.Start:currNode.End])
+											kindLabel := ""
+											switch fname {
+											case "AddEventHandler":
+												kindLabel = "handler"
+											case "RegisterNetEvent":
+												kindLabel = "network event"
+											case "TriggerEvent":
+												kindLabel = "local trigger"
+											case "TriggerServerEvent":
+												kindLabel = "server trigger"
+											case "TriggerClientEvent":
+												kindLabel = "client trigger"
+											}
+											hoverText := "```lua\n" + eventName + " — " + kindLabel + "\n```"
+											if be, ok := EventsBuiltin[eventName]; ok {
+												if be.Description != "" {
+													hoverText += "\n\n" + be.Description
+												}
+												if be.Payload != "" {
+													hoverText += "\nPayload: " + be.Payload
+												}
+											}
+											WriteMessage(s.Writer, Response{
+												RPC: "2.0",
+												ID:  req.ID,
+												Result: Hover{
+													Contents: MarkupContent{Kind: "markdown", Value: hoverText},
+												},
+											})
+											return
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
 	ctx := s.resolveSymbolAt(uri, offset)
 
 	var (
@@ -513,6 +671,100 @@ func (s *Server) handleCompletion(req Request) {
 			InsertText:       insertText,
 			InsertTextFormat: insertFormat,
 		})
+	}
+
+	if s.FeatureFiveM {
+		if callName, ok := fiveMEventCompletionCall(doc, offset); ok {
+			addFiveMEventCompletions := func() {
+				addEvent := func(name, detail, sortText string) {
+					if name == "" || name == "*" {
+						return
+					}
+
+					addCompletion(name, FieldCompletion, detail, false, sortText, name, PlainTextTextFormat)
+				}
+
+				builtinAllowed := func(subset string) bool {
+					switch callName {
+					case "TriggerServerEvent":
+						return subset == "SERVER" || subset == "SHARED"
+					case "TriggerClientEvent":
+						return subset == "CLIENT" || subset == "SHARED"
+					default:
+						return true
+					}
+				}
+
+				for name, builtin := range EventsBuiltin {
+					if builtinAllowed(builtin.Subset) {
+						addEvent(name, "built-in ("+builtin.Subset+")", "0")
+					}
+				}
+
+				discoveredAllowed := func(d *Document, ev FiveMEventInfo) bool {
+					switch callName {
+					case "TriggerServerEvent", "TriggerClientEvent":
+						if ev.Kind != FiveMEventAddHandler && ev.Kind != FiveMEventRegisterNet {
+							return false
+						}
+
+						profile := s.getDocumentFiveMProfile(d)
+						env := profile.Env()
+						if callName == "TriggerServerEvent" {
+							return env == EnvServer || env == EnvShared
+						}
+
+						return env == EnvClient || env == EnvShared
+					default:
+						return true
+					}
+				}
+
+				eventDetail := func(ev FiveMEventInfo) string {
+					switch ev.Kind {
+					case FiveMEventAddHandler:
+						return "handler"
+					case FiveMEventRegisterNet:
+						return "network handler"
+					case FiveMEventTriggerLocal:
+						return "local trigger"
+					case FiveMEventTriggerServer:
+						return "server trigger"
+					case FiveMEventTriggerClient:
+						return "client trigger"
+					default:
+						return "event"
+					}
+				}
+
+				for _, kind := range []FiveMEventKind{FiveMEventRegisterNet, FiveMEventAddHandler, FiveMEventTriggerLocal, FiveMEventTriggerServer, FiveMEventTriggerClient} {
+					for _, d := range s.Documents {
+						if d == nil {
+							continue
+						}
+
+						for _, ev := range d.FiveMEvents {
+							if ev.Kind == kind && discoveredAllowed(d, ev) {
+								addEvent(ev.Name, eventDetail(ev), "1")
+							}
+						}
+					}
+				}
+			}
+
+			addFiveMEventCompletions()
+
+			WriteMessage(s.Writer, Response{
+				RPC: "2.0",
+				ID:  req.ID,
+				Result: CompletionList{
+					IsIncomplete: false,
+					Items:        items,
+				},
+			})
+
+			return
+		}
 	}
 
 	buildFuncSnippet := func(label string, dDoc *Document, valID ast.NodeID, isMethod bool) (string, InsertTextFormat) {
@@ -2241,6 +2493,45 @@ func (s *Server) handleCodeLens(req Request) {
 
 	if lenses == nil {
 		lenses = []CodeLens{}
+	}
+
+	// Add CodeLens entries for FiveM events (AddHandler and RegisterNetEvent)
+	for _, ev := range doc.FiveMEvents {
+		if ev.Kind != FiveMEventAddHandler && ev.Kind != FiveMEventRegisterNet {
+			continue
+		}
+		if ev.NodeID == ast.InvalidNode {
+			continue
+		}
+		// Anchor position for CodeLens above the event node
+		eventRange := getNodeRange(doc.Tree, ev.NodeID)
+		count := 0
+		// Lightweight textual search across all open documents
+		for _, d := range s.Documents {
+			if d == nil || d.Tree == nil {
+				continue
+			}
+			src := string(d.Source())
+			pattern := `Trigger(Event|ServerEvent|ClientEvent)\s*\(\s*['"]` + regexp.QuoteMeta(ev.Name) + `['"]`
+			re := regexp.MustCompile(pattern)
+			matches := re.FindAllStringIndex(src, -1)
+			count += len(matches)
+		}
+		if count == 0 {
+			continue
+		}
+		lens := CodeLens{
+			Range: eventRange,
+			Command: &Command{
+				Title:   fmt.Sprintf("%d references", count),
+				Command: "lugo.showReferences",
+			},
+			Data: map[string]any{
+				"uri":    uri,
+				"nodeId": float64(ev.NodeID),
+			},
+		}
+		lenses = append(lenses, lens)
 	}
 
 	WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: lenses})
