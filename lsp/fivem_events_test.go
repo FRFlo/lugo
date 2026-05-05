@@ -321,6 +321,74 @@ func TestFiveMEventCodeLens(t *testing.T) {
 	_ = newFiveMFixtureHarness(t, "resource_events")
 }
 
+func TestFiveMEventCodeLensReferencesCommand(t *testing.T) {
+	h := newFiveMFixtureHarness(t, "resource_events")
+
+	assertEventLens := func(relPath, markerName string) {
+		t.Helper()
+
+		marker := h.requireMarker(markerName)
+		var lens *CodeLens
+		for _, candidate := range h.codeLenses(relPath) {
+			if candidate.Command != nil && candidate.Command.Command == "lugo.showReferences" && rangeContainsPosition(candidate.Range, marker.Position) {
+				candidate := candidate
+				lens = &candidate
+				break
+			}
+		}
+		if lens == nil {
+			t.Fatalf("code lens for %s not found in %s", markerName, relPath)
+		}
+
+		if lens.Command == nil || lens.Command.Command != "lugo.showReferences" {
+			t.Fatalf("code lens for %s = %+v, want showReferences command", markerName, lens)
+		}
+		if len(lens.Command.Arguments) != 3 {
+			t.Fatalf("code lens arguments for %s = %#v, want uri + position + locations", markerName, lens.Command.Arguments)
+		}
+
+		resolved := h.resolveCodeLens(*lens)
+		if resolved.Command == nil || resolved.Command.Command != "lugo.showReferences" {
+			t.Fatalf("resolved code lens for %s = %+v, want showReferences command", markerName, resolved)
+		}
+		if len(resolved.Command.Arguments) != 3 {
+			t.Fatalf("resolved code lens arguments for %s = %#v, want uri + position + locations", markerName, resolved.Command.Arguments)
+		}
+
+		positionArg, ok := resolved.Command.Arguments[1].(map[string]any)
+		if !ok {
+			t.Fatalf("resolved code lens position argument for %s = %#v, want object", markerName, resolved.Command.Arguments[1])
+		}
+		if _, ok := positionArg["line"].(float64); !ok {
+			t.Fatalf("resolved code lens position for %s missing line: %#v", markerName, positionArg)
+		}
+
+		locationsArg, ok := resolved.Command.Arguments[2].([]any)
+		if !ok || len(locationsArg) == 0 {
+			t.Fatalf("resolved code lens locations for %s = %#v, want non-empty array", markerName, resolved.Command.Arguments[2])
+		}
+
+		firstLoc, ok := locationsArg[0].(map[string]any)
+		if !ok {
+			t.Fatalf("resolved first location for %s = %#v, want object", markerName, locationsArg[0])
+		}
+		rangeArg, ok := firstLoc["range"].(map[string]any)
+		if !ok {
+			t.Fatalf("resolved location range for %s = %#v, want object", markerName, firstLoc)
+		}
+		startArg, ok := rangeArg["start"].(map[string]any)
+		if !ok {
+			t.Fatalf("resolved location start for %s = %#v, want object", markerName, rangeArg)
+		}
+		if _, ok := startArg["line"].(float64); !ok {
+			t.Fatalf("resolved location start for %s missing line: %#v", markerName, startArg)
+		}
+	}
+
+	assertEventLens("shared.lua", "event_add_handler_def")
+	assertEventLens("server.lua", "event_register_def")
+}
+
 func hasWorkspaceSymbol(symbols []SymbolInformation, name string, kind SymbolKind, uri string) bool {
 	for _, symbol := range symbols {
 		if symbol.Name == name && symbol.Kind == kind && symbol.Location.URI == uri {
@@ -349,6 +417,20 @@ func (h *fiveMFixtureHarness) simulateWatchedFileChange(uri string) {
 
 func hasLocationAtMarker(marker fiveMFixtureMarker, locations []Location) bool {
 	return hasLocationAtPosition(locations, marker.URI, marker.Position)
+}
+
+func rangeContainsPosition(rng Range, pos Position) bool {
+	if pos.Line < rng.Start.Line || pos.Line > rng.End.Line {
+		return false
+	}
+	if pos.Line == rng.Start.Line && pos.Character < rng.Start.Character {
+		return false
+	}
+	if pos.Line == rng.End.Line && pos.Character > rng.End.Character {
+		return false
+	}
+
+	return true
 }
 
 func hasLocationAtPosition(locations []Location, uri string, position Position) bool {
