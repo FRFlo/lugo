@@ -25,9 +25,9 @@ const (
 
 var (
 	stopBlockIf    = token.NewTokenSet(token.ElseIf, token.Else, token.End)
-	stopBlockEnd    = token.NewTokenSet(token.End)
-	stopBlockUntil  = token.NewTokenSet(token.Until)
-	stopBlockEOF    = token.NewTokenSet(token.EOF)
+	stopBlockEnd   = token.NewTokenSet(token.End)
+	stopBlockUntil = token.NewTokenSet(token.Until)
+	stopBlockEOF   = token.NewTokenSet(token.EOF)
 )
 
 var precedences = [256]int{

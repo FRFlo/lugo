@@ -113,20 +113,18 @@ type Server struct {
 	SuggestFunctionParams bool
 	FeatureFormatAlerts   bool
 
-	FeatureFiveM             bool
-	DiagFiveMUnaccountedFile bool
-	DiagFiveMUnknownExport   bool
-	DiagFiveMUnknownResource   bool
+	FeatureFiveM                  bool
+	DiagFiveMUnaccountedFile      bool
+	DiagFiveMUnknownExport        bool
+	DiagFiveMUnknownResource      bool
 	DiagFiveMEventDirection       bool
 	DiagFiveMUnregisteredNetEvent bool
 	DiagFiveMUnknownEvent         bool
-	fiveMNativeBundleLoader  func(name string) ([]byte, error)
+	fiveMNativeBundleLoader       func(name string) ([]byte, error)
 
 	IsCI              bool
 	CIDiagnosticCount int
 	CIErrorCount      int
-
-	FiveMEventIndex map[uint64][]*FiveMEventRef
 }
 
 // compactGlobalIndex removes empty/dead entries from GlobalIndex after document removal
@@ -192,9 +190,6 @@ func NewServer(version string) *Server {
 
 		// Global Index
 		GlobalIndex: make(map[GlobalKey][]GlobalSymbol),
-
-		// FiveM Event Index
-		FiveMEventIndex: make(map[uint64][]*FiveMEventRef),
 
 		// Shared Buffers
 		sharedParser:     parser.New(nil, ast.NewTree(nil), 50),

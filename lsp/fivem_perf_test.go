@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -176,6 +178,67 @@ func BenchmarkFiveM(b *testing.B) {
 			}
 		}
 	})
+}
+
+func BenchmarkFiveMEventScanning(b *testing.B) {
+	source := buildFiveMEventScanningSource(320)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+
+		s := NewServer("benchmark")
+		s.FeatureFiveM = true
+		attachTestFiveMNativeBundleLoader(b, s)
+
+		root := b.TempDir()
+		uri := s.pathToURI(filepath.Join(root, "client.lua"))
+
+		b.StartTimer()
+		s.updateDocument(uri, source)
+
+		doc := s.Documents[uri]
+		if doc == nil {
+			b.Fatal("event scanning benchmark did not index document")
+		}
+		if got, want := len(doc.FiveMEvents), 320*5; got != want {
+			b.Fatalf("event scanning found %d events, want %d", got, want)
+		}
+	}
+}
+
+func buildFiveMEventScanningSource(eventGroups int) []byte {
+	var b strings.Builder
+	b.WriteString("-- realistic FiveM event scanning benchmark\n")
+	b.WriteString("local state = {}\n\n")
+
+	for i := 0; i < eventGroups; i++ {
+		name := "lugo:perf:event" + strconv.Itoa(i)
+		b.WriteString("RegisterNetEvent(\"")
+		b.WriteString(name)
+		b.WriteString("\", function(payload)\n")
+		b.WriteString("    state[payload.id] = payload\n")
+		b.WriteString("end)\n")
+		b.WriteString("AddEventHandler(\"")
+		b.WriteString(name)
+		b.WriteString("\", function(payload)\n")
+		b.WriteString("    if payload then state.last = payload.id end\n")
+		b.WriteString("end)\n")
+		b.WriteString("TriggerEvent(\"")
+		b.WriteString(name)
+		b.WriteString("\", { id = ")
+		b.WriteString(strconv.Itoa(i))
+		b.WriteString(" })\n")
+		b.WriteString("TriggerServerEvent(\"")
+		b.WriteString(name)
+		b.WriteString("\", state.last)\n")
+		b.WriteString("TriggerClientEvent(\"")
+		b.WriteString(name)
+		b.WriteString("\", -1, state.last)\n\n")
+	}
+
+	return []byte(b.String())
 }
 
 func benchmarkFiveMColdIndex(b *testing.B, setup func(testing.TB) *fiveMFixtureHarness) {

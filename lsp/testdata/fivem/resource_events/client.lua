@@ -2,8 +2,10 @@
 	print("player loaded", source)
 end)
 
---[[@client_hover]]TriggerServerEvent("shared:requestSync")
+TriggerServerEvent("--[[@client_hover]]shared:requestSync")
 
 --[[@client_net_registration]]RegisterNetEvent("shared:syncData", function(data)
 	--[[@client_handler_def]]print("synced", data)
 end)
+
+TriggerServerEvent("--[[@client_shared_hover]]shared:bidirectionalNet")
