@@ -1,7 +1,10 @@
 package lsp
 
 import (
+	"strings"
 	"testing"
+
+	"github.com/coalaura/lugo/ast"
 )
 
 // TestFiveMEviction tests cache eviction behavior when documents are closed.
@@ -235,6 +238,141 @@ func TestFiveMEviction(t *testing.T) {
 		}
 		if doc.Resolver == nil {
 			t.Fatal("Resolver should still be present after eviction")
+		}
+	})
+
+	t.Run("ClosedLuaDocTargetInlayHintsNoPanic", func(t *testing.T) {
+		h := newFiveMFixtureHarness(t, "resource_bridges")
+
+		consumerURI := h.server.pathToURI(h.root + "/bridge_consumer/consumer.lua")
+		providerURI := h.server.pathToURI(h.root + "/bridge_provider/exports.lua")
+
+		consumerDoc := h.server.Documents[consumerURI]
+		if consumerDoc == nil {
+			t.Fatal("bridge consumer should be indexed")
+		}
+
+		providerDoc := h.server.Documents[providerURI]
+		if providerDoc == nil {
+			t.Fatal("bridge provider should be indexed")
+		}
+		defMarker := h.requireMarker("bridge_ping_definition")
+		defNode := providerDoc.Tree.NodeAt(uint32(defMarker.Offset))
+		if defNode == ast.InvalidNode {
+			t.Fatal("bridge provider definition marker should resolve before eviction")
+		}
+
+		h.server.OpenFiles[consumerURI] = true
+		delete(h.server.OpenFiles, providerURI)
+
+		evictClosedDocumentCaches(h.server)
+
+		if providerDoc.Tree == nil || providerDoc.Tree.Source != nil {
+			t.Fatal("bridge provider should keep its tree but drop source after eviction")
+		}
+
+		if comments := providerDoc.getCommentsAbove(defNode); comments != nil {
+			t.Fatal("closed provider should not expose LuaDoc comments once source is evicted")
+		}
+		if providerDoc.GetLuaDoc(defNode) == nil {
+			t.Fatal("closed provider LuaDoc lookup should degrade safely instead of panicking")
+		}
+
+		hints := h.inlayHints("bridge_export_signature")
+		if hints == nil {
+			t.Fatal("inlay hints should return an empty array instead of panicking for closed LuaDoc targets")
+		}
+	})
+
+	t.Run("ClosedCrossResourceCodeActionNoPanic", func(t *testing.T) {
+		h := newFiveMFixtureHarness(t, "resource_bridges")
+
+		consumerURI := h.server.pathToURI(h.root + "/bridge_consumer/consumer.lua")
+		providerURI := h.server.pathToURI(h.root + "/bridge_provider/exports.lua")
+
+		providerDoc := h.server.Documents[providerURI]
+		if providerDoc == nil {
+			t.Fatal("bridge provider should be indexed")
+		}
+
+		h.server.OpenFiles[consumerURI] = true
+		delete(h.server.OpenFiles, providerURI)
+
+		evictClosedDocumentCaches(h.server)
+
+		if providerDoc.Tree == nil || providerDoc.Tree.Source != nil {
+			t.Fatal("bridge provider should keep its tree but drop source after eviction")
+		}
+
+		marker := h.requireMarker("bridge_ping_call")
+		actions := h.codeActions(marker.RelPath, Range{Start: marker.Position, End: marker.Position}, nil)
+		if actions == nil {
+			t.Fatal("code actions should return an empty slice instead of panicking for evicted cross-resource targets")
+		}
+	})
+
+	t.Run("ClosedCrossResourceHoverNoPanic", func(t *testing.T) {
+		h := newFiveMFixtureHarness(t, "resource_bridges")
+
+		consumerURI := h.server.pathToURI(h.root + "/bridge_consumer/consumer.lua")
+		providerURI := h.server.pathToURI(h.root + "/bridge_provider/exports.lua")
+
+		providerDoc := h.server.Documents[providerURI]
+		if providerDoc == nil {
+			t.Fatal("bridge provider should be indexed")
+		}
+
+		h.server.OpenFiles[consumerURI] = true
+		delete(h.server.OpenFiles, providerURI)
+
+		evictClosedDocumentCaches(h.server)
+
+		if providerDoc.Tree == nil || providerDoc.Tree.Source != nil {
+			t.Fatal("bridge provider should keep its tree but drop source after eviction")
+		}
+
+		_ = h.hover("bridge_ping_call")
+	})
+
+	t.Run("ReopenedRuntimeHoverKeepsLibraryDocs", func(t *testing.T) {
+		h := newFiveMFixtureHarness(t, "resource_runtime_abi")
+
+		marker := h.requireMarker("runtime_citizen_wait_hover")
+		doc := h.docForMarker("runtime_citizen_wait_hover")
+		source := append([]byte(nil), doc.Source()...)
+		if len(source) == 0 {
+			t.Fatal("runtime hover document should start with source bytes")
+		}
+
+		nativeURI := requireFiveMNativeBundleURI(t, h.server, "natives_universal.lua")
+		nativeDoc := h.server.Documents[nativeURI]
+		if nativeDoc == nil {
+			t.Fatal("native bundle should be indexed")
+		}
+		if !nativeDoc.IsLibrary {
+			t.Fatal("native bundle should be marked as a library document")
+		}
+
+		h.server.OpenFiles[marker.URI] = true
+		delete(h.server.OpenFiles, marker.URI)
+		evictClosedDocumentCaches(h.server)
+
+		if nativeDoc.Tree == nil || nativeDoc.Tree.Source == nil {
+			t.Fatal("library native bundle should keep source after eviction")
+		}
+
+		h.server.updateDocument(marker.URI, source)
+		h.server.OpenFiles[marker.URI] = true
+
+		hover := h.hover("runtime_citizen_wait_hover")
+		if hover == nil {
+			t.Fatal("runtime hover should survive reopen")
+		}
+		if !strings.Contains(hover.Contents.Value, "function Citizen.Wait(milliseconds: integer?)") {
+			t.Fatalf("runtime hover after reopen = %q, want runtime signature", hover.Contents.Value)
+		}
+		if !strings.Contains(hover.Contents.Value, "Yields the current scheduler coroutine") {
+			t.Fatalf("runtime hover after reopen = %q, want runtime description", hover.Contents.Value)
 		}
 	})
 }
