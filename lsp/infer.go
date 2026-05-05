@@ -304,7 +304,7 @@ func (doc *Document) InferType(id ast.NodeID) TypeSet {
 			}
 		}
 	case ast.KindUnaryExpr:
-		src := doc.Source()[node.Start:node.End]
+		src := doc.sourceSlice(node.Start, node.End)
 
 		if bytes.HasPrefix(src, []byte("not")) {
 			typeSet.Basics = TypeBoolean
@@ -335,7 +335,7 @@ func (doc *Document) inferIdent(id ast.NodeID) TypeSet {
 	)
 
 	localDefID := targetDef
-	identName := doc.Source()[doc.Tree.Nodes[id].Start:doc.Tree.Nodes[id].End]
+	identName := doc.nodeSource(id)
 	identHash := ast.HashBytes(identName)
 
 	if doc.Server != nil {
@@ -467,7 +467,7 @@ func (doc *Document) inferFunctionParameter(defID, funcExprID ast.NodeID) TypeSe
 		return doc.inferBridgeCallbackParameter(defID, funcExprID)
 	}
 
-	paramName := string(doc.Source()[doc.Tree.Nodes[defID].Start:doc.Tree.Nodes[defID].End])
+	paramName := ast.String(doc.nodeSource(defID))
 
 	for _, p := range funcDoc.Params {
 		if p.Name == paramName {
@@ -594,7 +594,7 @@ func (doc *Document) inferLoopVariable(defID, nameListID ast.NodeID) TypeSet {
 		return TypeSet{}
 	}
 
-	funcName := doc.Source()[doc.Tree.Nodes[funcID].Start:doc.Tree.Nodes[funcID].End]
+	funcName := doc.nodeSource(funcID)
 
 	if bytes.Equal(funcName, []byte("ipairs")) {
 		switch idx {
@@ -634,9 +634,7 @@ func (doc *Document) getLuaDocParamType(defID ast.NodeID, paramIndex int, funcDo
 		if paramIndex < int(funcNode.Count) {
 			paramID := doc.Tree.ExtraList[funcNode.Extra+uint32(paramIndex)]
 			if paramID != ast.InvalidNode && int(paramID) < len(doc.Tree.Nodes) {
-				paramNode := doc.Tree.Nodes[paramID]
-				if paramNode.Start <= paramNode.End && paramNode.End <= uint32(len(doc.Source())) {
-					paramName := ast.String(doc.Source()[paramNode.Start:paramNode.End])
+				if paramName := ast.String(doc.nodeSource(paramID)); paramName != "" {
 					for _, param := range funcDoc.Params {
 						if param.Name == paramName {
 							return param.Type
@@ -664,7 +662,11 @@ func (doc *Document) inferMemberExpr(node ast.Node) TypeSet {
 		return TypeSet{}
 	}
 
-	fieldName := doc.Source()[rightNode.Start:rightNode.End]
+	fieldName := doc.nodeSource(node.Right)
+	if len(fieldName) == 0 {
+		return TypeSet{}
+	}
+
 	propHash := ast.HashBytes(fieldName)
 
 	mergeType := func(rt TypeSet) {
@@ -722,10 +724,8 @@ func (doc *Document) inferMemberExpr(node ast.Node) TypeSet {
 				field := tDoc.Tree.Nodes[fieldID]
 
 				if field.Kind == ast.KindRecordField {
-					key := tDoc.Tree.Nodes[field.Left]
-
-					if key.Kind == ast.KindIdent {
-						keyName := src[key.Start:key.End]
+					if tDoc.Tree.Nodes[field.Left].Kind == ast.KindIdent {
+						keyName := tDoc.nodeSource(field.Left)
 						if bytes.Equal(keyName, fieldName) {
 							mergeType(tDoc.InferType(field.Right))
 							return
@@ -737,8 +737,7 @@ func (doc *Document) inferMemberExpr(node ast.Node) TypeSet {
 
 		recDef := tDoc.getDefForValue(tableID)
 		if recDef != ast.InvalidNode {
-			recDefNode := tDoc.Tree.Nodes[recDef]
-			recHash := ast.HashBytes(src[recDefNode.Start:recDefNode.End])
+			recHash := ast.HashBytes(tDoc.nodeSource(recDef))
 
 			for _, fd := range tDoc.Resolver.FieldDefs {
 				if fd.ReceiverDef == recDef && fd.ReceiverHash == recHash && fd.PropHash == propHash {
@@ -850,7 +849,7 @@ func (doc *Document) inferCallExpr(node ast.Node) TypeSet {
 
 	if doc.Server != nil {
 		if doc.Tree.Nodes[funcIdentID].Kind == ast.KindIdent {
-			funcName := doc.Source()[doc.Tree.Nodes[funcIdentID].Start:doc.Tree.Nodes[funcIdentID].End]
+			funcName := doc.nodeSource(funcIdentID)
 			if bytes.Equal(funcName, []byte("require")) && node.Count > 0 && node.Extra < uint32(len(doc.Tree.ExtraList)) {
 				argID := doc.Tree.ExtraList[node.Extra]
 
@@ -885,7 +884,7 @@ func (doc *Document) inferCallExpr(node ast.Node) TypeSet {
 							metaNodeID = valID
 						}
 					} else {
-						identHash := ast.HashBytes(doc.Source()[doc.Tree.Nodes[arg2ID].Start:doc.Tree.Nodes[arg2ID].End])
+						identHash := ast.HashBytes(doc.nodeSource(arg2ID))
 						if syms, ok := doc.Server.getGlobalSymbols(doc, 0, identHash); ok && len(syms) > 0 {
 							sym := syms[0]
 							if gDoc, ok := doc.Server.Documents[sym.URI]; ok {
@@ -976,7 +975,7 @@ func (doc *Document) makeCallableProxyType(defID ast.NodeID) TypeSet {
 			continue
 		}
 
-		proxy.CallParams = append(proxy.CallParams, LuaDocParam{Name: ast.String(doc.Source()[paramNode.Start:paramNode.End])})
+		proxy.CallParams = append(proxy.CallParams, LuaDocParam{Name: ast.String(doc.nodeSource(paramID))})
 	}
 
 	proxy.CallSig = buildCallableSignature(proxy.CallParams, proxy.CallRet)
@@ -1006,9 +1005,8 @@ func (doc *Document) findFieldInTable(tableID ast.NodeID, fieldName string) ast.
 
 		field := doc.Tree.Nodes[fieldID]
 		if field.Kind == ast.KindRecordField {
-			key := doc.Tree.Nodes[field.Left]
-			if key.Kind == ast.KindIdent {
-				name := doc.Source()[key.Start:key.End]
+			if doc.Tree.Nodes[field.Left].Kind == ast.KindIdent {
+				name := doc.nodeSource(field.Left)
 				if string(name) == fieldName {
 					return field.Right
 				}
@@ -1090,7 +1088,7 @@ func (doc *Document) getIndexTable(metaNodeID ast.NodeID) (*Document, ast.NodeID
 	if indexValID == ast.InvalidNode {
 		recDef := doc.getDefForValue(metaNodeID)
 		if recDef != ast.InvalidNode {
-			recHash := ast.HashBytes(doc.Source()[doc.Tree.Nodes[recDef].Start:doc.Tree.Nodes[recDef].End])
+			recHash := ast.HashBytes(doc.nodeSource(recDef))
 
 			propHash := ast.HashBytes([]byte("__index"))
 			for _, fd := range doc.Resolver.FieldDefs {
@@ -1119,7 +1117,7 @@ func (doc *Document) getIndexTable(metaNodeID ast.NodeID) (*Document, ast.NodeID
 					return doc, valID
 				}
 			} else if doc.Server != nil {
-				identHash := ast.HashBytes(doc.Source()[doc.Tree.Nodes[indexValID].Start:doc.Tree.Nodes[indexValID].End])
+				identHash := ast.HashBytes(doc.nodeSource(indexValID))
 				if syms, ok := doc.Server.getGlobalSymbols(doc, 0, identHash); ok && len(syms) > 0 {
 					sym := syms[0]
 					if gDoc, ok := doc.Server.Documents[sym.URI]; ok {
@@ -1250,7 +1248,7 @@ func (doc *Document) ContextualType(id ast.NodeID, offset uint32, base TypeSet) 
 		return base
 	}
 
-	identName := doc.Source()[doc.Tree.Nodes[id].Start:doc.Tree.Nodes[id].End]
+	identName := doc.nodeSource(id)
 
 	curr := id
 
@@ -1286,7 +1284,7 @@ func (doc *Document) checkTypeCondition(condID ast.NodeID, targetName []byte, ba
 	cond := doc.Tree.Nodes[condID]
 
 	if cond.Kind == ast.KindIdent {
-		name := doc.Source()[cond.Start:cond.End]
+		name := doc.nodeSource(condID)
 		if bytes.Equal(name, targetName) {
 			base.Basics &^= TypeNil
 
@@ -1303,13 +1301,13 @@ func (doc *Document) checkTypeCondition(condID ast.NodeID, targetName []byte, ba
 			rNode := doc.Tree.Nodes[cond.Right]
 
 			if lNode.Kind == ast.KindIdent && rNode.Kind == ast.KindNil {
-				if bytes.Equal(doc.Source()[lNode.Start:lNode.End], targetName) {
+				if bytes.Equal(doc.nodeSource(cond.Left), targetName) {
 					base.Basics &^= TypeNil
 
 					return base
 				}
 			} else if rNode.Kind == ast.KindIdent && lNode.Kind == ast.KindNil {
-				if bytes.Equal(doc.Source()[rNode.Start:rNode.End], targetName) {
+				if bytes.Equal(doc.nodeSource(cond.Right), targetName) {
 					base.Basics &^= TypeNil
 
 					return base
@@ -1323,13 +1321,13 @@ func (doc *Document) checkTypeCondition(condID ast.NodeID, targetName []byte, ba
 				if callNode.Kind == ast.KindCallExpr && strNode.Kind == ast.KindString {
 					fnID := callNode.Left
 					if doc.Tree.Nodes[fnID].Kind == ast.KindIdent {
-						fnName := doc.Source()[doc.Tree.Nodes[fnID].Start:doc.Tree.Nodes[fnID].End]
+						fnName := doc.nodeSource(fnID)
 
 						if bytes.Equal(fnName, []byte("type")) && callNode.Count > 0 {
 							argID := doc.Tree.ExtraList[callNode.Extra]
 
 							if doc.Tree.Nodes[argID].Kind == ast.KindIdent {
-								argName := doc.Source()[doc.Tree.Nodes[argID].Start:doc.Tree.Nodes[argID].End]
+								argName := doc.nodeSource(argID)
 
 								if bytes.Equal(argName, targetName) {
 									res, ok := doc.evalNode(cond.Right, 0)

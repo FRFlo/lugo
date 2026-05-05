@@ -55,6 +55,25 @@ func (doc *Document) Source() []byte {
 	return nil
 }
 
+func (doc *Document) sourceSlice(start, end uint32) []byte {
+	src := doc.Source()
+	if start > end || end > uint32(len(src)) {
+		return nil
+	}
+
+	return src[start:end]
+}
+
+func (doc *Document) nodeSource(id ast.NodeID) []byte {
+	if id == ast.InvalidNode || doc == nil || doc.Tree == nil || int(id) >= len(doc.Tree.Nodes) {
+		return nil
+	}
+
+	node := doc.Tree.Nodes[id]
+
+	return doc.sourceSlice(node.Start, node.End)
+}
+
 func (doc *Document) parseDiagnosticPragmas() {
 	doc.DiagPragmas.FileDisabled = make(map[string]bool)
 	doc.DiagPragmas.LineDisabled = make(map[uint32]map[string]bool)
@@ -234,6 +253,10 @@ func (doc *Document) getAssignedValue(id ast.NodeID) ast.NodeID {
 }
 
 func (doc *Document) getFunctionParams(funcExprID ast.NodeID, luadoc *LuaDoc) string {
+	if doc == nil || doc.Tree == nil || funcExprID == ast.InvalidNode || int(funcExprID) >= len(doc.Tree.Nodes) {
+		return ""
+	}
+
 	node := doc.Tree.Nodes[funcExprID]
 	if node.Kind != ast.KindFunctionExpr {
 		return ""
@@ -264,10 +287,19 @@ func (doc *Document) getFunctionParams(funcExprID ast.NodeID, luadoc *LuaDoc) st
 	var params []string
 
 	for i := uint16(0); i < node.Count; i++ {
-		pID := doc.Tree.ExtraList[node.Extra+uint32(i)]
-		pNode := doc.Tree.Nodes[pID]
+		if node.Extra+uint32(i) >= uint32(len(doc.Tree.ExtraList)) {
+			continue
+		}
 
-		name := ast.String(doc.Source()[pNode.Start:pNode.End])
+		pID := doc.Tree.ExtraList[node.Extra+uint32(i)]
+		if pID == ast.InvalidNode || int(pID) >= len(doc.Tree.Nodes) {
+			continue
+		}
+
+		name := ast.String(doc.nodeSource(pID))
+		if name == "" {
+			continue
+		}
 
 		if typ, ok := paramTypes[name]; ok && typ != "" {
 			params = append(params, name+": "+typ)
@@ -306,6 +338,11 @@ func (doc *Document) IterateCommentsAbove(id ast.NodeID) iter.Seq[token.Token] {
 			return
 		}
 
+		src := doc.Source()
+		if len(src) == 0 {
+			return
+		}
+
 		stmtID := id
 
 		for {
@@ -330,7 +367,11 @@ func (doc *Document) IterateCommentsAbove(id ast.NodeID) iter.Seq[token.Token] {
 		for i := idx; i >= 0; i-- {
 			c := doc.Tree.Comments[i]
 
-			gap := doc.Source()[c.End:lastValidOffset]
+			if c.End > lastValidOffset || lastValidOffset > uint32(len(src)) {
+				break
+			}
+
+			gap := src[c.End:lastValidOffset]
 
 			if bytes.Count(gap, []byte{'\n'}) <= 1 {
 				if !yield(c) {
@@ -362,7 +403,10 @@ func (doc *Document) getCommentsAbove(id ast.NodeID) []byte {
 
 	for i := len(validComments) - 1; i >= 0; i-- {
 		c := validComments[i]
-		rawC := doc.Source()[c.Start:c.End]
+		rawC := doc.sourceSlice(c.Start, c.End)
+		if rawC == nil {
+			continue
+		}
 
 		b = cleanLuaCommentBytes(b, rawC)
 
@@ -551,7 +595,10 @@ func (doc *Document) ExtractLuaDocFields(id ast.NodeID) iter.Seq[[]byte] {
 		fieldToken := []byte("@field")
 
 		for c := range doc.IterateCommentsAbove(id) {
-			raw := doc.Source()[c.Start:c.End]
+			raw := doc.sourceSlice(c.Start, c.End)
+			if raw == nil {
+				continue
+			}
 
 			idx := bytes.Index(raw, fieldToken)
 
@@ -614,7 +661,10 @@ func (doc *Document) HasDeprecatedTag(id ast.NodeID) (bool, string) {
 	)
 
 	for c := range doc.IterateCommentsAbove(id) {
-		raw := doc.Source()[c.Start:c.End]
+		raw := doc.sourceSlice(c.Start, c.End)
+		if raw == nil {
+			continue
+		}
 
 		_, after, ok := bytes.Cut(raw, depToken)
 		if ok {
