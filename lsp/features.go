@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 
@@ -2505,26 +2504,18 @@ func (s *Server) handleCodeLens(req Request) {
 		}
 		// Anchor position for CodeLens above the event node
 		eventRange := getNodeRange(doc.Tree, ev.NodeID)
-		count := 0
-		// Lightweight textual search across all open documents
-		for _, d := range s.Documents {
-			if d == nil || d.Tree == nil {
-				continue
-			}
-			src := string(d.Source())
-			pattern := `Trigger(Event|ServerEvent|ClientEvent)\s*\(\s*['"]` + regexp.QuoteMeta(ev.Name) + `['"]`
-			re := regexp.MustCompile(pattern)
-			matches := re.FindAllStringIndex(src, -1)
-			count += len(matches)
-		}
+		start, _ := doc.fiveMEventNameOffsets(ev.NodeID)
+		locations := s.getFiveMEventReferenceLocations(doc, start)
+		count := len(locations)
 		if count == 0 {
 			continue
 		}
 		lens := CodeLens{
 			Range: eventRange,
 			Command: &Command{
-				Title:   fmt.Sprintf("%d references", count),
-				Command: "lugo.showReferences",
+				Title:     fmt.Sprintf("%d references", count),
+				Command:   "lugo.showReferences",
+				Arguments: []any{uri, eventRange.Start, locations},
 			},
 			Data: map[string]any{
 				"uri":    uri,
@@ -2565,16 +2556,25 @@ func (s *Server) handleCodeLensResolve(req Request) {
 
 	identNode := doc.Tree.Nodes[nodeID]
 
-	ctx := s.resolveSymbolAt(uri, identNode.Start)
-	if ctx == nil {
-		codeLens.Command = new(Command{Title: "0 references", Command: ""})
+	var locations []Location
+	if eventStart, _ := doc.fiveMEventNameOffsets(nodeID); eventStart != 0 {
+		if eventLocations := s.getFiveMEventReferenceLocations(doc, eventStart); len(eventLocations) > 0 {
+			locations = eventLocations
+		}
+	}
+	if len(locations) == 0 {
+		ctx := s.resolveSymbolAt(uri, identNode.Start)
+		if ctx == nil {
+			codeLens.Command = new(Command{Title: "0 references", Command: ""})
 
-		WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: codeLens})
+			WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: codeLens})
 
-		return
+			return
+		}
+
+		locations = s.getReferences(ctx, false)
 	}
 
-	locations := s.getReferences(ctx, false)
 	count := len(locations)
 
 	var title string
