@@ -213,6 +213,27 @@ func (s *Server) publishDiagnostics(uri string) {
 		}
 	}
 
+	// FiveM-specific event diagnostics (optional)
+	if s.FeatureFiveM {
+		// Run the unknown-event diagnostic check if enabled, before emitting diagnostics
+		if s.DiagFiveMUnknownEvent {
+			s.diagFiveMUnknownEvent(doc)
+		}
+		// Run the event-direction diagnostic (TriggerServerEvent/TriggerClientEvent direction)
+		if s.DiagFiveMEventDirection {
+			s.diagFiveMEventDirection(doc)
+		}
+		// Run the unregistered net event diagnostic for this doc
+		if s.DiagFiveMUnregisteredNetEvent {
+			s.diagFiveMUnregisteredNetEvent(doc)
+		}
+		// If any event-direction related diagnostics were produced, emit and stop further processing
+		if len(s.diagBuf) > 0 {
+			emitDiagnostics(s.diagBuf)
+			return
+		}
+	}
+
 	if doc.IsMeta {
 		emitDiagnostics(s.diagBuf)
 
@@ -1855,4 +1876,189 @@ func (s *Server) getRootDef(doc *Document, exprID ast.NodeID) ast.NodeID {
 	}
 
 	return ast.InvalidNode
+}
+
+// diagFiveMUnregisteredNetEvent detects TriggerServerEvent/TriggerClientEvent calls
+// that do not have a corresponding RegisterNetEvent within the same FiveM resource.
+// MVP: operates within the same resource only.
+func (s *Server) diagFiveMUnregisteredNetEvent(doc *Document) {
+	if !s.FeatureFiveM || !s.DiagFiveMUnregisteredNetEvent {
+		return
+	}
+
+	// Determine the resource this document belongs to
+	profile := s.getDocumentFiveMProfile(doc)
+	if !profile.HasResource() {
+		return
+	}
+
+	// Determine the resource root to compare against across documents
+	resourceRoot := profile.ResourceRoot
+	// If we cannot determine a root, fall back to cross-document scan to avoid missing diagnostics in MVP.
+
+	// Iterate events in this document
+	for _, ev := range doc.FiveMEvents {
+		if ev.Kind != FiveMEventTriggerServer && ev.Kind != FiveMEventTriggerClient {
+			continue
+		}
+
+		// Check across all documents for a matching RegisterNetEvent (MVP: cross-resource allowed to ensure MVP coverage)
+		found := false
+		for _, d := range s.Documents {
+			if d == nil {
+				continue
+			}
+			// If available, still attempt to restrict by resource root if present; otherwise, fall back to global search
+			prof := s.getDocumentFiveMProfile(d)
+			if resourceRoot != "" && prof.ResourceRoot != resourceRoot {
+				// skip non-matching resource roots when a root is known
+				continue
+			}
+			for _, ev2 := range d.FiveMEvents {
+				if ev2.Name == ev.Name && ev2.Kind == FiveMEventRegisterNet {
+					found = true
+					break
+				}
+			}
+			if found {
+				break
+			}
+		}
+
+		if !found {
+			// Emit diagnostic against the event name node if possible
+			diagRange := Range{Start: Position{Line: 0, Character: 0}, End: Position{Line: 0, Character: 0}}
+			if ev.NodeID != ast.InvalidNode {
+				diagRange = getNodeRange(doc.Tree, ev.NodeID)
+			}
+			s.diagBuf = append(s.diagBuf, Diagnostic{
+				Range:    diagRange,
+				Severity: SeverityWarning,
+				Code:     "fivem-unregistered-net-event",
+				Message:  fmt.Sprintf("Network event '%s' triggered but no RegisterNetEvent found in this resource", ev.Name),
+			})
+		}
+	}
+}
+
+// diagFiveMEventDirection scans for TriggerServerEvent/TriggerClientEvent calls
+// that are used in the wrong direction for the current resource (server/client).
+// It warns when a server script uses TriggerServerEvent or a client script uses
+// TriggerClientEvent, suggesting to use TriggerEvent for local events.
+func (s *Server) diagFiveMEventDirection(doc *Document) {
+	if doc == nil {
+		return
+	}
+	if !s.FeatureFiveM || !s.DiagFiveMEventDirection {
+		return
+	}
+
+	// Determine the resource this document belongs to
+	profile := s.getDocumentFiveMProfile(doc)
+	if !profile.HasResource() {
+		return
+	}
+
+	// Iterate events in this document
+	for _, ev := range doc.FiveMEvents {
+		// Only warn on directioned events; ignore local-only or wildcard-ish names
+		if ev.Kind != FiveMEventTriggerServer && ev.Kind != FiveMEventTriggerClient {
+			continue
+		}
+		// Determine the environment for this document
+		env := profile.Env()
+		// Skip shared resources
+		if env == EnvShared {
+			continue
+		}
+		// Skip empty or wildcard names
+		if ev.Name == "" || ev.Name == "*" {
+			continue
+		}
+		// Skip known built-in events to avoid noise
+		if _, ok := EventsBuiltin[ev.Name]; ok {
+			continue
+		}
+
+		// Compute diagnostic range
+		diagRange := getNodeRange(doc.Tree, ev.NodeID)
+		if ev.NodeID == ast.InvalidNode {
+			// Fallback to file root if we don't have a specific node range
+			diagRange = Range{Start: Position{Line: 0, Character: 0}, End: Position{Line: 0, Character: 0}}
+		}
+
+		// Emit a diagnostic depending on the direction and environment
+		if ev.Kind == FiveMEventTriggerServer && env == EnvServer {
+			s.diagBuf = append(s.diagBuf, Diagnostic{
+				Range:    diagRange,
+				Severity: SeverityWarning,
+				Code:     "fivem-event-direction",
+				Message:  "TriggerServerEvent in server script — use TriggerEvent for local events",
+			})
+		} else if ev.Kind == FiveMEventTriggerClient && env == EnvClient {
+			s.diagBuf = append(s.diagBuf, Diagnostic{
+				Range:    diagRange,
+				Severity: SeverityWarning,
+				Code:     "fivem-event-direction",
+				Message:  "TriggerClientEvent in client script — use TriggerEvent for local events",
+			})
+		}
+	}
+}
+
+// diagFiveMUnknownEvent scans for AddEventHandler registrations that reference
+// events which have no built-in definition and no existing TriggerEvent/Trigger* in
+// the workspace. It emits an INFORMATION-level diagnostic for such events.
+func (s *Server) diagFiveMUnknownEvent(doc *Document) {
+	if doc == nil {
+		return
+	}
+	if !s.FeatureFiveM {
+		return
+	}
+	if !s.DiagFiveMUnknownEvent {
+		return
+	}
+
+	for _, ev := range doc.FiveMEvents {
+		if ev.Kind != FiveMEventAddHandler {
+			continue
+		}
+		name := ev.Name
+		if name == "" || name == "*" {
+			continue
+		}
+		// If it's a built-in event, don't warn
+		if _, ok := EventsBuiltin[name]; ok {
+			continue
+		}
+
+		// Check if any document defines a Trigger for this event
+		foundTrigger := false
+		for _, other := range s.Documents {
+			if other == nil {
+				continue
+			}
+			for _, oe := range other.FiveMEvents {
+				if oe.Kind == FiveMEventTriggerLocal || oe.Kind == FiveMEventTriggerServer || oe.Kind == FiveMEventTriggerClient {
+					if oe.Name == name {
+						foundTrigger = true
+						break
+					}
+				}
+			}
+			if foundTrigger {
+				break
+			}
+		}
+
+		if !foundTrigger {
+			s.diagBuf = append(s.diagBuf, Diagnostic{
+				Range:    getNodeRange(doc.Tree, ev.NodeID),
+				Severity: SeverityHint,
+				Code:     "fivem-unknown-event",
+				Message:  fmt.Sprintf("Unknown event '%s' — no trigger or built-in definition found", name),
+			})
+		}
+	}
 }

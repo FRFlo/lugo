@@ -215,6 +215,7 @@ func (s *Server) handleDidChangeWatchedFiles(req Request) {
 							if strings.HasPrefix(dURI, root+"/") || dURI == root {
 								d.FiveMProfile = FiveMExecutionProfile{}
 								d.FiveMProfileCached = false
+								d.FiveMEvents = d.FiveMEvents[:0]
 							}
 						}
 						// Do not continue scanning other roots after invalidation
@@ -711,6 +712,7 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 	doc.IsMeta = false
 	doc.FiveMProfile = FiveMExecutionProfile{}
 	doc.FiveMProfileCached = false
+	doc.FiveMEvents = doc.FiveMEvents[:0]
 
 	for _, c := range tree.Comments {
 		if bytes.Contains(tree.Source[c.Start:c.End], []byte("@meta")) {
@@ -761,6 +763,59 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 									NodeID: arg2ID,
 								})
 							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if s.FeatureFiveM {
+		doc.FiveMEvents = doc.FiveMEvents[:0]
+
+		for i := 1; i < len(tree.Nodes); i++ {
+			node := tree.Nodes[i]
+			if node.Kind == ast.KindCallExpr && int(node.Left) < len(tree.Nodes) {
+				leftNode := tree.Nodes[node.Left]
+				if leftNode.Kind == ast.KindIdent && doc.Resolver.References[node.Left] == ast.InvalidNode {
+					src := doc.Source()
+					ident := src[leftNode.Start:leftNode.End]
+
+					var kind FiveMEventKind
+					matched := true
+
+					switch {
+					case bytes.Equal(ident, []byte("AddEventHandler")):
+						kind = FiveMEventAddHandler
+					case bytes.Equal(ident, []byte("RegisterNetEvent")):
+						kind = FiveMEventRegisterNet
+					case bytes.Equal(ident, []byte("TriggerEvent")):
+						kind = FiveMEventTriggerLocal
+					case bytes.Equal(ident, []byte("TriggerServerEvent")):
+						kind = FiveMEventTriggerServer
+					case bytes.Equal(ident, []byte("TriggerClientEvent")):
+						kind = FiveMEventTriggerClient
+					default:
+						matched = false
+					}
+
+					if matched && node.Count >= 1 && node.Extra < uint32(len(tree.ExtraList)) {
+						arg1ID := tree.ExtraList[node.Extra]
+						if int(arg1ID) < len(tree.Nodes) && tree.Nodes[arg1ID].Kind == ast.KindString {
+							eventName := unquoteLuaString(string(src[tree.Nodes[arg1ID].Start:tree.Nodes[arg1ID].End]))
+
+							info := FiveMEventInfo{
+								Name:   eventName,
+								Kind:   kind,
+								NodeID: arg1ID,
+							}
+
+							// For AddEventHandler and RegisterNetEvent, record handler NodeID (second arg)
+							if (kind == FiveMEventAddHandler || kind == FiveMEventRegisterNet) && node.Count >= 2 && node.Extra+1 < uint32(len(tree.ExtraList)) {
+								info.HandlerID = tree.ExtraList[node.Extra+1]
+							}
+
+							doc.FiveMEvents = append(doc.FiveMEvents, info)
 						}
 					}
 				}
@@ -1241,6 +1296,9 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 				if strings.HasPrefix(dUri, res.RootURI) {
 					d.FiveMProfile = FiveMExecutionProfile{}
 					d.FiveMProfileCached = false
+					if oldRes != nil {
+						d.FiveMEvents = d.FiveMEvents[:0]
+					}
 				}
 			}
 
