@@ -1,8 +1,8 @@
 {
     "name": "lugo-vscode",
-    "displayName": "Lugo - Lua LSP",
-    "description": "A high-performance, zero-allocation Lua 5.4 parser and Language Server (LSP).",
-    "publisher": "coalaura",
+    "displayName": "Lugo - Lua LSP (FiveM Enhanced)",
+    "description": "A high-performance, zero-allocation Lua 5.4 parser and Language Server (LSP) with FiveM enhanced support.",
+    "publisher": "frflo",
     "icon": "logo.png",
     "version": "1.0.0",
     "galleryBanner": {
@@ -11,7 +11,7 @@
     },
     "repository": {
         "type": "git",
-        "url": "https://github.com/coalaura/lugo.git"
+        "url": "https://github.com/frflo/lugo.git"
     },
     "engines": {
         "vscode": "^1.80.0"
