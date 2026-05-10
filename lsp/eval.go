@@ -23,7 +23,7 @@ func (doc *Document) FindEvaluableParent(offset uint32) (uint32, uint32, string,
 	curr := doc.Tree.NodeAt(offset)
 
 	var (
-		highestEvalNode ast.NodeID = ast.InvalidNode
+		highestEvalNode = ast.InvalidNode
 		highestVal      string
 	)
 
@@ -76,7 +76,7 @@ func (doc *Document) findPartialEval(offset uint32) (uint32, uint32, string, boo
 	}
 
 	var (
-		chainRoot ast.NodeID = ast.InvalidNode
+		chainRoot = ast.InvalidNode
 		chainOp   token.Kind
 	)
 
@@ -273,7 +273,7 @@ func (doc *Document) evalNode(id ast.NodeID, depth int) (evalResult, bool) {
 	case ast.KindParenExpr:
 		return doc.evalNode(node.Left, depth+1)
 	case ast.KindIdent:
-		defID := doc.Resolver.References[id]
+		defID := doc.referenceAt(id)
 		if defID != ast.InvalidNode {
 			if int(defID) < len(doc.MutatedLocals) && doc.MutatedLocals[defID] {
 				return evalResult{}, false

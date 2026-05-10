@@ -749,7 +749,7 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 			node := tree.Nodes[i]
 			if node.Kind == ast.KindCallExpr && int(node.Left) < len(tree.Nodes) {
 				leftNode := tree.Nodes[node.Left]
-				if leftNode.Kind == ast.KindIdent && doc.Resolver.References[node.Left] == ast.InvalidNode {
+				if leftNode.Kind == ast.KindIdent && doc.referenceAt(node.Left) == ast.InvalidNode {
 					if bytes.Equal(doc.Source()[leftNode.Start:leftNode.End], []byte("exports")) {
 						if node.Count >= 2 && node.Extra+1 < uint32(len(tree.ExtraList)) {
 							arg1ID := tree.ExtraList[node.Extra]
@@ -777,7 +777,7 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 			node := tree.Nodes[i]
 			if node.Kind == ast.KindCallExpr && int(node.Left) < len(tree.Nodes) {
 				leftNode := tree.Nodes[node.Left]
-				if leftNode.Kind == ast.KindIdent && doc.Resolver.References[node.Left] == ast.InvalidNode {
+				if leftNode.Kind == ast.KindIdent && doc.referenceAt(node.Left) == ast.InvalidNode {
 					src := doc.Source()
 					ident := src[leftNode.Start:leftNode.End]
 
@@ -893,7 +893,7 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 
 		luadoc := parseLuaDoc(cleaned, s.FeatureFormatAlerts)
 
-		var virtualNodeID ast.NodeID = ast.InvalidNode
+		var virtualNodeID = ast.InvalidNode
 
 		if luadoc.Export != "" && s.FeatureFiveM {
 			virtualNodeID = ast.NodeID(len(tree.Nodes))
@@ -970,7 +970,7 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 
 					fieldVirtualNodeID := ast.NodeID(len(tree.Nodes))
 
-					var kind ast.NodeKind = ast.KindIdent
+					var kind = ast.KindIdent
 					if strings.Contains(field.Type, "fun") || strings.Contains(field.Type, "function") {
 						kind = ast.KindFunctionExpr
 					}
@@ -988,6 +988,12 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 		}
 
 		i = nextIdx
+	}
+
+	if missing := len(tree.Nodes) - len(res.References); missing > 0 {
+		for i := 0; i < missing; i++ {
+			res.References = append(res.References, ast.InvalidNode)
+		}
 	}
 
 	for _, defID := range res.GlobalDefs {
@@ -1024,7 +1030,7 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 			valNode := tree.Nodes[valID]
 
 			if valNode.Kind == ast.KindIdent {
-				localDefID := doc.Resolver.References[valID]
+				localDefID := doc.referenceAt(valID)
 
 				if localDefID != ast.InvalidNode {
 					localName := doc.Source()[doc.Tree.Nodes[localDefID].Start:doc.Tree.Nodes[localDefID].End]
@@ -1128,7 +1134,7 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 
 		exportNode := doc.Tree.Nodes[doc.ExportedNode]
 		if exportNode.Kind == ast.KindIdent {
-			exportDef := doc.Resolver.References[doc.ExportedNode]
+			exportDef := doc.referenceAt(doc.ExportedNode)
 			if exportDef != ast.InvalidNode {
 				exportDefNode := doc.Tree.Nodes[exportDef]
 				exportHash := ast.HashBytes(doc.Source()[exportDefNode.Start:exportDefNode.End])

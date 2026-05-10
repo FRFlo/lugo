@@ -378,7 +378,7 @@ func (s *Server) handleHover(req Request) {
 						} else {
 							code = ctx.DisplayName + valStr
 						}
-					} else if ctx.TargetURI == uri && ctx.TargetDefID == doc.Resolver.References[ctx.IdentNodeID] {
+					} else if ctx.TargetURI == uri && ctx.TargetDefID == doc.referenceAt(ctx.IdentNodeID) {
 						var attrStr string
 
 						if ast.Attr(ctx.TargetDoc.Tree.Nodes[ctx.TargetDefID].Extra) == ast.AttrConst {
@@ -849,7 +849,7 @@ func (s *Server) handleCompletion(req Request) {
 				if pNode.Kind == ast.KindIndexExpr && pNode.Right == currID {
 					if doc.Tree.Nodes[pNode.Left].Kind == ast.KindIdent {
 						identName := doc.Source()[doc.Tree.Nodes[pNode.Left].Start:doc.Tree.Nodes[pNode.Left].End]
-						if bytes.Equal(identName, []byte("exports")) && doc.Resolver.References[pNode.Left] == ast.InvalidNode {
+						if bytes.Equal(identName, []byte("exports")) && doc.referenceAt(pNode.Left) == ast.InvalidNode {
 							for _, name := range s.getFiveMResourceNames() {
 								addCompletion(name, FieldCompletion, "resource", false, "1", name, PlainTextTextFormat)
 							}
@@ -1031,7 +1031,7 @@ func (s *Server) handleCompletion(req Request) {
 			}
 		}
 
-		var recDef ast.NodeID = ast.InvalidNode
+		var recDef = ast.InvalidNode
 
 		if len(rootName) > 0 {
 			for name, defID := range doc.LocalsAt(offset) {
@@ -1379,7 +1379,7 @@ func (s *Server) handleCompletion(req Request) {
 					if pNode.Kind == ast.KindIndexExpr && pNode.Right == currID {
 						if int(pNode.Left) < len(doc.Tree.Nodes) && doc.Tree.Nodes[pNode.Left].Kind == ast.KindIdent {
 							identName := doc.Source()[doc.Tree.Nodes[pNode.Left].Start:doc.Tree.Nodes[pNode.Left].End]
-							if bytes.Equal(identName, []byte("exports")) && doc.Resolver.References[pNode.Left] == ast.InvalidNode {
+							if bytes.Equal(identName, []byte("exports")) && doc.referenceAt(pNode.Left) == ast.InvalidNode {
 								for _, name := range s.getFiveMResourceNames() {
 									addCompletion(name, FieldCompletion, "resource", false, "1", name, PlainTextTextFormat)
 								}
@@ -1447,7 +1447,7 @@ func (s *Server) handleSignatureHelp(req Request) {
 		return
 	}
 
-	var callID ast.NodeID = ast.InvalidNode
+	var callID = ast.InvalidNode
 
 	curr := doc.Tree.NodeAt(offset)
 
@@ -1550,7 +1550,7 @@ func (s *Server) handleSignatureHelp(req Request) {
 	var (
 		signatures     []SignatureInformation
 		bestSigIndex   int
-		bestMatchScore int = -1
+		bestMatchScore = -1
 	)
 
 	for _, def := range defs {
@@ -2123,7 +2123,7 @@ func (s *Server) handleSemanticTokensFull(req Request) {
 
 			identBytes := doc.Source()[node.Start:node.End]
 
-			defID := doc.Resolver.References[i]
+			defID := doc.referenceAt(ast.NodeID(i))
 			isDecl := ast.NodeID(i) == defID
 
 			if isDecl {

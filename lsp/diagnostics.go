@@ -166,7 +166,7 @@ func (s *Server) publishDiagnostics(uri string) {
 			if exportBridgeProfile.Kind == FiveMProfileExportBridge && (node.Kind == ast.KindMemberExpr || node.Kind == ast.KindIndexExpr) {
 				if doc.Tree.Nodes[node.Left].Kind == ast.KindIdent {
 					leftNode := doc.Tree.Nodes[node.Left]
-					if bytes.Equal(doc.Source()[leftNode.Start:leftNode.End], []byte("exports")) && doc.Resolver.References[node.Left] == ast.InvalidNode {
+					if bytes.Equal(doc.Source()[leftNode.Start:leftNode.End], []byte("exports")) && doc.referenceAt(node.Left) == ast.InvalidNode {
 						var (
 							resName string
 							errNode ast.NodeID
@@ -615,7 +615,7 @@ func (s *Server) publishDiagnostics(uri string) {
 
 		// Check unresolved global field accesses
 		for _, pf := range doc.Resolver.PendingFields {
-			if doc.Resolver.References[pf.PropNodeID] == ast.InvalidNode && pf.ReceiverHash != 0 {
+			if doc.referenceAt(pf.PropNodeID) == ast.InvalidNode && pf.ReceiverHash != 0 {
 				if syms, ok := s.getGlobalSymbols(doc, pf.ReceiverHash, pf.PropHash); ok && len(syms) > 0 && syms[0].NodeID != ast.InvalidNode {
 					sym := syms[0]
 					if sym.IsDeprecated {
@@ -805,7 +805,7 @@ func (s *Server) publishDiagnostics(uri string) {
 				for j := uint16(0); j < lhsList.Count; j++ {
 					lhsID := doc.Tree.ExtraList[lhsList.Extra+uint32(j)]
 					if doc.Tree.Nodes[lhsID].Kind == ast.KindIdent {
-						defID := doc.Resolver.References[lhsID]
+						defID := doc.referenceAt(lhsID)
 						if isLoopVariable(doc.Tree, defID) {
 							s.diagBuf = append(s.diagBuf, Diagnostic{
 								Range:    getNodeRange(doc.Tree, lhsID),
@@ -1863,7 +1863,7 @@ func (s *Server) getRootDef(doc *Document, exprID ast.NodeID) ast.NodeID {
 
 		switch node.Kind {
 		case ast.KindIdent:
-			return doc.Resolver.References[curr]
+			return doc.referenceAt(curr)
 		case ast.KindMemberExpr, ast.KindIndexExpr:
 			curr = node.Left
 		default:

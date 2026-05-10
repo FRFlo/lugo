@@ -74,6 +74,14 @@ func (doc *Document) nodeSource(id ast.NodeID) []byte {
 	return doc.sourceSlice(node.Start, node.End)
 }
 
+func (doc *Document) referenceAt(id ast.NodeID) ast.NodeID {
+	if doc == nil || doc.Resolver == nil || id == ast.InvalidNode || int(id) >= len(doc.Resolver.References) {
+		return ast.InvalidNode
+	}
+
+	return doc.Resolver.References[id]
+}
+
 func (doc *Document) parseDiagnosticPragmas() {
 	doc.DiagPragmas.FileDisabled = make(map[string]bool)
 	doc.DiagPragmas.LineDisabled = make(map[uint32]map[string]bool)
@@ -520,7 +528,7 @@ func (doc *Document) LocalsAt(offset uint32) iter.Seq2[[]byte, ast.NodeID] {
 					}
 				}
 			case ast.KindFunctionExpr, ast.KindFunctionStmt:
-				var funcExpr ast.NodeID = curr
+				var funcExpr = curr
 
 				if node.Kind == ast.KindFunctionStmt {
 					funcExpr = node.Right

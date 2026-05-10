@@ -1,6 +1,7 @@
 package lsp
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -128,4 +129,94 @@ return TriggerServerEvent(--[[@plain_signature]]'plain:event'), plainCompletion
 	if token == nil || token.TokenType != 0 || token.Modifiers&(1<<3) != 0 {
 		t.Fatalf("plain exports semantic token = %+v, want plain variable without defaultLibrary modifier", token)
 	}
+}
+
+func TestSemanticTokensWithLuaDocVirtualNodes(t *testing.T) {
+	h := newFiveMFixtureHarness(t, "plain_lua")
+	h.writeWorkspaceFile("luadoc_virtual.lua", `---@class MyClass
+---@field public id number
+local instance = {}
+
+return instance
+`)
+	h.reindex()
+
+	_ = h.semanticTokens("luadoc_virtual.lua")
+
+	uri := h.server.pathToURI(filepath.Join(h.root, "luadoc_virtual.lua"))
+	doc := h.server.Documents[uri]
+	if doc == nil {
+		t.Fatal("luadoc_virtual document missing after reindex")
+	}
+
+	if got, want := len(doc.Resolver.References), len(doc.Tree.Nodes); got != want {
+		t.Fatalf("resolver references len = %d, want %d to match tree nodes after LuaDoc virtual node injection", got, want)
+	}
+}
+
+func TestLuaDocVirtualNodesOpenFileFeatureSweep(t *testing.T) {
+	h := newFiveMFixtureHarness(t, "plain_lua")
+	h.writeWorkspaceFile("luadoc_virtual.lua", `---@class MyClass
+---@field public id number
+local instance = {}
+
+return instance
+`)
+	h.reindex()
+
+	uri := h.server.pathToURI(filepath.Join(h.root, "luadoc_virtual.lua"))
+	fullRange := Range{
+		Start: Position{Line: 0, Character: 0},
+		End:   Position{Line: 100, Character: 0},
+	}
+
+	decodeResult := func(body []byte, out any, label string) {
+		t.Helper()
+
+		var envelope struct {
+			Result json.RawMessage `json:"result"`
+		}
+
+		if err := json.Unmarshal(body, &envelope); err != nil {
+			t.Fatalf("decode %s envelope: %v", label, err)
+		}
+
+		if out != nil {
+			if err := json.Unmarshal(envelope.Result, out); err != nil {
+				t.Fatalf("decode %s payload: %v", label, err)
+			}
+		}
+	}
+
+	_ = h.semanticTokens("luadoc_virtual.lua")
+	_ = h.diagnostics("luadoc_virtual.lua")
+	_ = h.codeLenses("luadoc_virtual.lua")
+	_ = h.codeActions("luadoc_virtual.lua", fullRange, nil)
+
+	docSymbolParams, err := json.Marshal(DocumentSymbolParams{TextDocument: TextDocumentIdentifier{URI: uri}})
+	if err != nil {
+		t.Fatalf("marshal document symbol params: %v", err)
+	}
+	h.resetRPC()
+	h.server.handleDocumentSymbol(Request{RPC: "2.0", ID: 1, Params: docSymbolParams})
+	var symbols []DocumentSymbol
+	decodeResult(h.lastResponse(1), &symbols, "document symbols")
+
+	foldingParams, err := json.Marshal(FoldingRangeParams{TextDocument: TextDocumentIdentifier{URI: uri}})
+	if err != nil {
+		t.Fatalf("marshal folding range params: %v", err)
+	}
+	h.resetRPC()
+	h.server.handleFoldingRange(Request{RPC: "2.0", ID: 1, Params: foldingParams})
+	var folding []FoldingRange
+	decodeResult(h.lastResponse(1), &folding, "folding ranges")
+
+	inlayParams, err := json.Marshal(InlayHintParams{TextDocument: TextDocumentIdentifier{URI: uri}, Range: fullRange})
+	if err != nil {
+		t.Fatalf("marshal inlay hint params: %v", err)
+	}
+	h.resetRPC()
+	h.server.handleInlayHint(Request{RPC: "2.0", ID: 1, Params: inlayParams})
+	var hints []InlayHint
+	decodeResult(h.lastResponse(1), &hints, "inlay hints")
 }

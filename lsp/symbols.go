@@ -827,7 +827,7 @@ func (s *Server) resolveSymbolNode(uri string, doc *Document, nodeID ast.NodeID)
 		displayName = "<error>"
 	}
 
-	defID := doc.Resolver.References[nodeID]
+	defID := doc.referenceAt(nodeID)
 	parentID := identNode.Parent
 
 	var (
@@ -864,7 +864,7 @@ func (s *Server) resolveSymbolNode(uri string, doc *Document, nodeID ast.NodeID)
 					n := doc.Tree.Nodes[curr]
 
 					if n.Kind == ast.KindIdent {
-						recDef = doc.Resolver.References[curr]
+						recDef = doc.referenceAt(curr)
 
 						break
 					} else if n.Kind == ast.KindMemberExpr {
@@ -1094,7 +1094,7 @@ func (s *Server) getFiveMExportResource(doc *Document, nodeID ast.NodeID) string
 			if leftNode.Start <= leftNode.End && leftNode.End <= uint32(len(doc.Source())) {
 				leftName := doc.Source()[leftNode.Start:leftNode.End]
 
-				if bytes.Equal(leftName, []byte("exports")) && doc.Resolver.References[node.Left] == ast.InvalidNode {
+				if bytes.Equal(leftName, []byte("exports")) && doc.referenceAt(node.Left) == ast.InvalidNode {
 					if int(node.Right) < len(doc.Tree.Nodes) {
 						rightNode := doc.Tree.Nodes[node.Right]
 
@@ -1113,7 +1113,7 @@ func (s *Server) getFiveMExportResource(doc *Document, nodeID ast.NodeID) string
 			if leftNode.Start <= leftNode.End && leftNode.End <= uint32(len(doc.Source())) {
 				leftName := doc.Source()[leftNode.Start:leftNode.End]
 
-				if bytes.Equal(leftName, []byte("exports")) && doc.Resolver.References[node.Left] == ast.InvalidNode {
+				if bytes.Equal(leftName, []byte("exports")) && doc.referenceAt(node.Left) == ast.InvalidNode {
 					if int(node.Right) < len(doc.Tree.Nodes) {
 						rightNode := doc.Tree.Nodes[node.Right]
 
@@ -1535,7 +1535,7 @@ func (s *Server) iterateGlobalReferences(ctx *SymbolContext) iter.Seq[GlobalRefe
 
 				for _, id := range dDoc.Resolver.GlobalRefs {
 					if ast.HashBytes(src[dDoc.Tree.Nodes[id].Start:dDoc.Tree.Nodes[id].End]) == ctx.GKey.PropHash {
-						if dDoc.Resolver.References[id] == ast.InvalidNode {
+						if dDoc.referenceAt(id) == ast.InvalidNode {
 							if !yield(GlobalReference{Doc: dDoc, URI: dUri, NodeID: id}) {
 								return
 							}
@@ -1553,7 +1553,7 @@ func (s *Server) iterateGlobalReferences(ctx *SymbolContext) iter.Seq[GlobalRefe
 
 				for _, pf := range dDoc.Resolver.PendingFields {
 					if pf.ReceiverHash == ctx.GKey.ReceiverHash && pf.PropHash == ctx.GKey.PropHash {
-						if dDoc.Resolver.References[pf.PropNodeID] == ast.InvalidNode {
+						if dDoc.referenceAt(pf.PropNodeID) == ast.InvalidNode {
 							if !yield(GlobalReference{Doc: dDoc, URI: dUri, NodeID: pf.PropNodeID}) {
 								return
 							}
@@ -1771,7 +1771,7 @@ func (s *Server) getGlobalAlias(hash uint64) uint64 {
 	node := doc.Tree.Nodes[valID]
 
 	if node.Kind == ast.KindIdent || node.Kind == ast.KindMemberExpr {
-		if node.Kind == ast.KindIdent && doc.Resolver.References[valID] != ast.InvalidNode {
+		if node.Kind == ast.KindIdent && doc.referenceAt(valID) != ast.InvalidNode {
 			return 0
 		}
 
@@ -1795,7 +1795,7 @@ func (s *Server) getGlobalPath(doc *Document, id ast.NodeID, depth int) []byte {
 
 	switch node.Kind {
 	case ast.KindIdent:
-		defID := doc.Resolver.References[id]
+		defID := doc.referenceAt(id)
 		if defID == ast.InvalidNode {
 			if node.Start <= node.End && node.End <= uint32(len(doc.Source())) {
 				return doc.Source()[node.Start:node.End]

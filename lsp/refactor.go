@@ -175,7 +175,7 @@ func (s *Server) handleCodeAction(req Request) {
 			offset := doc.Tree.Offset(diag.Range.Start.Line, diag.Range.Start.Character)
 			defID := doc.Tree.NodeAt(offset)
 
-			if defID != ast.InvalidNode && int(defID) < len(doc.Tree.Nodes) && doc.Resolver.References[defID] == defID {
+			if defID != ast.InvalidNode && int(defID) < len(doc.Tree.Nodes) && doc.referenceAt(defID) == defID {
 				node := doc.Tree.Nodes[defID]
 				nameBytes := doc.Source()[node.Start:node.End]
 				baseName := string(nameBytes)
@@ -283,21 +283,21 @@ func (s *Server) handleCodeAction(req Request) {
 	}
 
 	var (
-		targetIf            ast.NodeID = ast.InvalidNode
-		targetCond          ast.NodeID = ast.InvalidNode
+		targetIf            = ast.InvalidNode
+		targetCond          = ast.InvalidNode
 		condTitle           string
-		targetTableInsert   ast.NodeID = ast.InvalidNode
-		targetMethod        ast.NodeID = ast.InvalidNode
-		targetNestedIf      ast.NodeID = ast.InvalidNode
+		targetTableInsert   = ast.InvalidNode
+		targetMethod        = ast.InvalidNode
+		targetNestedIf      = ast.InvalidNode
 		nestedIfTitle       string
-		targetMultiAssign   ast.NodeID = ast.InvalidNode
-		targetSwapIfElse    ast.NodeID = ast.InvalidNode
-		targetParen         ast.NodeID = ast.InvalidNode
-		targetForNum        ast.NodeID = ast.InvalidNode
+		targetMultiAssign   = ast.InvalidNode
+		targetSwapIfElse    = ast.InvalidNode
+		targetParen         = ast.InvalidNode
+		targetForNum        = ast.InvalidNode
 		forNumTable         string
-		targetIndexToMember ast.NodeID = ast.InvalidNode
+		targetIndexToMember = ast.InvalidNode
 		indexToMemberStr    string
-		targetMemberToIndex ast.NodeID = ast.InvalidNode
+		targetMemberToIndex = ast.InvalidNode
 	)
 
 	cursorLine := params.Range.Start.Line
@@ -439,7 +439,7 @@ func (s *Server) handleCodeAction(req Request) {
 
 							for i := uint16(0); i < lhsList.Count && canSplit; i++ {
 								lhsID := doc.Tree.ExtraList[lhsList.Extra+uint32(i)]
-								defID := doc.Resolver.References[lhsID]
+								defID := doc.referenceAt(lhsID)
 
 								if defID != ast.InvalidNode {
 									for j := uint16(0); j < rhsList.Count && canSplit; j++ {
@@ -1458,7 +1458,7 @@ func (s *Server) handleRename(req Request) {
 					node := dDoc.Tree.Nodes[id]
 
 					if ast.HashBytes(dDoc.Source()[node.Start:node.End]) == ctx.GKey.PropHash {
-						if dDoc.Resolver.References[id] == ast.InvalidNode {
+						if dDoc.referenceAt(id) == ast.InvalidNode {
 							addEdit(dDoc, dUri, id)
 						}
 					}
@@ -1472,7 +1472,7 @@ func (s *Server) handleRename(req Request) {
 
 				for _, pf := range dDoc.Resolver.PendingFields {
 					if pf.ReceiverHash == ctx.GKey.ReceiverHash && pf.PropHash == ctx.GKey.PropHash {
-						if dDoc.Resolver.References[pf.PropNodeID] == ast.InvalidNode {
+						if dDoc.referenceAt(pf.PropNodeID) == ast.InvalidNode {
 							addEdit(dDoc, dUri, pf.PropNodeID)
 						}
 					}
@@ -2432,7 +2432,7 @@ func (s *Server) formatStatement(doc *Document, stmtID ast.NodeID, indent string
 
 	var (
 		hasElseIf bool
-		elseBlock ast.NodeID = ast.InvalidNode
+		elseBlock = ast.InvalidNode
 	)
 
 	for i := uint16(0); i < node.Count; i++ {
@@ -2478,7 +2478,7 @@ func (s *Server) formatStatement(doc *Document, stmtID ast.NodeID, indent string
 		out.WriteString(s.invertCondition(doc, node.Left))
 		out.WriteString(" then\n")
 
-		var lastEmitted ast.NodeID = ast.InvalidNode
+		var lastEmitted = ast.InvalidNode
 
 		if elseBlock != ast.InvalidNode {
 			elseNode := doc.Tree.Nodes[elseBlock]

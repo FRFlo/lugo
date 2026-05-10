@@ -91,14 +91,42 @@
                         "markdownDescription": "List of global variables to ignore when reporting undefined globals. Supports globs like `love.*`.",
                         "order": 3
                     },
-                    "lugo.workspace.maxFileSizeMB": {
-                        "type": "integer",
-                        "default": 4,
-                        "minimum": 1,
-                        "scope": "resource",
-                        "markdownDescription": "Maximum file size in megabytes to index. Files larger than this are ignored to prevent out-of-memory crashes.",
-                        "order": 4
-                    }
+                  "lugo.workspace.maxFileSizeMB": {
+                    "type": "integer",
+                    "default": 4,
+                    "minimum": 1,
+                    "scope": "resource",
+                    "markdownDescription": "Maximum file size in megabytes to index. Files larger than this are ignored to prevent out-of-memory crashes.",
+                    "order": 4
+                  },
+                  "lugo.debug.delve.enabled": {
+                    "type": "boolean",
+                    "default": false,
+                    "scope": "window",
+                    "markdownDescription": "Launch the Lugo language server through Delve so an external debugger such as GoLand can attach to it.",
+                    "order": 5
+                  },
+                  "lugo.debug.delve.path": {
+                    "type": "string",
+                    "default": "dlv",
+                    "scope": "window",
+                    "markdownDescription": "Path to the Delve executable used when `#lugo.debug.delve.enabled#` is on.",
+                    "order": 6
+                  },
+                  "lugo.debug.delve.listenAddress": {
+                    "type": "string",
+                    "default": "127.0.0.1:2345",
+                    "scope": "window",
+                    "markdownDescription": "Address Delve listens on for remote debugger attachment when Lugo is launched through Delve.",
+                    "order": 7
+                  },
+                  "lugo.debug.delve.log": {
+                    "type": "boolean",
+                    "default": false,
+                    "scope": "window",
+                    "markdownDescription": "Enable Delve logging while Lugo is running under the debugger.",
+                    "order": 8
+                  }
                 }
             },
             {

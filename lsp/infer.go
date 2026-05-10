@@ -330,8 +330,8 @@ func (doc *Document) InferType(id ast.NodeID) TypeSet {
 
 func (doc *Document) inferIdent(id ast.NodeID) TypeSet {
 	var (
-		targetDoc *Document  = doc
-		targetDef ast.NodeID = doc.Resolver.References[id]
+		targetDoc = doc
+		targetDef = doc.referenceAt(id)
 	)
 
 	localDefID := targetDef
@@ -449,7 +449,7 @@ func (doc *Document) inferFunctionParameter(defID, funcExprID ast.NodeID) TypeSe
 
 	grandParentNode := doc.Tree.Nodes[grandParentID]
 
-	var funcDefID ast.NodeID = ast.InvalidNode
+	var funcDefID = ast.InvalidNode
 
 	switch grandParentNode.Kind {
 	case ast.KindLocalFunction, ast.KindFunctionStmt:
@@ -590,7 +590,7 @@ func (doc *Document) inferLoopVariable(defID, nameListID ast.NodeID) TypeSet {
 		return TypeSet{}
 	}
 
-	if doc.Resolver.References[funcID] != ast.InvalidNode {
+	if doc.referenceAt(funcID) != ast.InvalidNode {
 		return TypeSet{}
 	}
 
@@ -877,7 +877,7 @@ func (doc *Document) inferCallExpr(node ast.Node) TypeSet {
 				metaURI := doc.URI
 
 				if doc.Tree.Nodes[arg2ID].Kind == ast.KindIdent {
-					defID := doc.Resolver.References[arg2ID]
+					defID := doc.referenceAt(arg2ID)
 					if defID != ast.InvalidNode {
 						valID := doc.getAssignedValue(defID)
 						if valID != ast.InvalidNode {
@@ -1046,7 +1046,7 @@ func (doc *Document) getDefForValue(valID ast.NodeID) ast.NodeID {
 							if grandParentNode.Kind == ast.KindLocalAssign {
 								return lhsID
 							}
-							return doc.Resolver.References[lhsID]
+							return doc.referenceAt(lhsID)
 						case ast.KindMemberExpr:
 							return doc.Tree.Nodes[lhsID].Right
 						case ast.KindIndexExpr:
@@ -1066,7 +1066,7 @@ func (doc *Document) getDefForValue(valID ast.NodeID) ast.NodeID {
 					return parentNode.Left
 				}
 
-				return doc.Resolver.References[parentNode.Left]
+				return doc.referenceAt(parentNode.Left)
 			case ast.KindMethodName, ast.KindMemberExpr:
 				return leftNode.Right
 			}
@@ -1110,7 +1110,7 @@ func (doc *Document) getIndexTable(metaNodeID ast.NodeID) (*Document, ast.NodeID
 		}
 
 		if doc.Tree.Nodes[indexValID].Kind == ast.KindIdent {
-			defID := doc.Resolver.References[indexValID]
+			defID := doc.referenceAt(indexValID)
 			if defID != ast.InvalidNode {
 				valID := doc.getAssignedValue(defID)
 				if valID != ast.InvalidNode && doc.Tree.Nodes[valID].Kind == ast.KindTableExpr {
