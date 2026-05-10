@@ -1162,7 +1162,7 @@ func (s *Server) isParenRedundant(doc *Document, id ast.NodeID) bool {
 	innerNode := doc.Tree.Nodes[innerID]
 	pNode := doc.Tree.Nodes[node.Parent]
 
-	if innerNode.Kind == ast.KindIdent || innerNode.Kind == ast.KindNumber || innerNode.Kind == ast.KindString || innerNode.Kind == ast.KindTrue || innerNode.Kind == ast.KindFalse || innerNode.Kind == ast.KindNil || innerNode.Kind == ast.KindTableExpr || innerNode.Kind == ast.KindFunctionExpr {
+	if innerNode.Kind == ast.KindIdent || innerNode.Kind == ast.KindNumber || innerNode.Kind == ast.KindString || innerNode.Kind == ast.KindHashedString || innerNode.Kind == ast.KindTrue || innerNode.Kind == ast.KindFalse || innerNode.Kind == ast.KindNil || innerNode.Kind == ast.KindTableExpr || innerNode.Kind == ast.KindFunctionExpr {
 		return true
 	}
 

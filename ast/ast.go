@@ -22,6 +22,7 @@ const (
 	KindIdent
 	KindNumber
 	KindString
+	KindHashedString
 	KindBinaryExpr // a + b
 	KindUnaryExpr  // -a
 	KindParenExpr
@@ -255,7 +256,7 @@ func (t *Tree) NodeAt(offset uint32) NodeID {
 
 		node := t.Nodes[curr]
 
-		var next NodeID = InvalidNode
+		var next = InvalidNode
 
 		check := func(childID NodeID) {
 			if childID != InvalidNode && next == InvalidNode {

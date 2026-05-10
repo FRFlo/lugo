@@ -2116,6 +2116,8 @@ func (s *Server) handleSemanticTokensFull(req Request) {
 			tokenType = 6
 		case ast.KindString:
 			tokenType = 7
+		case ast.KindHashedString:
+			tokenType = 9
 		case ast.KindTrue, ast.KindFalse, ast.KindNil:
 			tokenType = 8
 		case ast.KindIdent:

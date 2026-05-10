@@ -127,6 +127,18 @@ func (s *Server) publishDiagnostics(uri string) {
 		for i := 1; i < len(doc.Tree.Nodes); i++ {
 			node := doc.Tree.Nodes[i]
 
+			// Backtick strings are only valid in FiveM mode
+			if node.Kind == ast.KindHashedString && !s.FeatureFiveM {
+				s.diagBuf = append(s.diagBuf, Diagnostic{
+					Range:    getNodeRange(doc.Tree, ast.NodeID(i)),
+					Severity: SeverityError,
+					Code:     "fivem-hashed-string",
+					Message:  "Backtick hashed strings are only available when FiveM support is enabled.",
+				})
+
+				continue
+			}
+
 			// 1. Check for valid export access
 			if node.Kind == ast.KindMethodCall || node.Kind == ast.KindMemberExpr {
 				if resObj, exportRes := s.resolveFiveMExportResource(doc, node.Left); exportRes != "" {

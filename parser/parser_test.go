@@ -103,6 +103,10 @@ func TestParser_ValidSyntax(t *testing.T) {
 				local c = a == b and c ~= d or e
 			`,
 		},
+		{
+			name:  "Backtick Strings",
+			input: "local hash = `hello`\nprint(`world`)\nobj:method(`foo`)\nlocal x = `raw\\string`",
+		},
 	}
 
 	for _, tt := range tests {

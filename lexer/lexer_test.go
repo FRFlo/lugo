@@ -93,6 +93,14 @@ func TestLexer_Comprehensive(t *testing.T) {
 			},
 		},
 		{
+			name:  "Backtick Strings",
+			input: "`hello` `world` `foo bar`",
+			expected: []lexTest{
+				{token.BacktickString, "`hello`"}, {token.BacktickString, "`world`"},
+				{token.BacktickString, "`foo bar`"}, {token.EOF, ""},
+			},
+		},
+		{
 			name:  "Unterminated Strings and Comments",
 			input: `"unterminated string   `,
 			expected: []lexTest{

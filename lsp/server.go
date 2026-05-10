@@ -568,7 +568,7 @@ func (s *Server) handleInitialize(req Request) {
 			},
 			SemanticTokensProvider: &SemanticTokensOptions{
 				Legend: SemanticTokensLegend{
-					TokenTypes:     []string{"variable", "property", "parameter", "function", "method", "class", "number", "string", "keyword"},
+					TokenTypes:     []string{"variable", "property", "parameter", "function", "method", "class", "number", "string", "keyword", "regexp"},
 					TokenModifiers: []string{"declaration", "readonly", "deprecated", "defaultLibrary"},
 				},
 				Full: true,

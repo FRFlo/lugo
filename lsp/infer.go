@@ -232,6 +232,8 @@ func (doc *Document) InferType(id ast.NodeID) TypeSet {
 		typeSet.Basics = TypeNumber
 	case ast.KindString:
 		typeSet.Basics = TypeString
+	case ast.KindHashedString:
+		typeSet.Basics = TypeString
 	case ast.KindTrue, ast.KindFalse:
 		typeSet.Basics = TypeBoolean
 	case ast.KindNil:

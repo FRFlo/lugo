@@ -211,6 +211,8 @@ func (l *Lexer) Next() token.Token {
 		return token.Token{Kind: token.Dot, Start: start, End: l.cursor}
 	case '\'', '"':
 		return l.readString(start, ch)
+	case '`':
+		return l.readBacktickString(start)
 	case '[':
 		if l.ch == '[' || l.ch == '=' {
 			return l.readLongString(start)
@@ -400,6 +402,31 @@ func (l *Lexer) readString(start uint32, quote byte) token.Token {
 	}
 
 	return token.Token{Kind: token.String, Start: start, End: l.cursor}
+}
+
+func (l *Lexer) readBacktickString(start uint32) token.Token {
+	src := l.source
+	i := int(l.cursor)
+
+	for ; i < len(src); i++ {
+		if src[i] == '`' {
+			i++
+
+			break
+		}
+	}
+
+	l.cursor = uint32(i)
+
+	if i < len(src) {
+		l.ch = src[i]
+		l.read = uint32(i + 1)
+	} else {
+		l.ch = 0
+		l.read = uint32(i)
+	}
+
+	return token.Token{Kind: token.BacktickString, Start: start, End: l.cursor}
 }
 
 func (l *Lexer) readLongString(start uint32) token.Token {

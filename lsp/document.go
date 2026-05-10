@@ -178,7 +178,7 @@ func (doc *Document) getAssignedValue(id ast.NodeID) ast.NodeID {
 
 	if uint(id) < uint(len(doc.Tree.Nodes)) {
 		kind := doc.Tree.Nodes[id].Kind
-		if kind == ast.KindFunctionExpr || kind == ast.KindTableExpr || kind == ast.KindString || kind == ast.KindNumber || kind == ast.KindTrue || kind == ast.KindFalse || kind == ast.KindNil {
+		if kind == ast.KindFunctionExpr || kind == ast.KindTableExpr || kind == ast.KindString || kind == ast.KindHashedString || kind == ast.KindNumber || kind == ast.KindTrue || kind == ast.KindFalse || kind == ast.KindNil {
 			return id
 		}
 	}

@@ -17,6 +17,28 @@ type evalResult struct {
 	boolVal bool
 }
 
+// joaatHash computes the Jenkins One-at-a-Time hash used by FiveM's GetHashKey.
+// The input is lowercased before hashing to match FiveM behavior.
+func joaatHash(key []byte) uint32 {
+	var hash uint32
+
+	for _, b := range key {
+		if b >= 'A' && b <= 'Z' {
+			b += 'a' - 'A'
+		}
+
+		hash += uint32(b)
+		hash += hash << 10
+		hash ^= hash >> 6
+	}
+
+	hash += hash << 3
+	hash ^= hash >> 11
+	hash += hash << 15
+
+	return hash
+}
+
 // FindEvaluableParent climbs the AST from the cursor to find the highest
 // expression that can be statically evaluated.
 func (doc *Document) FindEvaluableParent(offset uint32) (uint32, uint32, string, bool) {
@@ -261,6 +283,16 @@ func (doc *Document) evalNode(id ast.NodeID, depth int) (evalResult, bool) {
 					return evalResult{kind: ast.KindString, str: raw[start:end]}, true
 				}
 			}
+		}
+
+		return evalResult{}, false
+	case ast.KindHashedString:
+		raw := ast.String(doc.Source()[node.Start:node.End])
+		if len(raw) >= 2 && raw[0] == '`' && raw[len(raw)-1] == '`' {
+			str := raw[1 : len(raw)-1]
+			hash := joaatHash([]byte(str))
+
+			return evalResult{kind: ast.KindNumber, num: float64(hash)}, true
 		}
 
 		return evalResult{}, false

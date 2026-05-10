@@ -143,7 +143,7 @@ func (f *Formatter) Format(doc *Document, formatRange *Range) []TextEdit {
 		isLineStart       = true
 		prevTok           token.Token
 		prevNonCommentTok token.Token
-		prevNonCommentIdx int = -1
+		prevNonCommentIdx = -1
 		prevPrev          token.Kind
 		lineIdx           int
 		lastStmtKind      StmtKind
@@ -703,7 +703,7 @@ func (f *Formatter) isFunctionSignatureEnd(tokens []token.Token, rParenIdx int) 
 }
 
 func (f *Formatter) isWord(k token.Kind) bool {
-	return (k >= token.And && k <= token.While) || k == token.Ident || k == token.Number || k == token.String
+	return (k >= token.And && k <= token.While) || k == token.Ident || k == token.Number || k == token.String || k == token.BacktickString
 }
 
 func (f *Formatter) isKeyword(k token.Kind) bool {
@@ -716,7 +716,7 @@ func (f *Formatter) isOperator(k token.Kind) bool {
 
 func (f *Formatter) isExprEnd(k token.Kind) bool {
 	switch k {
-	case token.Ident, token.Number, token.String, token.RParen, token.RBrack, token.RBrace, token.True, token.False, token.Nil, token.Vararg, token.End:
+	case token.Ident, token.Number, token.String, token.BacktickString, token.RParen, token.RBrack, token.RBrace, token.True, token.False, token.Nil, token.Vararg, token.End:
 		return true
 	}
 
@@ -786,8 +786,8 @@ func (f *Formatter) needsSpace(left, right token.Kind, leftOfLeft token.Kind) bo
 		return false
 	}
 
-	if right == token.LParen || right == token.LBrace || right == token.String {
-		if left == token.Ident || left == token.RParen || left == token.RBrack || left == token.RBrace || left == token.String || left == token.End {
+	if right == token.LParen || right == token.LBrace || right == token.String || right == token.BacktickString {
+		if left == token.Ident || left == token.RParen || left == token.RBrack || left == token.RBrace || left == token.String || left == token.BacktickString || left == token.End {
 			return false // print(), print{}, print""
 		}
 	}

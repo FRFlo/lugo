@@ -31,33 +31,34 @@ var (
 )
 
 var precedences = [256]int{
-	token.Or:         Or,
-	token.And:        And,
-	token.Less:       Comparison,
-	token.LessEq:     Comparison,
-	token.Greater:    Comparison,
-	token.GreaterEq:  Comparison,
-	token.Eq:         Comparison,
-	token.NotEq:      Comparison,
-	token.BitOr:      BitOr,
-	token.BitXor:     BitXor,
-	token.BitAnd:     BitAnd,
-	token.ShiftLeft:  BitShift,
-	token.ShiftRight: BitShift,
-	token.Concat:     Concat,
-	token.Plus:       Term,
-	token.Minus:      Term,
-	token.Asterisk:   Factor,
-	token.Slash:      Factor,
-	token.FloorSlash: Factor,
-	token.Modulo:     Factor,
-	token.Caret:      Power,
-	token.LParen:     CallIndex,
-	token.LBrack:     CallIndex,
-	token.Dot:        CallIndex,
-	token.String:     CallIndex,
-	token.LBrace:     CallIndex,
-	token.Colon:      CallIndex,
+	token.Or:             Or,
+	token.And:            And,
+	token.Less:           Comparison,
+	token.LessEq:         Comparison,
+	token.Greater:        Comparison,
+	token.GreaterEq:      Comparison,
+	token.Eq:             Comparison,
+	token.NotEq:          Comparison,
+	token.BitOr:          BitOr,
+	token.BitXor:         BitXor,
+	token.BitAnd:         BitAnd,
+	token.ShiftLeft:      BitShift,
+	token.ShiftRight:     BitShift,
+	token.Concat:         Concat,
+	token.Plus:           Term,
+	token.Minus:          Term,
+	token.Asterisk:       Factor,
+	token.Slash:          Factor,
+	token.FloorSlash:     Factor,
+	token.Modulo:         Factor,
+	token.Caret:          Power,
+	token.LParen:         CallIndex,
+	token.LBrack:         CallIndex,
+	token.Dot:            CallIndex,
+	token.String:         CallIndex,
+	token.BacktickString: CallIndex,
+	token.LBrace:         CallIndex,
+	token.Colon:          CallIndex,
 }
 
 type ParseError struct {
@@ -359,7 +360,7 @@ func (p *Parser) parseLocal() ast.NodeID {
 
 		p.nextToken()
 
-		var attr ast.Attr = ast.AttrNone
+		var attr = ast.AttrNone
 
 		if p.curr.Kind == token.Less && p.peek.Kind == token.Ident {
 			p.nextToken() // consume '<'
@@ -416,7 +417,7 @@ func (p *Parser) parseLocal() ast.NodeID {
 		Count: uint16(count),
 	})
 
-	var rhsList ast.NodeID = ast.InvalidNode
+	var rhsList = ast.InvalidNode
 
 	if p.curr.Kind == token.Assign {
 		p.nextToken() // consume '='
@@ -470,7 +471,7 @@ func (p *Parser) parseIf() ast.NodeID {
 		p.listStack = append(p.listStack, elseifNode)
 	}
 
-	var elseBlock ast.NodeID = ast.InvalidNode
+	var elseBlock = ast.InvalidNode
 
 	if p.curr.Kind == token.Else {
 		elseStart := p.curr.Start
@@ -510,7 +511,7 @@ func (p *Parser) parseReturn() ast.NodeID {
 
 	p.nextToken()
 
-	var exprList ast.NodeID = ast.InvalidNode
+	var exprList = ast.InvalidNode
 
 	if p.curr.Kind != token.End && p.curr.Kind != token.ElseIf && p.curr.Kind != token.Else && p.curr.Kind != token.Until && p.curr.Kind != token.EOF && p.curr.Kind != token.Semicolon {
 		exprList = p.parseExprList()
@@ -800,7 +801,7 @@ func (p *Parser) parseGoto() ast.NodeID {
 
 	p.nextToken()
 
-	var label ast.NodeID = ast.InvalidNode
+	var label = ast.InvalidNode
 
 	if p.curr.Kind == token.Ident {
 		label = p.tree.AddNode(ast.Node{Kind: ast.KindIdent, Start: p.curr.Start, End: p.curr.End})
@@ -818,7 +819,7 @@ func (p *Parser) parseLabel() ast.NodeID {
 
 	p.nextToken()
 
-	var name ast.NodeID = ast.InvalidNode
+	var name = ast.InvalidNode
 
 	if p.curr.Kind == token.Ident {
 		name = p.tree.AddNode(ast.Node{Kind: ast.KindIdent, Start: p.curr.Start, End: p.curr.End})
@@ -916,6 +917,10 @@ func (p *Parser) parsePrefix() ast.NodeID {
 		p.nextToken()
 	case token.String:
 		id = p.tree.AddNode(ast.Node{Kind: ast.KindString, Start: p.curr.Start, End: p.curr.End})
+
+		p.nextToken()
+	case token.BacktickString:
+		id = p.tree.AddNode(ast.Node{Kind: ast.KindHashedString, Start: p.curr.Start, End: p.curr.End})
 
 		p.nextToken()
 	case token.Nil:
@@ -1037,7 +1042,7 @@ func (p *Parser) parseInfix(left ast.NodeID) ast.NodeID {
 			Kind: ast.KindIndexExpr, Start: start, End: end,
 			Left: left, Right: right,
 		})
-	case token.LParen, token.String, token.LBrace:
+	case token.LParen, token.String, token.BacktickString, token.LBrace:
 		return p.parseCallArgs(left, opKind)
 	case token.Colon:
 		p.nextToken()
@@ -1052,7 +1057,7 @@ func (p *Parser) parseInfix(left ast.NodeID) ast.NodeID {
 
 		p.nextToken()
 
-		if p.curr.Kind != token.LParen && p.curr.Kind != token.String && p.curr.Kind != token.LBrace {
+		if p.curr.Kind != token.LParen && p.curr.Kind != token.String && p.curr.Kind != token.BacktickString && p.curr.Kind != token.LBrace {
 			p.error("expected function arguments")
 
 			return left

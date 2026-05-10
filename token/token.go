@@ -12,6 +12,7 @@ const (
 	Ident
 	Number
 	String
+	BacktickString
 
 	// Keywords (Lua 5.4)
 	And
