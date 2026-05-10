@@ -1,112 +1,13 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const {spawn} = require("node:child_process");
-const {Transform} = require("node:stream");
 const vscode = require("vscode");
 const { LanguageClient } = require("vscode-languageclient/node");
 
-let client, restarting, indexing, debounce, debugServerProcess;
+let client, restarting, indexing, debounce;
 
 const fiveMNativeCacheVersion = "v1";
 const fiveMNativeCacheFolderName = "fivem-native-bundles";
-
-function getDebugConfig() {
-    const lugoConfig = vscode.workspace.getConfiguration("lugo");
-
-    return {
-        enabled: lugoConfig.get("debug.delve.enabled") === true,
-        path: lugoConfig.get("debug.delve.path") || "dlv",
-        listenAddress: lugoConfig.get("debug.delve.listenAddress") || "127.0.0.1:2345",
-        log: lugoConfig.get("debug.delve.log") === true,
-    };
-}
-
-function createLSPStdoutFilter() {
-    let pending = Buffer.alloc(0),
-        protocolStarted = false;
-
-    return new Transform({
-        transform(chunk, encoding, callback) {
-            if (protocolStarted) {
-                callback(null, chunk);
-
-                return;
-            }
-
-            pending = Buffer.concat([pending, chunk]);
-
-            const protocolStart = pending.indexOf("Content-Length:");
-            if (protocolStart === -1) {
-                callback();
-
-                return;
-            }
-
-            protocolStarted = true;
-            callback(null, pending.subarray(protocolStart));
-        },
-    });
-}
-
-function stopDebugServerProcess() {
-    if (debugServerProcess && !debugServerProcess.killed) {
-        debugServerProcess.kill();
-    }
-
-    debugServerProcess = undefined;
-}
-
-function buildServerOptions(serverCommand) {
-    const debugConfig = getDebugConfig();
-
-    if (!debugConfig.enabled) {
-        return {
-            run: {command: serverCommand},
-            debug: {command: serverCommand},
-        };
-    }
-
-    const dlvArgs = [
-        "exec",
-        serverCommand,
-        `--listen=${debugConfig.listenAddress}`,
-        "--headless=true",
-        "--api-version=2",
-        "--accept-multiclient",
-        "--continue",
-    ];
-
-    if (debugConfig.log) {
-        dlvArgs.push("--log");
-    }
-
-    vscode.window.showInformationMessage(`Lugo LSP started via Delve on ${debugConfig.listenAddress}`);
-
-    const startViaDelve = () => {
-        stopDebugServerProcess();
-
-        debugServerProcess = spawn(debugConfig.path, dlvArgs, {
-            cwd: path.dirname(serverCommand),
-            stdio: ["pipe", "pipe", "pipe"],
-        });
-
-        debugServerProcess.stderr.on("data", data => {
-            console.error(`[Lugo Delve] ${data.toString().trimEnd()}`);
-        });
-
-        debugServerProcess.on("exit", () => {
-            debugServerProcess = undefined;
-        });
-
-        return Promise.resolve({
-            reader: debugServerProcess.stdout.pipe(createLSPStdoutFilter()),
-            writer: debugServerProcess.stdin,
-        });
-    };
-
-    return startViaDelve;
-}
 
 async function restartClient(context) {
 	if (restarting) {
@@ -119,8 +20,6 @@ async function restartClient(context) {
 		if (client) {
 			await client.stop();
 		}
-
-        stopDebugServerProcess();
 
 		await startClient(context);
 	} catch {}
@@ -358,7 +257,10 @@ async function startClient(context) {
 		return;
 	}
 
-    const serverOptions = buildServerOptions(serverCommand);
+	const serverOptions = {
+		run: {command: serverCommand},
+		debug: {command: serverCommand},
+	};
 
 	const clientOptions = {
 		documentSelector: [
@@ -406,8 +308,6 @@ function deactivate() {
 	if (debounce) {
 		clearTimeout(debounce);
 	}
-
-    stopDebugServerProcess();
 
 	if (!client) {
 		return undefined;
