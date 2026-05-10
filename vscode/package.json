@@ -1,5 +1,5 @@
 {
-    "name": "lugo-vscode",
+    "name": "lugo-vscode-fivem-enhanced",
     "displayName": "Lugo - Lua LSP (FiveM Enhanced)",
     "description": "A high-performance, zero-allocation Lua 5.4 parser and Language Server (LSP) with FiveM enhanced support.",
     "publisher": "frflo",
