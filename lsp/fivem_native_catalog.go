@@ -77,11 +77,7 @@ func (s *Server) ensureFiveMNativeSymbol(doc *Document, name string) bool {
 	}
 
 	key := GlobalKey{ReceiverHash: 0, PropHash: ast.HashBytes([]byte(name))}
-	syms, ok := s.GlobalIndex[key]
-	if !ok {
-		return false
-	}
-
+	syms := s.GlobalIndex.SymbolsByHash(key)
 	for _, sym := range syms {
 		tgtDoc, ok := s.Documents[sym.URI]
 		if !ok {

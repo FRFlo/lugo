@@ -1147,12 +1147,30 @@ func (s *Server) handleCompletion(req Request) {
 
 				validRecs[classHash] = true
 
-				classSyms, ok := s.GlobalIndex[GlobalKey{ReceiverHash: 0, PropHash: classHash}]
-				if !ok || len(classSyms) == 0 {
-					break
+				classKey := GlobalKey{ReceiverHash: 0, PropHash: classHash}
+				if s.GlobalIndex != nil {
+					var classSym *GlobalSymbol
+					for _, entry := range s.GlobalIndex.AllSymbols() {
+						if entry == nil || entry.Key != classKey {
+							continue
+						}
+
+						if tgtDoc, ok := s.Documents[entry.URI]; ok && s.canSeeSymbol(doc, tgtDoc) {
+							sym := globalSymbolFromEntry(entry)
+							classSym = &sym
+
+							break
+						}
+					}
+
+					if classSym != nil {
+						currClassName = classSym.Parent
+
+						continue
+					}
 				}
 
-				currClassName = classSyms[0].Parent
+				break
 			}
 		}
 
@@ -1254,47 +1272,62 @@ func (s *Server) handleCompletion(req Request) {
 			}
 		}
 
-		for key, syms := range s.GlobalIndex {
-			if validRecs[key.ReceiverHash] && key.PropHash != 0 && len(syms) > 0 {
-				var visibleSym *GlobalSymbol
+		addGlobalFieldCompletion := func(sym GlobalSymbol) bool {
+			if symDoc, ok := s.Documents[sym.URI]; ok {
+				node := symDoc.Tree.Nodes[sym.NodeID]
 
-				for _, sym := range syms {
-					if tgtDoc, ok := s.Documents[sym.URI]; ok && s.canSeeSymbol(doc, tgtDoc) {
-						visibleSym = &sym
+				kind := FieldCompletion
+				label := ast.String(symDoc.Source()[node.Start:node.End])
+				insertText := label
+				insertFormat := PlainTextTextFormat
 
+				valID := symDoc.getAssignedValue(sym.NodeID)
+				if valID != ast.InvalidNode && symDoc.Tree.Nodes[valID].Kind == ast.KindFunctionExpr {
+					kind = FunctionCompletion
+
+					insertText, insertFormat = buildFuncSnippet(label, symDoc, valID, isColon)
+				}
+
+				isDep, _ := symDoc.HasDeprecatedTag(sym.NodeID)
+
+				sortGroup := "2"
+				if sym.URI == uri {
+					sortGroup = "1"
+				}
+
+				addCompletion(label, kind, "field", isDep, sortGroup, insertText, insertFormat)
+
+				return true
+			}
+
+			return false
+		}
+
+		fieldKeys := make([]GlobalKey, 0)
+		seenFieldKeys := make(map[GlobalKey]bool)
+		addFieldKey := func(key GlobalKey) {
+			if !validRecs[key.ReceiverHash] || key.PropHash == 0 || seenFieldKeys[key] {
+				return
+			}
+
+			seenFieldKeys[key] = true
+			fieldKeys = append(fieldKeys, key)
+		}
+
+		if s.GlobalIndex != nil {
+			for _, entry := range s.GlobalIndex.AllSymbols() {
+				if entry != nil {
+					addFieldKey(entry.Key)
+				}
+			}
+		}
+
+		for _, key := range fieldKeys {
+			if s.GlobalIndex != nil {
+				for _, sym := range s.visibleGlobalSymbolsFromEntries(doc, s.GlobalIndex.SymbolsByHash(key), 1) {
+					if addGlobalFieldCompletion(sym) {
 						break
 					}
-				}
-
-				if visibleSym == nil {
-					continue
-				}
-
-				sym := *visibleSym
-
-				if symDoc, ok := s.Documents[sym.URI]; ok {
-					node := symDoc.Tree.Nodes[sym.NodeID]
-
-					kind := FieldCompletion
-					label := ast.String(symDoc.Source()[node.Start:node.End])
-					insertText := label
-					insertFormat := PlainTextTextFormat
-
-					valID := symDoc.getAssignedValue(sym.NodeID)
-					if valID != ast.InvalidNode && symDoc.Tree.Nodes[valID].Kind == ast.KindFunctionExpr {
-						kind = FunctionCompletion
-
-						insertText, insertFormat = buildFuncSnippet(label, symDoc, valID, isColon)
-					}
-
-					isDep, _ := symDoc.HasDeprecatedTag(sym.NodeID)
-
-					sortGroup := "2"
-					if sym.URI == uri {
-						sortGroup = "1"
-					}
-
-					addCompletion(label, kind, "field", isDep, sortGroup, insertText, insertFormat)
 				}
 			}
 		}
@@ -1317,51 +1350,51 @@ func (s *Server) handleCompletion(req Request) {
 			addCompletion(label, kind, "local", isDep, "0", insertText, insertFormat)
 		}
 
-		for key, syms := range s.GlobalIndex {
-			if key.ReceiverHash == 0 && key.PropHash != 0 && len(syms) > 0 {
-				var visibleSym *GlobalSymbol
+		addGlobalNameCompletion := func(sym GlobalSymbol) bool {
+			if symDoc, ok := s.Documents[sym.URI]; ok {
+				node := symDoc.Tree.Nodes[sym.NodeID]
 
-				for _, sym := range syms {
-					if tgtDoc, ok := s.Documents[sym.URI]; ok && s.canSeeSymbol(doc, tgtDoc) {
-						visibleSym = &sym
+				if node.Kind == ast.KindIdent || node.Kind == ast.KindMethodName {
+					kind := VariableCompletion
+					label := ast.String(symDoc.Source()[node.Start:node.End])
+					insertText := label
+					insertFormat := PlainTextTextFormat
 
-						break
+					valID := symDoc.getAssignedValue(sym.NodeID)
+
+					if valID != ast.InvalidNode && symDoc.Tree.Nodes[valID].Kind == ast.KindFunctionExpr {
+						kind = FunctionCompletion
+
+						insertText, insertFormat = buildFuncSnippet(label, symDoc, valID, false)
 					}
-				}
 
-				if visibleSym == nil {
+					isDep, _ := symDoc.HasDeprecatedTag(sym.NodeID)
+
+					sortGroup := "2"
+					if sym.URI == uri {
+						sortGroup = "1"
+					}
+
+					addCompletion(label, kind, "global", isDep, sortGroup, insertText, insertFormat)
+
+					return true
+				}
+			}
+
+			return false
+		}
+
+		if s.GlobalIndex != nil {
+			for _, entry := range s.GlobalIndex.AllSymbols() {
+				if entry == nil || entry.Key.ReceiverHash != 0 || entry.Key.PropHash == 0 {
 					continue
 				}
 
-				sym := *visibleSym
-
-				if symDoc, ok := s.Documents[sym.URI]; ok {
-					node := symDoc.Tree.Nodes[sym.NodeID]
-
-					if node.Kind == ast.KindIdent || node.Kind == ast.KindMethodName {
-						kind := VariableCompletion
-						label := ast.String(symDoc.Source()[node.Start:node.End])
-						insertText := label
-						insertFormat := PlainTextTextFormat
-
-						valID := symDoc.getAssignedValue(sym.NodeID)
-
-						if valID != ast.InvalidNode && symDoc.Tree.Nodes[valID].Kind == ast.KindFunctionExpr {
-							kind = FunctionCompletion
-
-							insertText, insertFormat = buildFuncSnippet(label, symDoc, valID, false)
-						}
-
-						isDep, _ := symDoc.HasDeprecatedTag(sym.NodeID)
-
-						sortGroup := "2"
-						if sym.URI == uri {
-							sortGroup = "1"
-						}
-
-						addCompletion(label, kind, "global", isDep, sortGroup, insertText, insertFormat)
-					}
+				if tgtDoc, ok := s.Documents[entry.URI]; !ok || !s.canSeeSymbol(doc, tgtDoc) {
+					continue
 				}
+
+				addGlobalNameCompletion(globalSymbolFromEntry(entry))
 			}
 		}
 
@@ -1661,10 +1694,7 @@ func (s *Server) handleSignatureHelp(req Request) {
 			Parameters:    paramsInfo,
 		})
 
-		expectedArgs := int(funcNode.Count) - paramOffset
-		if expectedArgs < 0 {
-			expectedArgs = 0
-		}
+		expectedArgs := max(int(funcNode.Count)-paramOffset, 0)
 
 		var score int
 

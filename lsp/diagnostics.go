@@ -288,14 +288,8 @@ func (s *Server) publishDiagnostics(uri string) {
 
 			var exists bool
 
-			if syms, ok := s.GlobalIndex[key]; ok {
-				for _, sym := range syms {
-					if tgtDoc, ok := s.Documents[sym.URI]; ok && canSee(tgtDoc) {
-						exists = true
-
-						break
-					}
-				}
+			if syms := s.visibleGlobalSymbolsFromEntries(doc, s.GlobalIndex.SymbolsByHash(key), 1); len(syms) > 0 {
+				exists = true
 			}
 
 			if !exists && s.ensureFiveMNativeSymbol(doc, identStr) {
@@ -357,18 +351,20 @@ func (s *Server) publishDiagnostics(uri string) {
 
 			var isDefinedAtRoot bool
 
-			if syms, ok := s.GlobalIndex[key]; ok {
-				for _, sym := range syms {
-					if symDoc, docOk := s.Documents[sym.URI]; docOk {
+			if entries := s.GlobalIndex.SymbolsByHash(key); len(entries) > 0 {
+				for _, entry := range entries {
+					if entry == nil || !entry.IsRoot {
+						continue
+					}
+
+					if symDoc, docOk := s.Documents[entry.URI]; docOk {
 						if !canSee(symDoc) {
 							continue
 						}
 
-						if sym.IsRoot {
-							isDefinedAtRoot = true
+						isDefinedAtRoot = true
 
-							break
-						}
+						break
 					}
 				}
 			}
@@ -1818,50 +1814,54 @@ func (s *Server) checkGlobalShadowing(uri string, nameBytes []byte, isLoopVar bo
 		})
 	} else {
 		hash := ast.HashBytes(nameBytes)
+		key := GlobalKey{ReceiverHash: 0, PropHash: hash}
+		resource, scope := s.globalIndexContext(doc)
+		var visibleSym *GlobalSymbol
 
-		if syms, exists := s.GlobalIndex[GlobalKey{ReceiverHash: 0, PropHash: hash}]; exists && len(syms) > 0 {
-			var visibleSym *GlobalSymbol
-
-			for _, sym := range syms {
-				if tgtDoc, ok := s.Documents[sym.URI]; ok && canSee(tgtDoc) {
-					visibleSym = &sym
-
-					break
-				}
+		for _, entry := range s.GlobalIndex.VisibleSymbols(resource, scope) {
+			if entry == nil || entry.Key != key {
+				continue
 			}
 
-			if visibleSym == nil {
-				return
+			if tgtDoc, ok := s.Documents[entry.URI]; ok && canSee(tgtDoc) {
+				sym := globalSymbolFromEntry(entry)
+				visibleSym = &sym
+
+				break
+			}
+		}
+
+		if visibleSym == nil {
+			return
+		}
+
+		sym := *visibleSym
+
+		var related []DiagnosticRelatedInformation
+
+		if symDoc, ok := s.Documents[sym.URI]; ok {
+			var fromFile string
+
+			if sym.URI != uri {
+				fromFile = " in " + filepath.Base(symDoc.Path)
 			}
 
-			sym := *visibleSym
-
-			var related []DiagnosticRelatedInformation
-
-			if symDoc, ok := s.Documents[sym.URI]; ok {
-				var fromFile string
-
-				if sym.URI != uri {
-					fromFile = " in " + filepath.Base(symDoc.Path)
-				}
-
-				related = append(related, DiagnosticRelatedInformation{
-					Location: Location{
-						URI:   sym.URI,
-						Range: getNodeRange(symDoc.Tree, sym.NodeID),
-					},
-					Message: fmt.Sprintf("Global '%s' defined here%s", ast.String(nameBytes), fromFile),
-				})
-			}
-
-			s.diagBuf = append(s.diagBuf, Diagnostic{
-				Range:              r,
-				Severity:           SeverityWarning,
-				Code:               "shadow-global",
-				Message:            varType + " variable '" + ast.String(nameBytes) + "' shadows a global definition.",
-				RelatedInformation: related,
+			related = append(related, DiagnosticRelatedInformation{
+				Location: Location{
+					URI:   sym.URI,
+					Range: getNodeRange(symDoc.Tree, sym.NodeID),
+				},
+				Message: fmt.Sprintf("Global '%s' defined here%s", ast.String(nameBytes), fromFile),
 			})
 		}
+
+		s.diagBuf = append(s.diagBuf, Diagnostic{
+			Range:              r,
+			Severity:           SeverityWarning,
+			Code:               "shadow-global",
+			Message:            varType + " variable '" + ast.String(nameBytes) + "' shadows a global definition.",
+			RelatedInformation: related,
+		})
 	}
 }
 
