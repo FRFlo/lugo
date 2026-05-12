@@ -8,10 +8,10 @@ import (
 	"github.com/coalaura/lugo/semantic"
 )
 
-func TestResolverV2(t *testing.T) {
+func TestResolver(t *testing.T) {
 	t.Run("ForwardRef", func(t *testing.T) {
-		tree := parseResolverV2Lua(t, []byte("local x = foo()\nfunction foo() return 1 end\n"))
-		resolver := NewResolverV2(tree, ResolverV2Options{SemanticData: NewSemanticDataTable()})
+		tree := parseResolverLua(t, []byte("local x = foo()\nfunction foo() return 1 end\n"))
+		resolver := NewResolver(tree, ResolverOptions{SemanticData: NewSemanticDataTable()})
 		if err := resolver.Resolve(tree.Root); err != nil {
 			t.Fatalf("Resolve() error = %v", err)
 		}
@@ -30,12 +30,12 @@ func TestResolverV2(t *testing.T) {
 	})
 
 	t.Run("Phase1NoInfer", func(t *testing.T) {
-		tree := parseResolverV2Lua(t, []byte("local x = 1\nfunction foo() return x end\n"))
-		resolver := NewResolverV2(tree, ResolverV2Options{SemanticData: NewSemanticDataTable()})
+		tree := parseResolverLua(t, []byte("local x = 1\nfunction foo() return x end\n"))
+		resolver := NewResolver(tree, ResolverOptions{SemanticData: NewSemanticDataTable()})
 		if err := resolver.Phase1(tree.Root); err != nil {
 			t.Fatalf("Phase1() error = %v", err)
 		}
-		if resolver.Phase != ResolverV2PhaseDeclarations {
+		if resolver.Phase != ResolverPhaseDeclarations {
 			t.Fatalf("phase = %v, want declarations", resolver.Phase)
 		}
 		if len(resolver.LocalDefs) == 0 || len(resolver.GlobalDefs) == 0 {
@@ -49,13 +49,13 @@ func TestResolverV2(t *testing.T) {
 	})
 
 	t.Run("FiveMCascade", func(t *testing.T) {
-		idx := NewGlobalIndexV2()
+		idx := NewGlobalIndex()
 		idx.RegisterFiveMResource(&FiveMResource{Name: "dep", RootURI: "dep"}, true)
 		idx.RegisterFiveMResource(&FiveMResource{Name: "main", RootURI: "main", Dependencies: []string{"dep"}}, true)
-		tree := parseResolverV2Lua(t, []byte("local x = NativeThing\n"))
-		state := NewResolverV2PhaseState()
+		tree := parseResolverLua(t, []byte("local x = NativeThing\n"))
+		state := NewResolverPhaseState()
 		state.MarkPhase1Complete("main")
-		resolver := NewResolverV2(tree, ResolverV2Options{FeatureFiveM: true, ResourceURI: "main", Index: idx, PhaseState: state})
+		resolver := NewResolver(tree, ResolverOptions{FeatureFiveM: true, ResourceURI: "main", Index: idx, PhaseState: state})
 		if err := resolver.Phase1(tree.Root); err != nil {
 			t.Fatalf("Phase1() error = %v", err)
 		}
@@ -69,10 +69,10 @@ func TestResolverV2(t *testing.T) {
 	})
 
 	t.Run("FiveMIndexType", func(t *testing.T) {
-		idx := NewGlobalIndexV2()
+		idx := NewGlobalIndex()
 		idx.AddSymbol("res", GlobalIndexScopeShared, "GetPlayerName", &SymbolEntry{Key: GlobalKey{PropHash: ast.HashBytes([]byte("GetPlayerName"))}, Type: Type{Primitive: TypeFunction, Structural: &StructuralType{Function: &FunctionType{Returns: []Type{{Primitive: TypeString}}}}}})
-		tree := parseResolverV2Lua(t, []byte("local name = GetPlayerName()\n"))
-		resolver := NewResolverV2(tree, ResolverV2Options{FeatureFiveM: true, ResourceURI: "res", Index: idx})
+		tree := parseResolverLua(t, []byte("local name = GetPlayerName()\n"))
+		resolver := NewResolver(tree, ResolverOptions{FeatureFiveM: true, ResourceURI: "res", Index: idx})
 		if err := resolver.Resolve(tree.Root); err != nil {
 			t.Fatalf("Resolve() error = %v", err)
 		}
@@ -84,8 +84,8 @@ func TestResolverV2(t *testing.T) {
 	})
 
 	t.Run("LocalInitializerUsesOuterScope", func(t *testing.T) {
-		tree := parseResolverV2Lua(t, []byte("local x = 1\ndo\n  local x = x\nend\n"))
-		resolver := NewResolverV2(tree, ResolverV2Options{})
+		tree := parseResolverLua(t, []byte("local x = 1\ndo\n  local x = x\nend\n"))
+		resolver := NewResolver(tree, ResolverOptions{})
 		if err := resolver.Phase1(tree.Root); err != nil {
 			t.Fatalf("Phase1() error = %v", err)
 		}
@@ -98,8 +98,8 @@ func TestResolverV2(t *testing.T) {
 	})
 
 	t.Run("GlobalAssignmentType", func(t *testing.T) {
-		tree := parseResolverV2Lua(t, []byte("Foo = function() return 1 end\nlocal x = Foo()\n"))
-		resolver := NewResolverV2(tree, ResolverV2Options{})
+		tree := parseResolverLua(t, []byte("Foo = function() return 1 end\nlocal x = Foo()\n"))
+		resolver := NewResolver(tree, ResolverOptions{})
 		if err := resolver.Resolve(tree.Root); err != nil {
 			t.Fatalf("Resolve() error = %v", err)
 		}
@@ -112,9 +112,9 @@ func TestResolverV2(t *testing.T) {
 	})
 
 	t.Run("TableFieldBindingAndPublish", func(t *testing.T) {
-		idx := NewGlobalIndexV2()
-		tree := parseResolverV2Lua(t, []byte("local T = { a = 1 }\nlocal x = T.a\n"))
-		resolver := NewResolverV2(tree, ResolverV2Options{ResourceURI: "res", Index: idx})
+		idx := NewGlobalIndex()
+		tree := parseResolverLua(t, []byte("local T = { a = 1 }\nlocal x = T.a\n"))
+		resolver := NewResolver(tree, ResolverOptions{ResourceURI: "res", Index: idx})
 		if err := resolver.Resolve(tree.Root); err != nil {
 			t.Fatalf("Resolve() error = %v", err)
 		}
@@ -137,8 +137,8 @@ func TestResolverV2(t *testing.T) {
 }
 
 func TestForwardRef(t *testing.T) {
-	tree := parseResolverV2Lua(t, []byte("local x = foo()\nfunction foo() return 1 end\n"))
-	resolver := NewResolverV2(tree, ResolverV2Options{})
+	tree := parseResolverLua(t, []byte("local x = foo()\nfunction foo() return 1 end\n"))
+	resolver := NewResolver(tree, ResolverOptions{})
 	if err := resolver.Resolve(tree.Root); err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
@@ -150,8 +150,8 @@ func TestForwardRef(t *testing.T) {
 }
 
 func TestPhase1NoInfer(t *testing.T) {
-	tree := parseResolverV2Lua(t, []byte("local x = 1\n"))
-	resolver := NewResolverV2(tree, ResolverV2Options{})
+	tree := parseResolverLua(t, []byte("local x = 1\n"))
+	resolver := NewResolver(tree, ResolverOptions{})
 	if err := resolver.Phase1(tree.Root); err != nil {
 		t.Fatalf("Phase1() error = %v", err)
 	}
@@ -165,12 +165,12 @@ func TestPhase1NoInfer(t *testing.T) {
 func TestParity(t *testing.T) {
 	t.Run("Resolver", func(t *testing.T) {
 		src := []byte("local a = 1\nlocal function foo() return a end\nlocal b = foo()\n")
-		treeOld := parseResolverV2Lua(t, src)
+		treeOld := parseResolverLua(t, src)
 		old := semantic.New(treeOld)
 		old.Resolve(treeOld.Root)
 
-		treeNew := parseResolverV2Lua(t, src)
-		resolver := NewResolverV2(treeNew, ResolverV2Options{FeatureFiveM: false})
+		treeNew := parseResolverLua(t, src)
+		resolver := NewResolver(treeNew, ResolverOptions{FeatureFiveM: false})
 		if err := resolver.Phase1(treeNew.Root); err != nil {
 			t.Fatalf("Phase1() error = %v", err)
 		}
@@ -192,7 +192,7 @@ func TestParity(t *testing.T) {
 	})
 }
 
-func parseResolverV2Lua(t *testing.T, src []byte) *ast.Tree {
+func parseResolverLua(t *testing.T, src []byte) *ast.Tree {
 	t.Helper()
 	tree := ast.NewTree(src)
 	p := parser.New(src, tree, 0)

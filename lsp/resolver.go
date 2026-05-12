@@ -8,33 +8,33 @@ import (
 	"github.com/coalaura/lugo/ast"
 )
 
-type ResolverV2Phase uint8
+type ResolverPhase uint8
 
 const (
-	ResolverV2PhaseNone ResolverV2Phase = iota
-	ResolverV2PhaseDeclarations
-	ResolverV2PhaseTypes
+	ResolverPhaseNone ResolverPhase = iota
+	ResolverPhaseDeclarations
+	ResolverPhaseTypes
 )
 
-type ResolverV2Options struct {
+type ResolverOptions struct {
 	FeatureFiveM bool
 	ResourceURI  ResourceURI
 	Scope        GlobalIndexScope
-	Index        *GlobalIndexV2
+	Index        *GlobalIndex
 	SemanticData *SemanticDataTable
-	PhaseState   *ResolverV2PhaseState
+	PhaseState   *ResolverPhaseState
 }
 
-type ResolverV2PhaseState struct {
+type ResolverPhaseState struct {
 	mu       sync.RWMutex
 	complete map[ResourceURI]bool
 }
 
-func NewResolverV2PhaseState() *ResolverV2PhaseState {
-	return &ResolverV2PhaseState{complete: make(map[ResourceURI]bool)}
+func NewResolverPhaseState() *ResolverPhaseState {
+	return &ResolverPhaseState{complete: make(map[ResourceURI]bool)}
 }
 
-func (s *ResolverV2PhaseState) MarkPhase1Complete(uri ResourceURI) {
+func (s *ResolverPhaseState) MarkPhase1Complete(uri ResourceURI) {
 	if s == nil || uri == "" {
 		return
 	}
@@ -46,7 +46,7 @@ func (s *ResolverV2PhaseState) MarkPhase1Complete(uri ResourceURI) {
 	s.complete[uri] = true
 }
 
-func (s *ResolverV2PhaseState) IsPhase1Complete(uri ResourceURI) bool {
+func (s *ResolverPhaseState) IsPhase1Complete(uri ResourceURI) bool {
 	if s == nil || uri == "" {
 		return false
 	}
@@ -55,50 +55,50 @@ func (s *ResolverV2PhaseState) IsPhase1Complete(uri ResourceURI) bool {
 	return s.complete[uri]
 }
 
-type ResolverV2 struct {
+type Resolver struct {
 	Tree *ast.Tree
 
 	References    []ast.NodeID
 	GlobalRefs    []ast.NodeID
 	GlobalDefs    []ast.NodeID
 	LocalDefs     []ast.NodeID
-	FieldDefs     []resolverV2FieldDef
-	PendingFields []resolverV2FieldRef
+	FieldDefs     []resolverFieldDef
+	PendingFields []resolverFieldRef
 
 	Data *SemanticDataTable
 
 	FeatureFiveM bool
 	ResourceURI  ResourceURI
 	Scope        GlobalIndexScope
-	Index        *GlobalIndexV2
+	Index        *GlobalIndex
 
-	Phase      ResolverV2Phase
-	PhaseState *ResolverV2PhaseState
+	Phase      ResolverPhase
+	PhaseState *ResolverPhaseState
 
-	rootScope *resolverV2Scope
-	scopes    map[ast.NodeID]*resolverV2Scope
-	globals   map[string][]resolverV2Decl
-	fieldMap  map[resolverV2FieldKey]ast.NodeID
+	rootScope *resolverScope
+	scopes    map[ast.NodeID]*resolverScope
+	globals   map[string][]resolverDecl
+	fieldMap  map[resolverFieldKey]ast.NodeID
 	types     []Type
 	inferring []bool
 }
 
-type resolverV2Scope struct {
+type resolverScope struct {
 	data     *Scope
 	nodeID   ast.NodeID
-	parent   *resolverV2Scope
-	children []*resolverV2Scope
-	decls    map[string][]resolverV2Decl
+	parent   *resolverScope
+	children []*resolverScope
+	decls    map[string][]resolverDecl
 }
 
-type resolverV2Decl struct {
+type resolverDecl struct {
 	Name   string
 	NodeID ast.NodeID
-	Scope  *resolverV2Scope
+	Scope  *resolverScope
 	Global bool
 }
 
-type resolverV2FieldDef struct {
+type resolverFieldDef struct {
 	ReceiverName []byte
 	ReceiverHash uint64
 	PropHash     uint64
@@ -106,7 +106,7 @@ type resolverV2FieldDef struct {
 	NodeID       ast.NodeID
 }
 
-type resolverV2FieldRef struct {
+type resolverFieldRef struct {
 	PropNodeID   ast.NodeID
 	ReceiverDef  ast.NodeID
 	ReceiverHash uint64
@@ -114,13 +114,13 @@ type resolverV2FieldRef struct {
 	PropHash     uint64
 }
 
-type resolverV2FieldKey struct {
+type resolverFieldKey struct {
 	RecDef   ast.NodeID
 	RecHash  uint64
 	PropHash uint64
 }
 
-func NewResolverV2(tree *ast.Tree, opts ResolverV2Options) *ResolverV2 {
+func NewResolver(tree *ast.Tree, opts ResolverOptions) *Resolver {
 	data := opts.SemanticData
 	if data == nil {
 		data = NewSemanticDataTable()
@@ -131,27 +131,27 @@ func NewResolverV2(tree *ast.Tree, opts ResolverV2Options) *ResolverV2 {
 		scope = GlobalIndexScopeShared
 	}
 
-	return &ResolverV2{
+	return &Resolver{
 		Tree:          tree,
 		References:    make([]ast.NodeID, len(tree.Nodes)),
 		GlobalRefs:    make([]ast.NodeID, 0, 256),
 		GlobalDefs:    make([]ast.NodeID, 0, 256),
 		LocalDefs:     make([]ast.NodeID, 0, 512),
-		FieldDefs:     make([]resolverV2FieldDef, 0, 512),
-		PendingFields: make([]resolverV2FieldRef, 0, 128),
+		FieldDefs:     make([]resolverFieldDef, 0, 512),
+		PendingFields: make([]resolverFieldRef, 0, 128),
 		Data:          data,
 		FeatureFiveM:  opts.FeatureFiveM,
 		ResourceURI:   opts.ResourceURI,
 		Scope:         scope,
 		Index:         opts.Index,
 		PhaseState:    opts.PhaseState,
-		scopes:        make(map[ast.NodeID]*resolverV2Scope, 64),
-		globals:       make(map[string][]resolverV2Decl, 256),
-		fieldMap:      make(map[resolverV2FieldKey]ast.NodeID, 512),
+		scopes:        make(map[ast.NodeID]*resolverScope, 64),
+		globals:       make(map[string][]resolverDecl, 256),
+		fieldMap:      make(map[resolverFieldKey]ast.NodeID, 512),
 	}
 }
 
-func (r *ResolverV2) Resolve(root ast.NodeID) error {
+func (r *Resolver) Resolve(root ast.NodeID) error {
 	if err := r.Phase1(root); err != nil {
 		return err
 	}
@@ -159,7 +159,7 @@ func (r *ResolverV2) Resolve(root ast.NodeID) error {
 	return r.Phase2(root)
 }
 
-func (r *ResolverV2) Phase1(root ast.NodeID) error {
+func (r *Resolver) Phase1(root ast.NodeID) error {
 	if r == nil || r.Tree == nil || root == ast.InvalidNode {
 		return nil
 	}
@@ -172,16 +172,16 @@ func (r *ResolverV2) Phase1(root ast.NodeID) error {
 	r.bindPendingFields()
 
 	r.PhaseState.MarkPhase1Complete(r.ResourceURI)
-	r.Phase = ResolverV2PhaseDeclarations
+	r.Phase = ResolverPhaseDeclarations
 
 	return nil
 }
 
-func (r *ResolverV2) Phase2(root ast.NodeID) error {
+func (r *Resolver) Phase2(root ast.NodeID) error {
 	if r == nil || r.Tree == nil || root == ast.InvalidNode {
 		return nil
 	}
-	if r.Phase < ResolverV2PhaseDeclarations {
+	if r.Phase < ResolverPhaseDeclarations {
 		if err := r.Phase1(root); err != nil {
 			return err
 		}
@@ -194,12 +194,12 @@ func (r *ResolverV2) Phase2(root ast.NodeID) error {
 	r.inferring = make([]bool, len(r.Tree.Nodes))
 	r.resolveTypes(root)
 	r.publishGlobalsToIndex()
-	r.Phase = ResolverV2PhaseTypes
+	r.Phase = ResolverPhaseTypes
 
 	return nil
 }
 
-func (r *ResolverV2) resetPhase1() {
+func (r *Resolver) resetPhase1() {
 	if cap(r.References) >= len(r.Tree.Nodes) {
 		r.References = r.References[:len(r.Tree.Nodes)]
 		clear(r.References)
@@ -211,7 +211,7 @@ func (r *ResolverV2) resetPhase1() {
 	r.LocalDefs = r.LocalDefs[:0]
 	r.FieldDefs = r.FieldDefs[:0]
 	r.PendingFields = r.PendingFields[:0]
-	r.Phase = ResolverV2PhaseNone
+	r.Phase = ResolverPhaseNone
 	r.rootScope = nil
 	clear(r.scopes)
 	clear(r.globals)
@@ -221,11 +221,11 @@ func (r *ResolverV2) resetPhase1() {
 	}
 }
 
-func (r *ResolverV2) newScope(nodeID ast.NodeID, parent *resolverV2Scope) *resolverV2Scope {
-	s := &resolverV2Scope{
+func (r *Resolver) newScope(nodeID ast.NodeID, parent *resolverScope) *resolverScope {
+	s := &resolverScope{
 		nodeID: nodeID,
 		parent: parent,
-		decls:  make(map[string][]resolverV2Decl),
+		decls:  make(map[string][]resolverDecl),
 		data: &Scope{
 			Symbols: make(map[string]NodeID),
 		},
@@ -242,7 +242,7 @@ func (r *ResolverV2) newScope(nodeID ast.NodeID, parent *resolverV2Scope) *resol
 	return s
 }
 
-func (r *ResolverV2) declareLocal(scope *resolverV2Scope, identID ast.NodeID) {
+func (r *Resolver) declareLocal(scope *resolverScope, identID ast.NodeID) {
 	if scope == nil || identID == ast.InvalidNode || !r.validNode(identID) {
 		return
 	}
@@ -251,7 +251,7 @@ func (r *ResolverV2) declareLocal(scope *resolverV2Scope, identID ast.NodeID) {
 		return
 	}
 
-	decl := resolverV2Decl{Name: name, NodeID: identID, Scope: scope}
+	decl := resolverDecl{Name: name, NodeID: identID, Scope: scope}
 	scope.decls[name] = append(scope.decls[name], decl)
 	scope.data.Symbols[name] = NodeID(identID)
 	r.LocalDefs = append(r.LocalDefs, identID)
@@ -259,7 +259,7 @@ func (r *ResolverV2) declareLocal(scope *resolverV2Scope, identID ast.NodeID) {
 	r.mergeSemantic(identID, SemanticData{Scope: scope.data, Bindings: []Binding{{Name: name, NodeID: NodeID(identID)}}})
 }
 
-func (r *ResolverV2) declareGlobal(identID ast.NodeID) {
+func (r *Resolver) declareGlobal(identID ast.NodeID) {
 	if identID == ast.InvalidNode || !r.validNode(identID) {
 		return
 	}
@@ -268,14 +268,14 @@ func (r *ResolverV2) declareGlobal(identID ast.NodeID) {
 		return
 	}
 
-	decl := resolverV2Decl{Name: name, NodeID: identID, Scope: r.rootScope, Global: true}
+	decl := resolverDecl{Name: name, NodeID: identID, Scope: r.rootScope, Global: true}
 	r.globals[name] = append(r.globals[name], decl)
 	r.GlobalDefs = append(r.GlobalDefs, identID)
 	r.References[identID] = identID
 	r.mergeSemantic(identID, SemanticData{Scope: r.rootScope.data, Bindings: []Binding{{Name: name, NodeID: NodeID(identID)}}})
 }
 
-func (r *ResolverV2) collectDeclarations(id ast.NodeID, scope *resolverV2Scope) {
+func (r *Resolver) collectDeclarations(id ast.NodeID, scope *resolverScope) {
 	if id == ast.InvalidNode || !r.validNode(id) {
 		return
 	}
@@ -361,7 +361,7 @@ func (r *ResolverV2) collectDeclarations(id ast.NodeID, scope *resolverV2Scope) 
 	}
 }
 
-func (r *ResolverV2) collectFunctionDeclarations(funcID ast.NodeID, parent *resolverV2Scope) {
+func (r *Resolver) collectFunctionDeclarations(funcID ast.NodeID, parent *resolverScope) {
 	if funcID == ast.InvalidNode || !r.validNode(funcID) {
 		return
 	}
@@ -378,7 +378,7 @@ func (r *ResolverV2) collectFunctionDeclarations(funcID ast.NodeID, parent *reso
 	r.collectDeclarations(node.Right, fnScope)
 }
 
-func (r *ResolverV2) collectFunctionNameDeclaration(nameID ast.NodeID, scope *resolverV2Scope) {
+func (r *Resolver) collectFunctionNameDeclaration(nameID ast.NodeID, scope *resolverScope) {
 	if nameID == ast.InvalidNode || !r.validNode(nameID) {
 		return
 	}
@@ -394,7 +394,7 @@ func (r *ResolverV2) collectFunctionNameDeclaration(nameID ast.NodeID, scope *re
 	}
 }
 
-func (r *ResolverV2) collectFieldDeclaration(memberNodeID ast.NodeID) {
+func (r *Resolver) collectFieldDeclaration(memberNodeID ast.NodeID) {
 	if memberNodeID == ast.InvalidNode || !r.validNode(memberNodeID) {
 		return
 	}
@@ -407,19 +407,19 @@ func (r *ResolverV2) collectFieldDeclaration(memberNodeID ast.NodeID) {
 		return
 	}
 	propHash := ast.HashBytes(r.source(node.Right))
-	fk := resolverV2FieldKey{RecDef: recDef, RecHash: recHash, PropHash: propHash}
+	fk := resolverFieldKey{RecDef: recDef, RecHash: recHash, PropHash: propHash}
 	if existing, ok := r.fieldMap[fk]; ok {
 		r.References[node.Right] = existing
 		r.mergeSemantic(node.Right, SemanticData{Bindings: []Binding{{Name: string(r.source(node.Right)), NodeID: NodeID(existing)}}})
 		return
 	}
-	r.FieldDefs = append(r.FieldDefs, resolverV2FieldDef{ReceiverDef: recDef, ReceiverHash: recHash, ReceiverName: recName, PropHash: propHash, NodeID: node.Right})
+	r.FieldDefs = append(r.FieldDefs, resolverFieldDef{ReceiverDef: recDef, ReceiverHash: recHash, ReceiverName: recName, PropHash: propHash, NodeID: node.Right})
 	r.fieldMap[fk] = node.Right
 	r.References[node.Right] = node.Right
 	r.mergeSemantic(node.Right, SemanticData{Bindings: []Binding{{Name: string(r.source(node.Right)), NodeID: NodeID(node.Right)}}})
 }
 
-func (r *ResolverV2) collectTableFieldDeclaration(tableID, fieldID ast.NodeID) {
+func (r *Resolver) collectTableFieldDeclaration(tableID, fieldID ast.NodeID) {
 	parentDef, parentRec := r.tableReceiver(tableID)
 	if len(parentRec) == 0 || !r.validNode(fieldID) {
 		return
@@ -430,19 +430,19 @@ func (r *ResolverV2) collectTableFieldDeclaration(tableID, fieldID ast.NodeID) {
 	}
 	propHash := ast.HashBytes(r.source(field.Left))
 	recHash := ast.HashBytes(parentRec)
-	fk := resolverV2FieldKey{RecDef: parentDef, RecHash: recHash, PropHash: propHash}
+	fk := resolverFieldKey{RecDef: parentDef, RecHash: recHash, PropHash: propHash}
 	if existing, ok := r.fieldMap[fk]; ok {
 		r.References[field.Left] = existing
 		r.mergeSemantic(field.Left, SemanticData{Bindings: []Binding{{Name: string(r.source(field.Left)), NodeID: NodeID(existing)}}})
 		return
 	}
-	r.FieldDefs = append(r.FieldDefs, resolverV2FieldDef{ReceiverDef: parentDef, ReceiverHash: recHash, ReceiverName: parentRec, PropHash: propHash, NodeID: field.Left})
+	r.FieldDefs = append(r.FieldDefs, resolverFieldDef{ReceiverDef: parentDef, ReceiverHash: recHash, ReceiverName: parentRec, PropHash: propHash, NodeID: field.Left})
 	r.fieldMap[fk] = field.Left
 	r.References[field.Left] = field.Left
 	r.mergeSemantic(field.Left, SemanticData{Bindings: []Binding{{Name: string(r.source(field.Left)), NodeID: NodeID(field.Left)}}})
 }
 
-func (r *ResolverV2) collectReferences(id ast.NodeID, scope *resolverV2Scope) {
+func (r *Resolver) collectReferences(id ast.NodeID, scope *resolverScope) {
 	if id == ast.InvalidNode || !r.validNode(id) {
 		return
 	}
@@ -510,7 +510,7 @@ func (r *ResolverV2) collectReferences(id ast.NodeID, scope *resolverV2Scope) {
 		if node.Right != ast.InvalidNode && r.validNode(node.Right) && r.Tree.Nodes[node.Right].Kind == ast.KindIdent {
 			recDef, recHash, recName := r.receiverContext(node.Left)
 			if len(recName) > 0 {
-				r.PendingFields = append(r.PendingFields, resolverV2FieldRef{PropNodeID: node.Right, ReceiverDef: recDef, ReceiverHash: recHash, ReceiverName: recName, PropHash: ast.HashBytes(r.source(node.Right))})
+				r.PendingFields = append(r.PendingFields, resolverFieldRef{PropNodeID: node.Right, ReceiverDef: recDef, ReceiverHash: recHash, ReceiverName: recName, PropHash: ast.HashBytes(r.source(node.Right))})
 			}
 		}
 		if node.Kind == ast.KindMethodCall {
@@ -545,14 +545,14 @@ func (r *ResolverV2) collectReferences(id ast.NodeID, scope *resolverV2Scope) {
 	}
 }
 
-func (s *resolverV2Scope) parentOrSelf() *resolverV2Scope {
+func (s *resolverScope) parentOrSelf() *resolverScope {
 	if s != nil && s.parent != nil {
 		return s.parent
 	}
 	return s
 }
 
-func (r *ResolverV2) referencesIdent(id ast.NodeID, scope *resolverV2Scope, isDef bool) {
+func (r *Resolver) referencesIdent(id ast.NodeID, scope *resolverScope, isDef bool) {
 	if id == ast.InvalidNode || !r.validNode(id) || r.References[id] != ast.InvalidNode {
 		return
 	}
@@ -573,7 +573,7 @@ func (r *ResolverV2) referencesIdent(id ast.NodeID, scope *resolverV2Scope, isDe
 	r.GlobalRefs = append(r.GlobalRefs, id)
 }
 
-func (r *ResolverV2) bindReferences() {
+func (r *Resolver) bindReferences() {
 	for _, refID := range r.GlobalRefs {
 		if r.References[refID] != ast.InvalidNode {
 			continue
@@ -586,9 +586,9 @@ func (r *ResolverV2) bindReferences() {
 	}
 }
 
-func (r *ResolverV2) bindPendingFields() {
+func (r *Resolver) bindPendingFields() {
 	for _, pref := range r.PendingFields {
-		fk := resolverV2FieldKey{RecDef: pref.ReceiverDef, RecHash: pref.ReceiverHash, PropHash: pref.PropHash}
+		fk := resolverFieldKey{RecDef: pref.ReceiverDef, RecHash: pref.ReceiverHash, PropHash: pref.PropHash}
 		if defID, ok := r.fieldMap[fk]; ok {
 			r.References[pref.PropNodeID] = defID
 			r.mergeSemantic(pref.PropNodeID, SemanticData{Bindings: []Binding{{Name: string(r.source(pref.PropNodeID)), NodeID: NodeID(defID)}}})
@@ -596,7 +596,7 @@ func (r *ResolverV2) bindPendingFields() {
 	}
 }
 
-func (r *ResolverV2) lookupLocalByPosition(scope *resolverV2Scope, name string, refID ast.NodeID) ast.NodeID {
+func (r *Resolver) lookupLocalByPosition(scope *resolverScope, name string, refID ast.NodeID) ast.NodeID {
 	if scope == nil || name == "" || !r.validNode(refID) {
 		return ast.InvalidNode
 	}
@@ -620,7 +620,7 @@ func (r *ResolverV2) lookupLocalByPosition(scope *resolverV2Scope, name string, 
 	return ast.InvalidNode
 }
 
-func (r *ResolverV2) isLocalAssignInitializerReference(defID, refID ast.NodeID) bool {
+func (r *Resolver) isLocalAssignInitializerReference(defID, refID ast.NodeID) bool {
 	if defID == ast.InvalidNode || refID == ast.InvalidNode || !r.validNode(defID) || !r.validNode(refID) {
 		return false
 	}
@@ -642,7 +642,7 @@ func (r *ResolverV2) isLocalAssignInitializerReference(defID, refID ast.NodeID) 
 	return ref.Start >= rhs.Start && ref.End <= rhs.End
 }
 
-func (r *ResolverV2) ensurePhase2DependenciesReady() error {
+func (r *Resolver) ensurePhase2DependenciesReady() error {
 	if !r.FeatureFiveM || r.Index == nil || r.ResourceURI == "" || r.PhaseState == nil {
 		return nil
 	}
@@ -656,14 +656,14 @@ func (r *ResolverV2) ensurePhase2DependenciesReady() error {
 
 	for _, dep := range deps {
 		if !r.PhaseState.IsPhase1Complete(dep) {
-			return fmt.Errorf("resolver v2 phase 2 waiting for dependency phase 1: %s", dep)
+			return fmt.Errorf("resolver phase 2 waiting for dependency phase 1: %s", dep)
 		}
 	}
 
 	return nil
 }
 
-func (r *ResolverV2) resolveTypes(id ast.NodeID) Type {
+func (r *Resolver) resolveTypes(id ast.NodeID) Type {
 	t := r.inferType(id)
 	if id != ast.InvalidNode && r.validNode(id) {
 		r.mergeSemantic(id, SemanticData{Type: t})
@@ -689,7 +689,7 @@ func (r *ResolverV2) resolveTypes(id ast.NodeID) Type {
 	return t
 }
 
-func (r *ResolverV2) inferType(id ast.NodeID) Type {
+func (r *Resolver) inferType(id ast.NodeID) Type {
 	if id == ast.InvalidNode || !r.validNode(id) {
 		return Type{}
 	}
@@ -752,7 +752,7 @@ func (r *ResolverV2) inferType(id ast.NodeID) Type {
 	return t
 }
 
-func (r *ResolverV2) identType(id ast.NodeID) Type {
+func (r *Resolver) identType(id ast.NodeID) Type {
 	name := string(r.source(id))
 	defID := ast.InvalidNode
 	if int(id) < len(r.References) {
@@ -788,7 +788,7 @@ func (r *ResolverV2) identType(id ast.NodeID) Type {
 	return Type{}
 }
 
-func (r *ResolverV2) functionType(id ast.NodeID) Type {
+func (r *Resolver) functionType(id ast.NodeID) Type {
 	if id != ast.InvalidNode && r.validNode(id) && r.Tree.Nodes[id].Kind != ast.KindFunctionExpr {
 		if val := r.assignedValue(id); val != ast.InvalidNode {
 			id = val
@@ -807,7 +807,7 @@ func (r *ResolverV2) functionType(id ast.NodeID) Type {
 	return Type{Primitive: TypeFunction, Structural: &StructuralType{Function: fn}}
 }
 
-func (r *ResolverV2) returnTypes(id ast.NodeID) []Type {
+func (r *Resolver) returnTypes(id ast.NodeID) []Type {
 	if id == ast.InvalidNode || !r.validNode(id) {
 		return nil
 	}
@@ -840,7 +840,7 @@ func (r *ResolverV2) returnTypes(id ast.NodeID) []Type {
 	return out
 }
 
-func (r *ResolverV2) tableType(id ast.NodeID) Type {
+func (r *Resolver) tableType(id ast.NodeID) Type {
 	fields := make(map[string]Type)
 	node := r.Tree.Nodes[id]
 	for i := uint16(0); i < node.Count; i++ {
@@ -857,7 +857,7 @@ func (r *ResolverV2) tableType(id ast.NodeID) Type {
 	return Type{Primitive: TypeTable, Structural: &StructuralType{Fields: fields}}
 }
 
-func (r *ResolverV2) binaryType(node ast.Node) Type {
+func (r *Resolver) binaryType(node ast.Node) Type {
 	left := r.inferType(node.Left)
 	right := r.inferType(node.Right)
 	if left.Primitive != TypeUnknown || left.Structural != nil || right.Primitive != TypeUnknown || right.Structural != nil {
@@ -867,7 +867,7 @@ func (r *ResolverV2) binaryType(node ast.Node) Type {
 	return Type{}
 }
 
-func (r *ResolverV2) memberType(node ast.Node) Type {
+func (r *Resolver) memberType(node ast.Node) Type {
 	if node.Right == ast.InvalidNode || !r.validNode(node.Right) {
 		return Type{}
 	}
@@ -894,7 +894,7 @@ func (r *ResolverV2) memberType(node ast.Node) Type {
 	return Type{}
 }
 
-func (r *ResolverV2) callType(node ast.Node) Type {
+func (r *Resolver) callType(node ast.Node) Type {
 	callee := node.Left
 	if node.Kind == ast.KindMethodCall {
 		callee = node.Right
@@ -913,7 +913,7 @@ func (r *ResolverV2) callType(node ast.Node) Type {
 	return Type{}
 }
 
-func (r *ResolverV2) firstReturnFromDefinition(defID ast.NodeID) Type {
+func (r *Resolver) firstReturnFromDefinition(defID ast.NodeID) Type {
 	if val := r.assignedValue(defID); val != ast.InvalidNode {
 		fn := r.functionType(val)
 		if fn.Structural != nil && fn.Structural.Function != nil && len(fn.Structural.Function.Returns) > 0 {
@@ -924,7 +924,7 @@ func (r *ResolverV2) firstReturnFromDefinition(defID ast.NodeID) Type {
 	return Type{}
 }
 
-func (r *ResolverV2) assignDeclarationTypes(leftID, rightID ast.NodeID) {
+func (r *Resolver) assignDeclarationTypes(leftID, rightID ast.NodeID) {
 	if leftID == ast.InvalidNode || rightID == ast.InvalidNode || !r.validNode(leftID) || !r.validNode(rightID) {
 		return
 	}
@@ -943,7 +943,7 @@ func (r *ResolverV2) assignDeclarationTypes(leftID, rightID ast.NodeID) {
 	}
 }
 
-func (r *ResolverV2) setNodeType(id ast.NodeID, typ Type) {
+func (r *Resolver) setNodeType(id ast.NodeID, typ Type) {
 	if id == ast.InvalidNode || !r.validNode(id) {
 		return
 	}
@@ -953,7 +953,7 @@ func (r *ResolverV2) setNodeType(id ast.NodeID, typ Type) {
 	r.mergeSemantic(id, SemanticData{Type: typ})
 }
 
-func (r *ResolverV2) publishGlobalsToIndex() {
+func (r *Resolver) publishGlobalsToIndex() {
 	if r.Index == nil || r.ResourceURI == "" {
 		return
 	}
@@ -965,9 +965,15 @@ func (r *ResolverV2) publishGlobalsToIndex() {
 		if name == "" {
 			continue
 		}
+		isDep, depMsg := r.deprecatedTag(defID)
 		r.Index.AddSymbol(r.ResourceURI, r.Scope, SymbolName(name), &SymbolEntry{
-			Key:  GlobalKey{PropHash: ast.HashBytes(r.source(defID))},
-			Type: r.inferType(defID),
+			Key:           GlobalKey{PropHash: ast.HashBytes(r.source(defID))},
+			Type:          r.inferType(defID),
+			URI:           string(r.ResourceURI),
+			NodeID:        defID,
+			IsRoot:        isRootLevel(r.Tree, defID),
+			IsDeprecated:  isDep,
+			DeprecatedMsg: depMsg,
 		})
 	}
 	for _, fd := range r.FieldDefs {
@@ -979,14 +985,58 @@ func (r *ResolverV2) publishGlobalsToIndex() {
 			continue
 		}
 		name := string(fd.ReceiverName) + "." + prop
+		isDep, depMsg := r.deprecatedTag(fd.NodeID)
 		r.Index.AddSymbol(r.ResourceURI, r.Scope, SymbolName(name), &SymbolEntry{
-			Key:  GlobalKey{ReceiverHash: fd.ReceiverHash, PropHash: fd.PropHash},
-			Type: r.inferType(fd.NodeID),
+			Key:           GlobalKey{ReceiverHash: fd.ReceiverHash, PropHash: fd.PropHash},
+			Type:          r.inferType(fd.NodeID),
+			URI:           string(r.ResourceURI),
+			NodeID:        fd.NodeID,
+			Parent:        string(fd.ReceiverName),
+			IsRoot:        isRootLevel(r.Tree, fd.NodeID),
+			IsDeprecated:  isDep,
+			DeprecatedMsg: depMsg,
 		})
 	}
 }
 
-func (r *ResolverV2) lookupIndexSymbol(name SymbolName) *SymbolEntry {
+func (r *Resolver) deprecatedTag(id ast.NodeID) (bool, string) {
+	if r == nil || r.Tree == nil || !r.validNode(id) {
+		return false, ""
+	}
+
+	node := r.Tree.Nodes[id]
+	if node.Start > uint32(len(r.Tree.Source)) {
+		return false, ""
+	}
+
+	limit := node.Start
+	for i := len(r.Tree.Comments) - 1; i >= 0; i-- {
+		comment := r.Tree.Comments[i]
+		if comment.End > limit {
+			continue
+		}
+		if comment.End > uint32(len(r.Tree.Source)) || comment.Start > comment.End {
+			continue
+		}
+		if len(bytes.TrimSpace(r.Tree.Source[comment.End:limit])) != 0 {
+			break
+		}
+
+		raw := r.Tree.Source[comment.Start:comment.End]
+		if _, after, ok := bytes.Cut(raw, []byte("@deprecated")); ok {
+			endIdx := bytes.IndexByte(after, '\n')
+			if endIdx == -1 {
+				endIdx = len(after)
+			}
+			return true, string(bytes.TrimSpace(cleanLuaCommentBytes(nil, after[:endIdx])))
+		}
+		limit = comment.Start
+	}
+
+	return false, ""
+}
+
+func (r *Resolver) lookupIndexSymbol(name SymbolName) *SymbolEntry {
 	if r.Index == nil || name == "" {
 		return nil
 	}
@@ -1003,7 +1053,7 @@ func (r *ResolverV2) lookupIndexSymbol(name SymbolName) *SymbolEntry {
 	return nil
 }
 
-func (r *ResolverV2) assignedValue(id ast.NodeID) ast.NodeID {
+func (r *Resolver) assignedValue(id ast.NodeID) ast.NodeID {
 	if id == ast.InvalidNode || !r.validNode(id) {
 		return ast.InvalidNode
 	}
@@ -1070,7 +1120,7 @@ func (r *ResolverV2) assignedValue(id ast.NodeID) ast.NodeID {
 	}
 }
 
-func (r *ResolverV2) receiverContext(recID ast.NodeID) (ast.NodeID, uint64, []byte) {
+func (r *Resolver) receiverContext(recID ast.NodeID) (ast.NodeID, uint64, []byte) {
 	if recID == ast.InvalidNode || !r.validNode(recID) {
 		return ast.InvalidNode, 0, nil
 	}
@@ -1094,7 +1144,7 @@ func (r *ResolverV2) receiverContext(recID ast.NodeID) (ast.NodeID, uint64, []by
 	return rootDef, ast.HashBytes(recBytes), recBytes
 }
 
-func (r *ResolverV2) buildMemberName(id ast.NodeID, buf []byte) []byte {
+func (r *Resolver) buildMemberName(id ast.NodeID, buf []byte) []byte {
 	if id == ast.InvalidNode || !r.validNode(id) {
 		return buf
 	}
@@ -1111,7 +1161,7 @@ func (r *ResolverV2) buildMemberName(id ast.NodeID, buf []byte) []byte {
 	return buf
 }
 
-func (r *ResolverV2) tableReceiver(id ast.NodeID) (ast.NodeID, []byte) {
+func (r *Resolver) tableReceiver(id ast.NodeID) (ast.NodeID, []byte) {
 	if id == ast.InvalidNode || !r.validNode(id) {
 		return ast.InvalidNode, nil
 	}
@@ -1153,7 +1203,7 @@ func (r *ResolverV2) tableReceiver(id ast.NodeID) (ast.NodeID, []byte) {
 	return ast.InvalidNode, nil
 }
 
-func (r *ResolverV2) walkChildren(id ast.NodeID, visit func(ast.NodeID) Type) {
+func (r *Resolver) walkChildren(id ast.NodeID, visit func(ast.NodeID) Type) {
 	if id == ast.InvalidNode || !r.validNode(id) {
 		return
 	}
@@ -1172,7 +1222,7 @@ func (r *ResolverV2) walkChildren(id ast.NodeID, visit func(ast.NodeID) Type) {
 	}
 }
 
-func (r *ResolverV2) mergeSemantic(id ast.NodeID, data SemanticData) {
+func (r *Resolver) mergeSemantic(id ast.NodeID, data SemanticData) {
 	if r.Data == nil || id == ast.InvalidNode {
 		return
 	}
@@ -1203,11 +1253,11 @@ func (r *ResolverV2) mergeSemantic(id ast.NodeID, data SemanticData) {
 	r.Data.Set(NodeID(id), &data)
 }
 
-func (r *ResolverV2) validNode(id ast.NodeID) bool {
+func (r *Resolver) validNode(id ast.NodeID) bool {
 	return int(id) > 0 && int(id) < len(r.Tree.Nodes)
 }
 
-func (r *ResolverV2) source(id ast.NodeID) []byte {
+func (r *Resolver) source(id ast.NodeID) []byte {
 	if r.validNode(id) {
 		node := r.Tree.Nodes[id]
 		if node.Start <= node.End && node.End <= uint32(len(r.Tree.Source)) {
