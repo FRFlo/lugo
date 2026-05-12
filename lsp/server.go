@@ -169,45 +169,6 @@ func evictClosedDocumentCaches(s *Server) {
 	}
 }
 
-func (s *Server) ensureDocumentWarm(uri string) *Document {
-	if s == nil || uri == "" {
-		return nil
-	}
-
-	doc := s.Documents[uri]
-	if doc != nil && len(doc.Source()) > 0 {
-		return doc
-	}
-
-	var source []byte
-	if s.GlobalIndex != nil {
-		if res := s.GlobalIndex.Resources[ResourceURI(uri)]; res != nil && len(res.Source) > 0 {
-			source = res.Source
-		}
-	}
-
-	if len(source) == 0 {
-		path := s.uriToPath(uri)
-		if path != "" {
-			if b, err := os.ReadFile(path); err == nil {
-				source = b
-			}
-		}
-	}
-
-	if len(source) == 0 {
-		return doc
-	}
-
-	s.updateDocument(uri, source)
-
-	if warm := s.Documents[uri]; warm != nil {
-		return warm
-	}
-
-	return doc
-}
-
 func NewServer(version string) *Server {
 	return &Server{
 		Version: version,

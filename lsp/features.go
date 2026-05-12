@@ -227,9 +227,6 @@ func (s *Server) handleHover(req Request) {
 		}
 	}
 	ctx := s.resolveSymbolAt(uri, offset)
-	if ctx != nil && ctx.TargetURI != "" {
-		ctx.TargetDoc = s.ensureDocumentWarm(ctx.TargetURI)
-	}
 
 	var (
 		hoverText string
@@ -241,7 +238,7 @@ func (s *Server) handleHover(req Request) {
 	if ctx != nil {
 		r = new(getNodeRange(doc.Tree, ctx.IdentNodeID))
 
-		if ctx.TargetURI != "" && ctx.TargetURI != uri && ctx.TargetDoc != nil {
+		if ctx.TargetURI != "" && ctx.TargetURI != uri {
 			fromFile = filepath.Base(ctx.TargetDoc.Path)
 		}
 
@@ -1532,9 +1529,6 @@ func (s *Server) handleSignatureHelp(req Request) {
 	}
 
 	ctx := s.resolveSymbolAt(uri, doc.Tree.Nodes[funcIdentID].Start)
-	if ctx != nil && ctx.TargetURI != "" {
-		ctx.TargetDoc = s.ensureDocumentWarm(ctx.TargetURI)
-	}
 	if ctx == nil && exportRes == "" {
 		WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: nil})
 
@@ -1591,7 +1585,7 @@ func (s *Server) handleSignatureHelp(req Request) {
 	)
 
 	for _, def := range defs {
-		tDoc := s.ensureDocumentWarm(def.URI)
+		tDoc := s.Documents[def.URI]
 		if tDoc == nil {
 			continue
 		}
@@ -1957,11 +1951,6 @@ func (s *Server) handleInlayHint(req Request) {
 
 		ctx := s.resolveSymbolAt(uri, doc.Tree.Nodes[funcIdentID].Start)
 		if ctx == nil || ctx.TargetDoc == nil || ctx.TargetDefID == ast.InvalidNode {
-			continue
-		}
-
-		ctx.TargetDoc = s.ensureDocumentWarm(ctx.TargetURI)
-		if ctx.TargetDoc == nil {
 			continue
 		}
 

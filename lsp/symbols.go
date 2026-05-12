@@ -1561,11 +1561,6 @@ func (s *Server) getReferences(ctx *SymbolContext, includeDeclaration bool) []Lo
 	}
 
 	if ctx.TargetDefID != ast.InvalidNode {
-		ctx.TargetDoc = s.ensureDocumentWarm(ctx.TargetURI)
-		if ctx.TargetDoc == nil {
-			return locations
-		}
-
 		for i, def := range ctx.TargetDoc.Resolver.References {
 			if def == ctx.TargetDefID {
 				addRef(ctx.TargetDoc, ctx.TargetURI, ast.NodeID(i))
@@ -1575,11 +1570,6 @@ func (s *Server) getReferences(ctx *SymbolContext, includeDeclaration bool) []Lo
 
 	if ctx.FiveMExportRes != "" {
 		for dUri, dDoc := range s.Documents {
-			dDoc = s.ensureDocumentWarm(dUri)
-			if dDoc == nil {
-				continue
-			}
-
 			if !s.hasFiveMExportBridge(dDoc) {
 				continue
 			}
@@ -1632,11 +1622,6 @@ func (s *Server) iterateGlobalReferences(ctx *SymbolContext) iter.Seq[GlobalRefe
 		if ctx.FiveMExportRes != "" {
 			if resObj := s.resolveFiveMResource(ctx.FiveMExportRes); resObj != nil {
 				for dURI, dDoc := range s.Documents {
-					dDoc = s.ensureDocumentWarm(dURI)
-					if dDoc == nil {
-						continue
-					}
-
 					if !s.hasFiveMExportBridge(dDoc) {
 						continue
 					}
@@ -1679,11 +1664,6 @@ func (s *Server) iterateGlobalReferences(ctx *SymbolContext) iter.Seq[GlobalRefe
 		}
 
 		for dUri, dDoc := range s.Documents {
-			dDoc = s.ensureDocumentWarm(dUri)
-			if dDoc == nil {
-				continue
-			}
-
 			if !s.canSeeSymbol(dDoc, ctx.TargetDoc) {
 				continue
 			}
