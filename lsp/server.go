@@ -113,7 +113,6 @@ type Server struct {
 	SuggestFunctionParams bool
 	FeatureFormatAlerts   bool
 
-	FeatureFiveM                  bool
 	DiagFiveMUnaccountedFile      bool
 	DiagFiveMUnknownExport        bool
 	DiagFiveMUnknownResource      bool
@@ -278,7 +277,7 @@ func (s *Server) Start() error {
 }
 
 func (s *Server) applyInitializationOptions(opts InitializationOptions) (needsReindex bool, needsRepublish bool) {
-	effectiveLibraryPaths := s.buildConfiguredLibraryPaths(opts.LibraryPaths, opts.FeatureFiveM)
+	effectiveLibraryPaths := s.buildConfiguredLibraryPaths(opts.LibraryPaths)
 	if s.setLibraryPaths(effectiveLibraryPaths) {
 		needsReindex = true
 	}
@@ -346,7 +345,6 @@ func (s *Server) applyInitializationOptions(opts InitializationOptions) (needsRe
 	setCfg(&s.SuggestFunctionParams, opts.SuggestFunctionParams, nil)
 	setCfg(&s.FeatureFormatAlerts, opts.FeatureFormatAlerts, nil)
 
-	setCfg(&s.FeatureFiveM, opts.FeatureFiveM, &needsReindex)
 	setCfg(&s.DiagFiveMUnaccountedFile, opts.DiagFiveMUnaccountedFile, &needsRepublish)
 	setCfg(&s.DiagFiveMUnknownExport, opts.DiagFiveMUnknownExport, &needsRepublish)
 	setCfg(&s.DiagFiveMUnknownResource, opts.DiagFiveMUnknownResource, &needsRepublish)
@@ -368,11 +366,8 @@ func (s *Server) setIgnoreGlobs(globs []string) bool {
 	return true
 }
 
-func (s *Server) buildConfiguredLibraryPaths(paths []string, featureFiveM bool) []string {
+func (s *Server) buildConfiguredLibraryPaths(paths []string) []string {
 	configured := slices.Clone(paths)
-	if !featureFiveM {
-		return configured
-	}
 
 	// Native bundles are loaded on-demand via ensureFiveMNativeBundleLoaded,
 	// not eagerly indexed via LibraryPaths during refreshWorkspace.

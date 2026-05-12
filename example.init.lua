@@ -75,7 +75,6 @@ lspconfig.lugo.setup({
 		featureFormatAlerts = true,
 
 		-- FiveM Support
-		featureFiveM = true,
 		diagFiveMUnaccountedFile = true,
 		diagFiveMUnknownExport = true,
 		diagFiveMUnknownResource = true

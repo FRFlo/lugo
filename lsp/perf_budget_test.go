@@ -57,7 +57,6 @@ func BenchmarkColdStart(b *testing.B) {
 				ResourceURI:  res.URI,
 				Scope:        GlobalIndexScopeShared,
 				SemanticData: NewSemanticDataTable(),
-				FeatureFiveM: false,
 			})
 
 			if err := resolver.Resolve(tree.Root); err != nil {

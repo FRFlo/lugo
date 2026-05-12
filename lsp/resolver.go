@@ -17,7 +17,6 @@ const (
 )
 
 type ResolverOptions struct {
-	FeatureFiveM bool
 	ResourceURI  ResourceURI
 	Scope        GlobalIndexScope
 	Index        *GlobalIndex
@@ -67,10 +66,9 @@ type Resolver struct {
 
 	Data *SemanticDataTable
 
-	FeatureFiveM bool
-	ResourceURI  ResourceURI
-	Scope        GlobalIndexScope
-	Index        *GlobalIndex
+	ResourceURI ResourceURI
+	Scope       GlobalIndexScope
+	Index       *GlobalIndex
 
 	Phase      ResolverPhase
 	PhaseState *ResolverPhaseState
@@ -140,7 +138,6 @@ func NewResolver(tree *ast.Tree, opts ResolverOptions) *Resolver {
 		FieldDefs:     make([]resolverFieldDef, 0, 512),
 		PendingFields: make([]resolverFieldRef, 0, 128),
 		Data:          data,
-		FeatureFiveM:  opts.FeatureFiveM,
 		ResourceURI:   opts.ResourceURI,
 		Scope:         scope,
 		Index:         opts.Index,
@@ -643,7 +640,7 @@ func (r *Resolver) isLocalAssignInitializerReference(defID, refID ast.NodeID) bo
 }
 
 func (r *Resolver) ensurePhase2DependenciesReady() error {
-	if !r.FeatureFiveM || r.Index == nil || r.ResourceURI == "" || r.PhaseState == nil {
+	if r.Index == nil || r.ResourceURI == "" || r.PhaseState == nil {
 		return nil
 	}
 	r.Index.mu.RLock()
@@ -773,13 +770,11 @@ func (r *Resolver) identType(id ast.NodeID) Type {
 			return r.types[defID]
 		}
 	}
-	if r.FeatureFiveM {
-		switch name {
-		case "source":
-			return Type{Primitive: TypeNumber}
-		case "exports":
-			return Type{Primitive: TypeTable, Structural: &StructuralType{Fields: map[string]Type{}}}
-		}
+	switch name {
+	case "source":
+		return Type{Primitive: TypeNumber}
+	case "exports":
+		return Type{Primitive: TypeTable, Structural: &StructuralType{Fields: map[string]Type{}}}
 	}
 	if r.Index != nil && name != "" {
 		if entry := r.lookupIndexSymbol(SymbolName(name)); entry != nil {

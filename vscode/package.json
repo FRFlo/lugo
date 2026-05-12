@@ -387,13 +387,6 @@
                 "title": "Lugo: FiveM",
                 "order": 4,
                 "properties": {
-                    "lugo.fivem.enabled": {
-                        "type": "boolean",
-                        "default": false,
-                        "scope": "resource",
-                        "markdownDescription": "Enable FiveM manifest authoring, profile-scoped runtime globals, export bridge metadata, and automatic native helper selection for files matched by `fxmanifest.lua` / `__resource.lua`.",
-                        "order": 1
-                    },
                     "lugo.fivem.diagnostics.unaccountedFile": {
                         "type": "boolean",
                         "default": true,

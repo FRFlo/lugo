@@ -131,7 +131,7 @@ func (s *Server) handleDefinition(req Request) {
 }
 
 func (s *Server) getFiveMEventDefinitionLocations(doc *Document, offset uint32) []Location {
-	if s == nil || !s.FeatureFiveM || doc == nil || doc.Tree == nil {
+	if s == nil || doc == nil || doc.Tree == nil {
 		return nil
 	}
 
@@ -872,7 +872,7 @@ func (s *Server) handleWorkspaceSymbol(req Request) {
 		}
 	}
 
-	if s.FeatureFiveM && count < MaxWorkspaceResults {
+	if count < MaxWorkspaceResults {
 		seen := make(map[string]struct{}, len(results))
 		for _, result := range results {
 			seen[result.Name] = struct{}{}

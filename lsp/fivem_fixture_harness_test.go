@@ -187,7 +187,6 @@ func newFiveMFixtureHarnessWithoutIndex(t testing.TB, fixtureNames ...string) *f
 	s := NewServer("test")
 	s.Writer = rpcOut
 	s.Log = plain.New(plain.WithTarget(io.Discard))
-	s.FeatureFiveM = true
 	s.DiagFiveMUnaccountedFile = true
 	s.DiagFiveMUnknownExport = true
 	s.DiagFiveMUnknownResource = true

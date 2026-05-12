@@ -50,12 +50,12 @@ func TestResolver(t *testing.T) {
 
 	t.Run("FiveMCascade", func(t *testing.T) {
 		idx := NewGlobalIndex()
-		idx.RegisterFiveMResource(&FiveMResource{Name: "dep", RootURI: "dep"}, true)
-		idx.RegisterFiveMResource(&FiveMResource{Name: "main", RootURI: "main", Dependencies: []string{"dep"}}, true)
+		idx.RegisterFiveMResource(&FiveMResource{Name: "dep", RootURI: "dep"})
+		idx.RegisterFiveMResource(&FiveMResource{Name: "main", RootURI: "main", Dependencies: []string{"dep"}})
 		tree := parseResolverLua(t, []byte("local x = NativeThing\n"))
 		state := NewResolverPhaseState()
 		state.MarkPhase1Complete("main")
-		resolver := NewResolver(tree, ResolverOptions{FeatureFiveM: true, ResourceURI: "main", Index: idx, PhaseState: state})
+		resolver := NewResolver(tree, ResolverOptions{ResourceURI: "main", Index: idx, PhaseState: state})
 		if err := resolver.Phase1(tree.Root); err != nil {
 			t.Fatalf("Phase1() error = %v", err)
 		}
@@ -72,7 +72,7 @@ func TestResolver(t *testing.T) {
 		idx := NewGlobalIndex()
 		idx.AddSymbol("res", GlobalIndexScopeShared, "GetPlayerName", &SymbolEntry{Key: GlobalKey{PropHash: ast.HashBytes([]byte("GetPlayerName"))}, Type: Type{Primitive: TypeFunction, Structural: &StructuralType{Function: &FunctionType{Returns: []Type{{Primitive: TypeString}}}}}})
 		tree := parseResolverLua(t, []byte("local name = GetPlayerName()\n"))
-		resolver := NewResolver(tree, ResolverOptions{FeatureFiveM: true, ResourceURI: "res", Index: idx})
+		resolver := NewResolver(tree, ResolverOptions{ResourceURI: "res", Index: idx})
 		if err := resolver.Resolve(tree.Root); err != nil {
 			t.Fatalf("Resolve() error = %v", err)
 		}
@@ -170,7 +170,7 @@ func TestParity(t *testing.T) {
 		old.Resolve(treeOld.Root)
 
 		treeNew := parseResolverLua(t, src)
-		resolver := NewResolver(treeNew, ResolverOptions{FeatureFiveM: false})
+		resolver := NewResolver(treeNew, ResolverOptions{})
 		if err := resolver.Phase1(treeNew.Root); err != nil {
 			t.Fatalf("Phase1() error = %v", err)
 		}

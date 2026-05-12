@@ -189,7 +189,7 @@ func BenchmarkFiveMEventScanning(b *testing.B) {
 		b.StopTimer()
 
 		s := NewServer("benchmark")
-		s.FeatureFiveM = true
+
 		attachTestFiveMNativeBundleLoader(b, s)
 
 		root := b.TempDir()
@@ -479,9 +479,8 @@ return M
 		for i := 0; i < b.N; i++ {
 			b.StopTimer()
 
-			// Setup: create server with FeatureFiveM enabled
+			// Setup: create server with FiveM support
 			s := NewServer("benchmark")
-			s.FeatureFiveM = true
 
 			// Setup: attach native bundle loader
 			attachTestFiveMNativeBundleLoader(b, s)

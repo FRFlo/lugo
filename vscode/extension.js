@@ -31,7 +31,6 @@ function buildInitializationOptions() {
 	const filesConfig = vscode.workspace.getConfiguration("files"),
 		searchConfig = vscode.workspace.getConfiguration("search"),
 		lugoConfig = vscode.workspace.getConfiguration("lugo");
-	const featureFiveM = lugoConfig.get("fivem.enabled") === true;
 
 	let ignoreGlobs = lugoConfig.get("workspace.ignoreGlobs") || [];
 
@@ -49,7 +48,7 @@ function buildInitializationOptions() {
 	ignoreGlobs = [...new Set(ignoreGlobs)];
 
 	return {
-		libraryPaths: buildLibraryPaths(lugoConfig.get("workspace.libraryPaths") || [], featureFiveM),
+		libraryPaths: buildLibraryPaths(lugoConfig.get("workspace.libraryPaths") || []),
 		ignoreGlobs: ignoreGlobs,
 		knownGlobals: lugoConfig.get("environment.knownGlobals") || [],
 		bannedSymbols: lugoConfig.get("diagnostics.bannedSymbols") || {},
@@ -96,18 +95,14 @@ function buildInitializationOptions() {
 		formatOpinionated: lugoConfig.get("features.formatOpinionated") === true,
 		suggestFunctionParams: lugoConfig.get("completion.suggestFunctionParams") !== false,
 
-		featureFiveM: featureFiveM,
 		diagFiveMUnaccountedFile: lugoConfig.get("fivem.diagnostics.unaccountedFile") !== false,
 		diagFiveMUnknownExport: lugoConfig.get("fivem.diagnostics.unknownExport") !== false,
 		diagFiveMUnknownResource: lugoConfig.get("fivem.diagnostics.unknownResource") !== false,
 	};
 }
 
-function buildLibraryPaths(paths, featureFiveM) {
+function buildLibraryPaths(paths) {
 	const libraryPaths = [...paths];
-	if (!featureFiveM) {
-		return libraryPaths;
-	}
 
 	const runtimePath = resolveFiveMNativeCacheDir();
 	if (!libraryPaths.includes(runtimePath)) {

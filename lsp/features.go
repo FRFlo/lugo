@@ -80,7 +80,7 @@ func fiveMEventCompletionCall(doc *Document, offset uint32) (string, bool) {
 }
 
 func (s *Server) getFiveMEventReferenceLocations(doc *Document, offset uint32) []Location {
-	if s == nil || !s.FeatureFiveM || doc == nil || doc.Tree == nil {
+	if s == nil || doc == nil || doc.Tree == nil {
 		return nil
 	}
 
@@ -675,98 +675,96 @@ func (s *Server) handleCompletion(req Request) {
 		})
 	}
 
-	if s.FeatureFiveM {
-		if callName, ok := fiveMEventCompletionCall(doc, offset); ok {
-			addFiveMEventCompletions := func() {
-				addEvent := func(name, detail, sortText string) {
-					if name == "" || name == "*" {
-						return
-					}
-
-					addCompletion(name, FieldCompletion, detail, false, sortText, name, PlainTextTextFormat)
+	if callName, ok := fiveMEventCompletionCall(doc, offset); ok {
+		addFiveMEventCompletions := func() {
+			addEvent := func(name, detail, sortText string) {
+				if name == "" || name == "*" {
+					return
 				}
 
-				builtinAllowed := func(subset string) bool {
-					switch callName {
-					case "TriggerServerEvent":
-						return subset == "SERVER" || subset == "SHARED"
-					case "TriggerClientEvent":
-						return subset == "CLIENT" || subset == "SHARED"
-					default:
-						return true
-					}
+				addCompletion(name, FieldCompletion, detail, false, sortText, name, PlainTextTextFormat)
+			}
+
+			builtinAllowed := func(subset string) bool {
+				switch callName {
+				case "TriggerServerEvent":
+					return subset == "SERVER" || subset == "SHARED"
+				case "TriggerClientEvent":
+					return subset == "CLIENT" || subset == "SHARED"
+				default:
+					return true
 				}
+			}
 
-				for name, builtin := range EventsBuiltin {
-					if builtinAllowed(builtin.Subset) {
-						addEvent(name, "built-in ("+builtin.Subset+")", "0")
-					}
+			for name, builtin := range EventsBuiltin {
+				if builtinAllowed(builtin.Subset) {
+					addEvent(name, "built-in ("+builtin.Subset+")", "0")
 				}
+			}
 
-				discoveredAllowed := func(d *Document, ev FiveMEventInfo) bool {
-					switch callName {
-					case "TriggerServerEvent", "TriggerClientEvent":
-						if ev.Kind != FiveMEventAddHandler && ev.Kind != FiveMEventRegisterNet {
-							return false
-						}
-
-						profile := s.getDocumentFiveMProfile(d)
-						env := profile.Env()
-						if callName == "TriggerServerEvent" {
-							return env == EnvServer || env == EnvShared
-						}
-
-						return env == EnvClient || env == EnvShared
-					default:
-						return true
+			discoveredAllowed := func(d *Document, ev FiveMEventInfo) bool {
+				switch callName {
+				case "TriggerServerEvent", "TriggerClientEvent":
+					if ev.Kind != FiveMEventAddHandler && ev.Kind != FiveMEventRegisterNet {
+						return false
 					}
-				}
 
-				eventDetail := func(ev FiveMEventInfo) string {
-					switch ev.Kind {
-					case FiveMEventAddHandler:
-						return "handler"
-					case FiveMEventRegisterNet:
-						return "network handler"
-					case FiveMEventTriggerLocal:
-						return "local trigger"
-					case FiveMEventTriggerServer:
-						return "server trigger"
-					case FiveMEventTriggerClient:
-						return "client trigger"
-					default:
-						return "event"
+					profile := s.getDocumentFiveMProfile(d)
+					env := profile.Env()
+					if callName == "TriggerServerEvent" {
+						return env == EnvServer || env == EnvShared
 					}
+
+					return env == EnvClient || env == EnvShared
+				default:
+					return true
 				}
+			}
 
-				for _, kind := range []FiveMEventKind{FiveMEventRegisterNet, FiveMEventAddHandler, FiveMEventTriggerLocal, FiveMEventTriggerServer, FiveMEventTriggerClient} {
-					for _, d := range s.Documents {
-						if d == nil {
-							continue
-						}
+			eventDetail := func(ev FiveMEventInfo) string {
+				switch ev.Kind {
+				case FiveMEventAddHandler:
+					return "handler"
+				case FiveMEventRegisterNet:
+					return "network handler"
+				case FiveMEventTriggerLocal:
+					return "local trigger"
+				case FiveMEventTriggerServer:
+					return "server trigger"
+				case FiveMEventTriggerClient:
+					return "client trigger"
+				default:
+					return "event"
+				}
+			}
 
-						for _, ev := range d.FiveMEvents {
-							if ev.Kind == kind && discoveredAllowed(d, ev) {
-								addEvent(ev.Name, eventDetail(ev), "1")
-							}
+			for _, kind := range []FiveMEventKind{FiveMEventRegisterNet, FiveMEventAddHandler, FiveMEventTriggerLocal, FiveMEventTriggerServer, FiveMEventTriggerClient} {
+				for _, d := range s.Documents {
+					if d == nil {
+						continue
+					}
+
+					for _, ev := range d.FiveMEvents {
+						if ev.Kind == kind && discoveredAllowed(d, ev) {
+							addEvent(ev.Name, eventDetail(ev), "1")
 						}
 					}
 				}
 			}
-
-			addFiveMEventCompletions()
-
-			WriteMessage(s.Writer, Response{
-				RPC: "2.0",
-				ID:  req.ID,
-				Result: CompletionList{
-					IsIncomplete: false,
-					Items:        items,
-				},
-			})
-
-			return
 		}
+
+		addFiveMEventCompletions()
+
+		WriteMessage(s.Writer, Response{
+			RPC: "2.0",
+			ID:  req.ID,
+			Result: CompletionList{
+				IsIncomplete: false,
+				Items:        items,
+			},
+		})
+
+		return
 	}
 
 	buildFuncSnippet := func(label string, dDoc *Document, valID ast.NodeID, isMethod bool) (string, InsertTextFormat) {

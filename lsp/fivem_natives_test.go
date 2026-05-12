@@ -6,7 +6,7 @@ func TestNativeIntegration(t *testing.T) {
 	t.Run("StructuralCatalog", func(t *testing.T) {
 		idx := NewGlobalIndex()
 		res := &FiveMResource{Name: "runtime", RootURI: "runtime", Games: []string{"gta5"}, FXVersion: "cerulean", IsCfxV2: true, UseExperimentalOAL: true, ClientGlobs: []string{"client.lua"}, ServerGlobs: []string{"server.lua"}}
-		scope := idx.RegisterFiveMResource(res, true)
+		scope := idx.RegisterFiveMResource(res)
 		if scope == nil {
 			t.Fatal("RegisterFiveMResource returned nil")
 		}
@@ -36,24 +36,13 @@ func TestNativeIntegration(t *testing.T) {
 		}
 	})
 
-	t.Run("FeatureFiveMFalseSkipsCatalog", func(t *testing.T) {
-		idx := NewGlobalIndex()
-		res := idx.RegisterFiveMResource(&FiveMResource{Name: "plain", RootURI: "plain", ClientGlobs: []string{"client.lua"}}, false)
-		if res == nil {
-			t.Fatal("resource scope should still be created")
-		}
-		if got := idx.LookupFiveMNative("plain", GlobalIndexScopeClient, "PlayerPedId"); got != nil {
-			t.Fatalf("FeatureFiveM=false loaded native catalog: %+v", got)
-		}
-	})
-
 	t.Run("NoManifestAndNYBundle", func(t *testing.T) {
 		idx := NewGlobalIndex()
-		if res := idx.RegisterFiveMResource(&FiveMResource{}, true); res != nil {
+		if res := idx.RegisterFiveMResource(&FiveMResource{}); res != nil {
 			t.Fatalf("empty no-manifest resource registered: %+v", res)
 		}
 		nyRes := &FiveMResource{Name: "ny", RootURI: "ny", Games: []string{"ny"}, FXVersion: "cerulean", IsCfxV2: true, ClientGlobs: []string{"client.lua"}}
-		nyScope := idx.RegisterFiveMResource(nyRes, true)
+		nyScope := idx.RegisterFiveMResource(nyRes)
 		registerTestNativeCatalog(t, idx, nyScope, nyRes)
 		native := idx.LookupFiveMNative("ny", GlobalIndexScopeClient, "GetCharCoordinates")
 		if native == nil {
@@ -77,9 +66,9 @@ func registerTestNativeCatalog(t testing.TB, idx *GlobalIndex, scope *ResourceSc
 
 func TestExportBridge(t *testing.T) {
 	idx := NewGlobalIndex()
-	idx.RegisterFiveMResource(&FiveMResource{Name: "bank", RootURI: "bank", ClientExports: []string{"pay", "sharedPing"}, ServerExports: []string{"audit", "sharedPing"}}, true)
-	idx.RegisterFiveMResource(&FiveMResource{Name: "shop", RootURI: "shop", Dependencies: []string{"bank"}, ClientGlobs: []string{"client.lua"}}, true)
-	idx.RegisterFiveMResource(&FiveMResource{Name: "intruder", RootURI: "intruder", ClientGlobs: []string{"client.lua"}}, true)
+	idx.RegisterFiveMResource(&FiveMResource{Name: "bank", RootURI: "bank", ClientExports: []string{"pay", "sharedPing"}, ServerExports: []string{"audit", "sharedPing"}})
+	idx.RegisterFiveMResource(&FiveMResource{Name: "shop", RootURI: "shop", Dependencies: []string{"bank"}, ClientGlobs: []string{"client.lua"}})
+	idx.RegisterFiveMResource(&FiveMResource{Name: "intruder", RootURI: "intruder", ClientGlobs: []string{"client.lua"}})
 	pay := idx.LookupFiveMExport("shop", "bank", GlobalIndexScopeClient, "pay")
 	if pay == nil || pay.Export == nil || pay.Export.Scope != GlobalIndexScopeClient {
 		t.Fatalf("client export pay = %+v, want client export visible through dependency", pay)
@@ -124,7 +113,7 @@ function SharedNative() end
 `), nil
 		}
 	})
-	scope := idx.RegisterFiveMResource(&FiveMResource{Name: "scoped", RootURI: "scoped", Games: []string{"gta5"}, FXVersion: "cerulean", IsCfxV2: true}, true)
+	scope := idx.RegisterFiveMResource(&FiveMResource{Name: "scoped", RootURI: "scoped", Games: []string{"gta5"}, FXVersion: "cerulean", IsCfxV2: true})
 	idx.mu.Lock()
 	idx.clearFiveMGeneratedSymbolsLocked(scope)
 	idx.registerFiveMNativeCatalogLocked(scope, &FiveMResource{Name: "scoped", RootURI: "scoped", Games: []string{"gta5"}, FXVersion: "cerulean", IsCfxV2: true}, catalog)

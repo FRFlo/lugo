@@ -74,9 +74,10 @@ Lugo performs workspace-wide analysis to catch bugs before runtime:
 * **Deprecation:** Warns when using symbols marked with `@deprecated`.
 * **Banned Symbols:** Warns when using customized banned functions or properties (e.g., banning `print` to enforce a custom logger).
 
-## FiveM Support (Optional)
+## FiveM Support
 
-When FiveM support is enabled (`lugo.fivem.enabled` in VS Code, `featureFiveM` in `initializationOptions` / CI), Lugo activates FiveM metadata only for files that belong to a detected `fxmanifest.lua` or `__resource.lua` resource.
+This fork is dedicated to FiveM support. Lugo activates FiveM metadata for files that belong to a detected
+`fxmanifest.lua` or `__resource.lua` resource.
 
 * **Manifest authoring:** `fxmanifest.lua` and `__resource.lua` get directive completion, hover and definition support from the embedded manifest reference. Manifest files do not expose runtime globals such as `Citizen`, `Wait`, `exports` or `source`.
 * **Runtime profiles:** Files matched by the manifest are classified as `client`, `server` or `shared`. Client files see client + shared runtime metadata, server files see server + shared metadata, and shared or dual-listed files keep the shared intersection only. Plain Lua files outside a matched resource stay plain Lua.
@@ -166,7 +167,6 @@ You can configure Lugo via your VS Code `settings.json` (also available via the 
 
 VS Code uses the `lugo.fivem.*` names below. Standalone clients and CI use the matching `initializationOptions` keys shown in parentheses.
 
-* `lugo.fivem.enabled` (`featureFiveM`): Enable FiveM manifest authoring, profile-scoped runtime globals, export bridge metadata and automatic native helper selection for files matched by `fxmanifest.lua` / `__resource.lua`.
 * `lugo.fivem.diagnostics.unaccountedFile` (`diagFiveMUnaccountedFile`): Toggle warnings for Lua files inside a detected resource root that are not matched by the active manifest. Unaccounted files remain plain Lua.
 * `lugo.fivem.diagnostics.unknownExport` (`diagFiveMUnknownExport`): Toggle warnings for missing exports on known FiveM resources addressed through the `exports` bridge.
 * `lugo.fivem.diagnostics.unknownResource` (`diagFiveMUnknownResource`): Toggle warnings for unknown resource names addressed through the `exports` bridge.

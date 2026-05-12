@@ -220,7 +220,7 @@ func newFiveMProfileTestServer(t *testing.T) (*Server, string) {
 
 	root := t.TempDir()
 	s := NewServer("test")
-	s.FeatureFiveM = true
+
 	attachTestFiveMNativeBundleLoader(t, s)
 	s.setLibraryPaths([]string{materializeTestFiveMNativeLibrary(t, s)})
 
@@ -238,7 +238,7 @@ func addFiveMTestDocument(t *testing.T, s *Server, path, source string) *Documen
 		t.Fatalf("document %s was not created", uri)
 	}
 
-	if s.FeatureFiveM && doc.IsFiveMManifest {
+	if doc.IsFiveMManifest {
 		res := s.parseFiveMManifest(doc)
 		s.registerFiveMManifestResource(res)
 

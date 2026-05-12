@@ -127,17 +127,8 @@ func (s *Server) publishDiagnostics(uri string) {
 		for i := 1; i < len(doc.Tree.Nodes); i++ {
 			node := doc.Tree.Nodes[i]
 
-			// Backtick strings are only valid in FiveM mode
-			if node.Kind == ast.KindHashedString && !s.FeatureFiveM {
-				s.diagBuf = append(s.diagBuf, Diagnostic{
-					Range:    getNodeRange(doc.Tree, ast.NodeID(i)),
-					Severity: SeverityError,
-					Code:     "fivem-hashed-string",
-					Message:  "Backtick hashed strings are only available when FiveM support is enabled.",
-				})
-
-				continue
-			}
+			// Backtick strings are valid in FiveM mode (always enabled in this fork)
+			_ = s // diagnostics for hashed strings are skipped since FiveM is always enabled
 
 			// 1. Check for valid export access
 			if node.Kind == ast.KindMethodCall || node.Kind == ast.KindMemberExpr {
@@ -226,24 +217,22 @@ func (s *Server) publishDiagnostics(uri string) {
 	}
 
 	// FiveM-specific event diagnostics (optional)
-	if s.FeatureFiveM {
-		// Run the unknown-event diagnostic check if enabled, before emitting diagnostics
-		if s.DiagFiveMUnknownEvent {
-			s.diagFiveMUnknownEvent(doc)
-		}
-		// Run the event-direction diagnostic (TriggerServerEvent/TriggerClientEvent direction)
-		if s.DiagFiveMEventDirection {
-			s.diagFiveMEventDirection(doc)
-		}
-		// Run the unregistered net event diagnostic for this doc
-		if s.DiagFiveMUnregisteredNetEvent {
-			s.diagFiveMUnregisteredNetEvent(doc)
-		}
-		// If any event-direction related diagnostics were produced, emit and stop further processing
-		if len(s.diagBuf) > 0 {
-			emitDiagnostics(s.diagBuf)
-			return
-		}
+	// Run the unknown-event diagnostic check if enabled, before emitting diagnostics
+	if s.DiagFiveMUnknownEvent {
+		s.diagFiveMUnknownEvent(doc)
+	}
+	// Run the event-direction diagnostic (TriggerServerEvent/TriggerClientEvent direction)
+	if s.DiagFiveMEventDirection {
+		s.diagFiveMEventDirection(doc)
+	}
+	// Run the unregistered net event diagnostic for this doc
+	if s.DiagFiveMUnregisteredNetEvent {
+		s.diagFiveMUnregisteredNetEvent(doc)
+	}
+	// If any event-direction related diagnostics were produced, emit and stop further processing
+	if len(s.diagBuf) > 0 {
+		emitDiagnostics(s.diagBuf)
+		return
 	}
 
 	if doc.IsMeta {
@@ -1894,7 +1883,7 @@ func (s *Server) getRootDef(doc *Document, exprID ast.NodeID) ast.NodeID {
 // that do not have a corresponding RegisterNetEvent within the same FiveM resource.
 // MVP: operates within the same resource only.
 func (s *Server) diagFiveMUnregisteredNetEvent(doc *Document) {
-	if !s.FeatureFiveM || !s.DiagFiveMUnregisteredNetEvent {
+	if !s.DiagFiveMUnregisteredNetEvent {
 		return
 	}
 
@@ -1961,7 +1950,7 @@ func (s *Server) diagFiveMEventDirection(doc *Document) {
 	if doc == nil {
 		return
 	}
-	if !s.FeatureFiveM || !s.DiagFiveMEventDirection {
+	if !s.DiagFiveMEventDirection {
 		return
 	}
 
@@ -2023,9 +2012,6 @@ func (s *Server) diagFiveMEventDirection(doc *Document) {
 // the workspace. It emits an INFORMATION-level diagnostic for such events.
 func (s *Server) diagFiveMUnknownEvent(doc *Document) {
 	if doc == nil {
-		return
-	}
-	if !s.FeatureFiveM {
 		return
 	}
 	if !s.DiagFiveMUnknownEvent {

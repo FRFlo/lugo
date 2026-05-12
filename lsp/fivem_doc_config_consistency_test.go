@@ -11,8 +11,6 @@ import (
 func TestFiveMDocConfigConsistency(t *testing.T) {
 	readme := mustReadRepoFile(t, "README.md")
 	for _, needle := range []string{
-		"lugo.fivem.enabled",
-		"featureFiveM",
 		"diagFiveMUnaccountedFile",
 		"diagFiveMUnknownExport",
 		"diagFiveMUnknownResource",
@@ -26,8 +24,6 @@ func TestFiveMDocConfigConsistency(t *testing.T) {
 	}
 
 	settings := mustReadVSCodeSettings(t)
-	assertVSCodeFiveMSetting(t, settings, "lugo.fivem.enabled", false,
-		"manifest authoring", "profile-scoped runtime globals", "native helper selection")
 	assertVSCodeFiveMSetting(t, settings, "lugo.fivem.diagnostics.unaccountedFile", true,
 		"resource root", "plain Lua")
 	assertVSCodeFiveMSetting(t, settings, "lugo.fivem.diagnostics.unknownExport", true,

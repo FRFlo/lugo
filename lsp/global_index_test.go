@@ -63,7 +63,7 @@ func TestGlobalIndex(t *testing.T) {
 			ClientGlobs: []string{"client.lua", "dual.lua"},
 			ServerGlobs: []string{"server.lua", "dual.lua"},
 			SharedGlobs: []string{"shared.lua"},
-		}, true)
+		})
 
 		if res == nil {
 			t.Fatal("RegisterFiveMResource returned nil")
@@ -278,7 +278,7 @@ func TestScopePartitioning(t *testing.T) {
 		{EmittedName: "shared_script", Value: "shared.lua"},
 	}}
 
-	res := idx.RegisterFiveMResource(&FiveMResource{Name: "res", RootURI: "file:///res", Manifest: manifest}, true)
+	res := idx.RegisterFiveMResource(&FiveMResource{Name: "res", RootURI: "file:///res", Manifest: manifest})
 	if got := res.ScriptScopes["dual.lua"]; got != GlobalIndexScopeShared {
 		t.Fatalf("dual.lua scope = %q, want shared", got)
 	}
@@ -295,9 +295,9 @@ func TestScopePartitioning(t *testing.T) {
 
 func TestTopologicalSort(t *testing.T) {
 	idx := NewGlobalIndex()
-	idx.RegisterFiveMResource(&FiveMResource{Name: "c", RootURI: "c"}, true)
-	idx.RegisterFiveMResource(&FiveMResource{Name: "b", RootURI: "b", Dependencies: []string{"c"}}, true)
-	idx.RegisterFiveMResource(&FiveMResource{Name: "a", RootURI: "a", Dependencies: []string{"b"}}, true)
+	idx.RegisterFiveMResource(&FiveMResource{Name: "c", RootURI: "c"})
+	idx.RegisterFiveMResource(&FiveMResource{Name: "b", RootURI: "b", Dependencies: []string{"c"}})
+	idx.RegisterFiveMResource(&FiveMResource{Name: "a", RootURI: "a", Dependencies: []string{"b"}})
 
 	ordered, diags := idx.TopologicalSort()
 	if len(diags) != 0 {

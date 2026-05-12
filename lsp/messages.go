@@ -147,7 +147,6 @@ type InitializationOptions struct {
 	SuggestFunctionParams bool `json:"suggestFunctionParams"`
 	FeatureFormatAlerts   bool `json:"featureFormatAlerts"`
 
-	FeatureFiveM                  bool `json:"featureFiveM"`
 	DiagFiveMUnaccountedFile      bool `json:"diagFiveMUnaccountedFile"`
 	DiagFiveMUnknownExport        bool `json:"diagFiveMUnknownExport"`
 	DiagFiveMUnknownResource      bool `json:"diagFiveMUnknownResource"`

@@ -1469,7 +1469,7 @@ func (s *Server) getDocumentFiveMProfile(doc *Document) FiveMExecutionProfile {
 
 	profile := FiveMExecutionProfile{Kind: FiveMProfilePlainLua}
 
-	if !s.FeatureFiveM || doc.IsLibrary {
+	if doc.IsLibrary {
 		doc.FiveMProfile = profile
 		doc.FiveMProfileCached = true
 
@@ -1652,7 +1652,7 @@ func (s *Server) classifyDocumentEnv(res *FiveMResource, doc *Document) FileEnv 
 		relPath = ""
 	}
 
-	var env FileEnv = EnvUnknown
+	var env = EnvUnknown
 
 	for _, glob := range res.SharedGlobs {
 		if matchGlob(glob, relPath) {

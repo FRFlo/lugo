@@ -377,7 +377,7 @@ func (idx *GlobalIndex) fiveMConsumerDependsOnProviderLocked(consumer ResourceUR
 }
 
 func (s *Server) syncFiveMDocumentExports(doc *Document) {
-	if s == nil || !s.FeatureFiveM || s.GlobalIndex == nil || doc == nil || len(doc.FiveMLuaExports) == 0 {
+	if s == nil || s.GlobalIndex == nil || doc == nil || len(doc.FiveMLuaExports) == 0 {
 		return
 	}
 	profile := s.getDocumentFiveMProfile(doc)

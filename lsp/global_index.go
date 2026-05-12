@@ -382,7 +382,7 @@ func (idx *GlobalIndex) LookupByScope(resource ResourceURI, scope GlobalIndexSco
 	return res.tableForScope(scope)[name]
 }
 
-func (idx *GlobalIndex) RegisterFiveMResource(res *FiveMResource, featureFiveM bool) *ResourceScope {
+func (idx *GlobalIndex) RegisterFiveMResource(res *FiveMResource) *ResourceScope {
 	if idx == nil || res == nil {
 		return nil
 	}
@@ -399,9 +399,6 @@ func (idx *GlobalIndex) RegisterFiveMResource(res *FiveMResource, featureFiveM b
 	defer idx.mu.Unlock()
 
 	scope := idx.ensureResourceLocked(uri)
-	if !featureFiveM {
-		return scope
-	}
 
 	deps := fiveMResourceDependencies(res)
 	scope.Dependencies = cloneResourceURIs(deps)

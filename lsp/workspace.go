@@ -436,12 +436,10 @@ func (s *Server) refreshWorkspace() {
 		}
 	}
 
-	if s.FeatureFiveM {
-		for _, doc := range s.Documents {
-			if doc.IsFiveMManifest {
-				res := s.parseFiveMManifest(doc)
-				s.registerFiveMManifestResource(res)
-			}
+	for _, doc := range s.Documents {
+		if doc.IsFiveMManifest {
+			res := s.parseFiveMManifest(doc)
+			s.registerFiveMManifestResource(res)
 		}
 	}
 
@@ -683,7 +681,7 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 	if doc != nil {
 		// Canonical source is owned by the Tree; ensure Tree reflects the latest source.
 		// Do not assign to doc.Source here.
-	s.removeDocumentGlobals(uri)
+		s.removeDocumentGlobals(uri)
 
 		doc.ExportedGlobalDefs = doc.ExportedGlobalDefs[:0]
 
@@ -747,27 +745,25 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 
 	doc.parseDiagnosticPragmas()
 
-	if s.FeatureFiveM {
-		doc.FiveMLuaExports = doc.FiveMLuaExports[:0]
+	doc.FiveMLuaExports = doc.FiveMLuaExports[:0]
 
-		for i := 1; i < len(tree.Nodes); i++ {
-			node := tree.Nodes[i]
-			if node.Kind == ast.KindCallExpr && int(node.Left) < len(tree.Nodes) {
-				leftNode := tree.Nodes[node.Left]
-				if leftNode.Kind == ast.KindIdent && doc.referenceAt(node.Left) == ast.InvalidNode {
-					if bytes.Equal(doc.Source()[leftNode.Start:leftNode.End], []byte("exports")) {
-						if node.Count >= 2 && node.Extra+1 < uint32(len(tree.ExtraList)) {
-							arg1ID := tree.ExtraList[node.Extra]
-							arg2ID := tree.ExtraList[node.Extra+1]
+	for i := 1; i < len(tree.Nodes); i++ {
+		node := tree.Nodes[i]
+		if node.Kind == ast.KindCallExpr && int(node.Left) < len(tree.Nodes) {
+			leftNode := tree.Nodes[node.Left]
+			if leftNode.Kind == ast.KindIdent && doc.referenceAt(node.Left) == ast.InvalidNode {
+				if bytes.Equal(doc.Source()[leftNode.Start:leftNode.End], []byte("exports")) {
+					if node.Count >= 2 && node.Extra+1 < uint32(len(tree.ExtraList)) {
+						arg1ID := tree.ExtraList[node.Extra]
+						arg2ID := tree.ExtraList[node.Extra+1]
 
-							if int(arg1ID) < len(tree.Nodes) && tree.Nodes[arg1ID].Kind == ast.KindString {
-								exportName := unquoteLuaString(string(doc.Source()[tree.Nodes[arg1ID].Start:tree.Nodes[arg1ID].End]))
+						if int(arg1ID) < len(tree.Nodes) && tree.Nodes[arg1ID].Kind == ast.KindString {
+							exportName := unquoteLuaString(string(doc.Source()[tree.Nodes[arg1ID].Start:tree.Nodes[arg1ID].End]))
 
-								doc.FiveMLuaExports = append(doc.FiveMLuaExports, FiveMLuaExport{
-									Name:   exportName,
-									NodeID: arg2ID,
-								})
-							}
+							doc.FiveMLuaExports = append(doc.FiveMLuaExports, FiveMLuaExport{
+								Name:   exportName,
+								NodeID: arg2ID,
+							})
 						}
 					}
 				}
@@ -775,53 +771,51 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 		}
 	}
 
-	if s.FeatureFiveM {
-		doc.FiveMEvents = doc.FiveMEvents[:0]
+	doc.FiveMEvents = doc.FiveMEvents[:0]
 
-		for i := 1; i < len(tree.Nodes); i++ {
-			node := tree.Nodes[i]
-			if node.Kind == ast.KindCallExpr && int(node.Left) < len(tree.Nodes) {
-				leftNode := tree.Nodes[node.Left]
-				if leftNode.Kind == ast.KindIdent && doc.referenceAt(node.Left) == ast.InvalidNode {
-					src := doc.Source()
-					ident := src[leftNode.Start:leftNode.End]
+	for i := 1; i < len(tree.Nodes); i++ {
+		node := tree.Nodes[i]
+		if node.Kind == ast.KindCallExpr && int(node.Left) < len(tree.Nodes) {
+			leftNode := tree.Nodes[node.Left]
+			if leftNode.Kind == ast.KindIdent && doc.referenceAt(node.Left) == ast.InvalidNode {
+				src := doc.Source()
+				ident := src[leftNode.Start:leftNode.End]
 
-					var kind FiveMEventKind
-					matched := true
+				var kind FiveMEventKind
+				matched := true
 
-					switch {
-					case bytes.Equal(ident, []byte("AddEventHandler")):
-						kind = FiveMEventAddHandler
-					case bytes.Equal(ident, []byte("RegisterNetEvent")):
-						kind = FiveMEventRegisterNet
-					case bytes.Equal(ident, []byte("TriggerEvent")):
-						kind = FiveMEventTriggerLocal
-					case bytes.Equal(ident, []byte("TriggerServerEvent")):
-						kind = FiveMEventTriggerServer
-					case bytes.Equal(ident, []byte("TriggerClientEvent")):
-						kind = FiveMEventTriggerClient
-					default:
-						matched = false
-					}
+				switch {
+				case bytes.Equal(ident, []byte("AddEventHandler")):
+					kind = FiveMEventAddHandler
+				case bytes.Equal(ident, []byte("RegisterNetEvent")):
+					kind = FiveMEventRegisterNet
+				case bytes.Equal(ident, []byte("TriggerEvent")):
+					kind = FiveMEventTriggerLocal
+				case bytes.Equal(ident, []byte("TriggerServerEvent")):
+					kind = FiveMEventTriggerServer
+				case bytes.Equal(ident, []byte("TriggerClientEvent")):
+					kind = FiveMEventTriggerClient
+				default:
+					matched = false
+				}
 
-					if matched && node.Count >= 1 && node.Extra < uint32(len(tree.ExtraList)) {
-						arg1ID := tree.ExtraList[node.Extra]
-						if int(arg1ID) < len(tree.Nodes) && tree.Nodes[arg1ID].Kind == ast.KindString {
-							eventName := unquoteLuaString(string(src[tree.Nodes[arg1ID].Start:tree.Nodes[arg1ID].End]))
+				if matched && node.Count >= 1 && node.Extra < uint32(len(tree.ExtraList)) {
+					arg1ID := tree.ExtraList[node.Extra]
+					if int(arg1ID) < len(tree.Nodes) && tree.Nodes[arg1ID].Kind == ast.KindString {
+						eventName := unquoteLuaString(string(src[tree.Nodes[arg1ID].Start:tree.Nodes[arg1ID].End]))
 
-							info := FiveMEventInfo{
-								Name:   eventName,
-								Kind:   kind,
-								NodeID: arg1ID,
-							}
-
-							// For AddEventHandler and RegisterNetEvent, record handler NodeID (second arg)
-							if (kind == FiveMEventAddHandler || kind == FiveMEventRegisterNet) && node.Count >= 2 && node.Extra+1 < uint32(len(tree.ExtraList)) {
-								info.HandlerID = tree.ExtraList[node.Extra+1]
-							}
-
-							doc.FiveMEvents = append(doc.FiveMEvents, info)
+						info := FiveMEventInfo{
+							Name:   eventName,
+							Kind:   kind,
+							NodeID: arg1ID,
 						}
+
+						// For AddEventHandler and RegisterNetEvent, record handler NodeID (second arg)
+						if (kind == FiveMEventAddHandler || kind == FiveMEventRegisterNet) && node.Count >= 2 && node.Extra+1 < uint32(len(tree.ExtraList)) {
+							info.HandlerID = tree.ExtraList[node.Extra+1]
+						}
+
+						doc.FiveMEvents = append(doc.FiveMEvents, info)
 					}
 				}
 			}
@@ -900,7 +894,7 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 
 		var virtualNodeID = ast.InvalidNode
 
-		if luadoc.Export != "" && s.FeatureFiveM {
+		if luadoc.Export != "" {
 			virtualNodeID = ast.NodeID(len(tree.Nodes))
 
 			tree.Nodes = append(tree.Nodes, ast.Node{
@@ -1278,7 +1272,7 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 		}
 	}
 
-	if s.FeatureFiveM && doc.IsFiveMManifest {
+	if doc.IsFiveMManifest {
 		res := s.parseFiveMManifest(doc)
 		oldRes := s.FiveMResourceGraph.ResourceByRoot(res.RootURI)
 		activeRes := s.registerFiveMManifestResource(res)
@@ -1300,9 +1294,7 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 
 	s.Documents[uri] = doc
 
-	if s.FeatureFiveM {
-		s.syncFiveMDocumentExports(doc)
-	}
+	s.syncFiveMDocumentExports(doc)
 
 	return needsWorkspaceRepublish
 }
@@ -1315,7 +1307,7 @@ func (s *Server) clearDocument(uri string) {
 		if resource == "" {
 			resource = ResourceURI(uri)
 		}
-	s.removeDocumentGlobals(uri)
+		s.removeDocumentGlobals(uri)
 	}
 
 	if s.GlobalIndex != nil && !s.isGlobalIndexResourceReferencedByOpenDocument(resource, uri) {
@@ -1390,7 +1382,7 @@ func (s *Server) compileIgnorePatterns() {
 }
 
 func (s *Server) isIgnored(fullPath, name string) bool {
-	if s.FeatureFiveM && (name == "fxmanifest.lua" || name == "__resource.lua") {
+	if name == "fxmanifest.lua" || name == "__resource.lua" {
 		return false
 	}
 
