@@ -122,7 +122,7 @@ func TestFiveMLazyNativeLoading(t *testing.T) {
 			t.Fatal("hover should return non-nil result")
 		}
 
-		if _, ok := h.server.GlobalIndex[playerPedKey]; !ok {
+		if syms := h.server.GlobalIndex.SymbolsByHash(playerPedKey); len(syms) == 0 {
 			t.Fatal("PlayerPedId should be in GlobalIndex after hover")
 		}
 
@@ -130,7 +130,7 @@ func TestFiveMLazyNativeLoading(t *testing.T) {
 		h.hover("native_client_call")
 		h.definition("native_client_call")
 
-		if _, ok := h.server.GlobalIndex[playerPedKey]; !ok {
+		if syms := h.server.GlobalIndex.SymbolsByHash(playerPedKey); len(syms) == 0 {
 			t.Fatal("PlayerPedId should remain in GlobalIndex after repeated operations")
 		}
 	})

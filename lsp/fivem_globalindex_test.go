@@ -30,7 +30,7 @@ func TestFiveMGlobalIndexCompaction(t *testing.T) {
 		}
 
 		// Verify the key exists in GlobalIndex
-		if _, ok := h.server.GlobalIndex[keyToCheck]; !ok {
+		if syms := h.server.GlobalIndex.SymbolsByHash(keyToCheck); len(syms) == 0 {
 			t.Fatal("GlobalIndex should contain key for SHARED_ONLY before removal")
 		}
 
@@ -38,7 +38,7 @@ func TestFiveMGlobalIndexCompaction(t *testing.T) {
 		h.server.clearDocument(sharedURI)
 
 		// Verify the GlobalIndex key is completely gone (not just empty)
-		if _, ok := h.server.GlobalIndex[keyToCheck]; ok {
+		if syms := h.server.GlobalIndex.SymbolsByHash(keyToCheck); len(syms) > 0 {
 			t.Fatal("GlobalIndex key should be deleted after document removal, not just empty")
 		}
 	})
@@ -79,8 +79,8 @@ func TestFiveMGlobalIndexCompaction(t *testing.T) {
 		}
 
 		// Verify the key exists and has 2 symbols (from both documents)
-		syms, ok := h.server.GlobalIndex[keyToCheck]
-		if !ok {
+		syms := h.server.GlobalIndex.SymbolsByHash(keyToCheck)
+		if len(syms) == 0 {
 			t.Fatal("GlobalIndex should contain MY_GLOBAL key")
 		}
 		if len(syms) != 2 {
@@ -91,8 +91,8 @@ func TestFiveMGlobalIndexCompaction(t *testing.T) {
 		h.server.clearDocument(auxURI)
 
 		// Verify the key still exists with the remaining symbol
-		syms, ok = h.server.GlobalIndex[keyToCheck]
-		if !ok {
+		syms = h.server.GlobalIndex.SymbolsByHash(keyToCheck)
+		if len(syms) == 0 {
 			t.Fatal("GlobalIndex key should still exist after removing one contributor")
 		}
 		if len(syms) != 1 {
@@ -131,20 +131,20 @@ func TestFiveMGlobalIndexCompaction(t *testing.T) {
 		}
 
 		// Record GlobalIndex size before removal
-		sizeBefore := len(h.server.GlobalIndex)
+		sizeBefore := len(h.server.GlobalIndex.HashIndex)
 
 		// Remove the document
 		h.server.clearDocument(multiURI)
 
 		// Verify GlobalIndex size is reduced
-		sizeAfter := len(h.server.GlobalIndex)
+		sizeAfter := len(h.server.GlobalIndex.HashIndex)
 		if sizeAfter >= sizeBefore {
 			t.Fatalf("GlobalIndex size should be reduced after removal: before=%d, after=%d", sizeBefore, sizeAfter)
 		}
 
 		// The key for each defined symbol should be gone from GlobalIndex
 		for _, exp := range multiDoc.ExportedGlobalDefs {
-			if _, ok := h.server.GlobalIndex[exp.Key]; ok {
+			if syms := h.server.GlobalIndex.SymbolsByHash(exp.Key); len(syms) > 0 {
 				t.Fatal("GlobalIndex key should be deleted after document removal")
 			}
 		}

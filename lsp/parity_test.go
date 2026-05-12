@@ -6,24 +6,24 @@ import (
 	"github.com/coalaura/lugo/semantic"
 )
 
-func TestParity_V1V2SymbolCountAndType(t *testing.T) {
+func TestParity_V1AndCurrentSymbolCountAndType(t *testing.T) {
 	src := []byte("local x = 5\nlocal y = x + 1\n")
 
-	legacyTree := parseResolverV2Lua(t, src)
+	legacyTree := parseResolverLua(t, src)
 	legacyResolver := semantic.New(legacyTree)
 	legacyResolver.Resolve(legacyTree.Root)
 	legacyDoc := &Document{Tree: legacyTree, Resolver: legacyResolver}
 
-	v2Tree := parseResolverV2Lua(t, src)
-	v2Resolver := NewResolverV2(v2Tree, ResolverV2Options{SemanticData: NewSemanticDataTable()})
-	if err := v2Resolver.Resolve(v2Tree.Root); err != nil {
+	currentTree := parseResolverLua(t, src)
+	resolver := NewResolver(currentTree, ResolverOptions{SemanticData: NewSemanticDataTable()})
+	if err := resolver.Resolve(currentTree.Root); err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
 
 	legacyCount := len(legacyResolver.LocalDefs) + len(legacyResolver.GlobalDefs)
-	v2Count := len(v2Resolver.LocalDefs) + len(v2Resolver.GlobalDefs)
-	if legacyCount != v2Count {
-		t.Fatalf("symbol count = %d, want %d", v2Count, legacyCount)
+	currentCount := len(resolver.LocalDefs) + len(resolver.GlobalDefs)
+	if legacyCount != currentCount {
+		t.Fatalf("symbol count = %d, want %d", currentCount, legacyCount)
 	}
 	if legacyCount != 2 {
 		t.Fatalf("symbol count = %d, want 2", legacyCount)
@@ -34,8 +34,8 @@ func TestParity_V1V2SymbolCountAndType(t *testing.T) {
 		t.Fatalf("v1 x type = %#v, want number", got)
 	}
 
-	v2X := findIdentByOccurrence(t, v2Tree, "x", 1)
-	if got := v2Resolver.Data.Get(NodeID(v2X)); got == nil || got.Type.Primitive != TypeNumber {
-		t.Fatalf("v2 x type = %#v, want number", got)
+	currentX := findIdentByOccurrence(t, currentTree, "x", 1)
+	if got := resolver.Data.Get(NodeID(currentX)); got == nil || got.Type.Primitive != TypeNumber {
+		t.Fatalf("current x type = %#v, want number", got)
 	}
 }

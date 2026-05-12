@@ -22,7 +22,7 @@ const (
 	ScopeBrack
 )
 
-type Scope struct {
+type FormatScope struct {
 	Kind        int
 	BaseIndent  int
 	InnerIndent int
@@ -139,7 +139,7 @@ func (f *Formatter) Format(doc *Document, formatRange *Range) []TextEdit {
 	)
 
 	var (
-		stack             []Scope
+		stack             []FormatScope
 		isLineStart       = true
 		prevTok           token.Token
 		prevNonCommentTok token.Token
@@ -363,7 +363,7 @@ func (f *Formatter) Format(doc *Document, formatRange *Range) []TextEdit {
 		}
 
 		pushScope := func(kind int, isComplex bool) {
-			stack = append(stack, Scope{
+			stack = append(stack, FormatScope{
 				Kind:        kind,
 				BaseIndent:  currentLineIndent,
 				InnerIndent: currentLineIndent + 1,
@@ -454,7 +454,7 @@ func (f *Formatter) isKeywordAsIdentifier(tokens []token.Token, i int) bool {
 	return false
 }
 
-func (f *Formatter) calculateLineIndent(stack []Scope, tokens []token.Token, startIndex int, source []byte) int {
+func (f *Formatter) calculateLineIndent(stack []FormatScope, tokens []token.Token, startIndex int, source []byte) int {
 	var indent int
 
 	if len(stack) > 0 {
@@ -723,7 +723,7 @@ func (f *Formatter) isExprEnd(k token.Kind) bool {
 	return false
 }
 
-func (f *Formatter) needsNewline(left, right token.Kind, stack []Scope) bool {
+func (f *Formatter) needsNewline(left, right token.Kind, stack []FormatScope) bool {
 	if left == token.Illegal || left == token.EOF || right == token.Illegal || right == token.EOF {
 		return false
 	}

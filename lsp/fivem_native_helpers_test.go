@@ -322,7 +322,7 @@ func TestFiveMLazyNativeResolution(t *testing.T) {
 		t.Fatalf("loaded native bundles before first lookup = %d, want %d pre-indexed bundles", got, len(fiveMNativeBundleNames))
 	}
 
-	if _, ok := h.server.GlobalIndex[GlobalKey{ReceiverHash: 0, PropHash: ast.HashBytes([]byte("PlayerPedId"))}]; !ok {
+	if syms := h.server.GlobalIndex.SymbolsByHash(GlobalKey{ReceiverHash: 0, PropHash: ast.HashBytes([]byte("PlayerPedId"))}); len(syms) == 0 {
 		t.Fatal("PlayerPedId should be indexed from the preloaded runtime native library")
 	}
 
@@ -339,7 +339,7 @@ func TestFiveMLazyNativeResolution(t *testing.T) {
 		t.Fatalf("expected %s document to be indexed", wantURI)
 	}
 
-	if _, ok := h.server.GlobalIndex[GlobalKey{ReceiverHash: 0, PropHash: ast.HashBytes([]byte("PlayerPedId"))}]; !ok {
+	if syms := h.server.GlobalIndex.SymbolsByHash(GlobalKey{ReceiverHash: 0, PropHash: ast.HashBytes([]byte("PlayerPedId"))}); len(syms) == 0 {
 		t.Fatal("PlayerPedId should remain indexed after resolution")
 	}
 
