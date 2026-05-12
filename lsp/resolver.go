@@ -711,8 +711,10 @@ func (r *Resolver) inferType(id ast.NodeID) Type {
 	switch node.Kind {
 	case ast.KindNumber:
 		t.Primitive = TypeNumber
-	case ast.KindString, ast.KindHashedString:
+	case ast.KindString:
 		t.Primitive = TypeString
+	case ast.KindHashedString:
+		t.Primitive = TypeNumber
 	case ast.KindTrue, ast.KindFalse:
 		t.Primitive = TypeBoolean
 	case ast.KindNil:

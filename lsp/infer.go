@@ -265,7 +265,7 @@ func (doc *Document) InferType(id ast.NodeID) TypeSet {
 	case ast.KindString:
 		typeSet.Basics = TypeString
 	case ast.KindHashedString:
-		typeSet.Basics = TypeString
+		typeSet.Basics = TypeNumber
 	case ast.KindTrue, ast.KindFalse:
 		typeSet.Basics = TypeBoolean
 	case ast.KindNil:
@@ -1507,8 +1507,10 @@ func inferExpression(doc *Document, id ast.NodeID) Type {
 	switch node.Kind {
 	case ast.KindNumber:
 		return Type{Primitive: TypeNumber}
-	case ast.KindString, ast.KindHashedString:
+	case ast.KindString:
 		return Type{Primitive: TypeString}
+	case ast.KindHashedString:
+		return Type{Primitive: TypeNumber}
 	case ast.KindTrue, ast.KindFalse:
 		return Type{Primitive: TypeBoolean}
 	case ast.KindNil:
