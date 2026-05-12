@@ -6,8 +6,8 @@ import (
 	"github.com/coalaura/lugo/ast"
 )
 
-func TestInferV2ColonMethodBindsSelf(t *testing.T) {
-	tree := parseResolverV2Lua(t, []byte("obj:method()\n"))
+func TestInferColonMethodBindsSelf(t *testing.T) {
+	tree := parseResolverLua(t, []byte("obj:method()\n"))
 	doc := &Document{Tree: tree}
 	call := findMethodCallByName(t, tree, "method")
 
@@ -24,7 +24,7 @@ func TestInferV2ColonMethodBindsSelf(t *testing.T) {
 	}
 }
 
-func TestInferV2MethodChain(t *testing.T) {
+func TestInferMethodChain(t *testing.T) {
 	src := []byte(`local obj = {
   first = function()
     return { second = function()
@@ -34,7 +34,7 @@ func TestInferV2MethodChain(t *testing.T) {
 }
 local x = obj:first():second():third()
 `)
-	tree := parseResolverV2Lua(t, src)
+	tree := parseResolverLua(t, src)
 	doc := &Document{Tree: tree}
 	chain := []ast.NodeID{
 		findMethodCallByName(t, tree, "first"),
@@ -48,11 +48,11 @@ local x = obj:first():second():third()
 	}
 }
 
-func TestInferV2DotCallDoesNotBindSelf(t *testing.T) {
+func TestInferDotCallDoesNotBindSelf(t *testing.T) {
 	src := []byte(`local obj = { method = function() return 1 end }
 local x = obj.method()
 `)
-	tree := parseResolverV2Lua(t, src)
+	tree := parseResolverLua(t, src)
 	doc := &Document{Tree: tree}
 	assign := findLocalAssignByName(t, tree, "x")
 
@@ -72,8 +72,8 @@ local x = obj.method()
 	}
 }
 
-func TestInferV2Assignment(t *testing.T) {
-	tree := parseResolverV2Lua(t, []byte("local x = 42\n"))
+func TestInferAssignment(t *testing.T) {
+	tree := parseResolverLua(t, []byte("local x = 42\n"))
 	doc := &Document{Tree: tree}
 	assign := findLocalAssignByName(t, tree, "x")
 
@@ -83,8 +83,8 @@ func TestInferV2Assignment(t *testing.T) {
 	}
 }
 
-func TestInferV2TableLiteral(t *testing.T) {
-	tree := parseResolverV2Lua(t, []byte("local obj = { name = 'lugo', count = 1, ['tag'] = 'fast' }\n"))
+func TestInferTableLiteral(t *testing.T) {
+	tree := parseResolverLua(t, []byte("local obj = { name = 'lugo', count = 1, ['tag'] = 'fast' }\n"))
 	doc := &Document{Tree: tree}
 	tableNode := findFirstNodeByKind(t, tree, ast.KindTableExpr)
 
