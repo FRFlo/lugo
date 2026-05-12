@@ -265,6 +265,184 @@ func (s *Server) documentURI(doc *Document) string {
 	return ""
 }
 
+func (s *Server) globalIndexContext(doc *Document) (ResourceURI, GlobalIndexScope) {
+	if doc == nil {
+		return "", GlobalIndexScopeShared
+	}
+
+	profile := s.getDocumentFiveMProfile(doc)
+	if profile.IsFiveMActive() && profile.ResourceRoot != "" {
+		return ResourceURI(profile.ResourceRoot), globalIndexScopeFromFiveMEnv(profile.Env())
+	}
+
+	return ResourceURI(doc.URI), GlobalIndexScopeShared
+}
+
+func globalSymbolFromEntry(entry *SymbolEntry) GlobalSymbol {
+	if entry == nil {
+		return GlobalSymbol{}
+	}
+
+	return GlobalSymbol{
+		URI:           entry.URI,
+		Name:          string(entry.Name),
+		Parent:        entry.Parent,
+		NodeID:        entry.NodeID,
+		IsRoot:        entry.IsRoot,
+		IsDeprecated:  entry.IsDeprecated,
+		DeprecatedMsg: entry.DeprecatedMsg,
+	}
+}
+
+func (s *Server) visibleGlobalSymbolsFromEntries(srcDoc *Document, entries []*SymbolEntry, max int) []GlobalSymbol {
+	if len(entries) == 0 {
+		return nil
+	}
+
+	filtered := make([]GlobalSymbol, 0, min(len(entries), max))
+	seen := make(map[TargetKey]struct{}, len(entries))
+
+	for _, entry := range entries {
+		if entry == nil {
+			continue
+		}
+
+		tgtDoc, ok := s.Documents[entry.URI]
+		if !ok || !s.canSeeSymbol(srcDoc, tgtDoc) {
+			continue
+		}
+
+		target := TargetKey{URI: entry.URI, Def: entry.NodeID}
+		if _, ok := seen[target]; ok {
+			continue
+		}
+
+		seen[target] = struct{}{}
+		filtered = append(filtered, globalSymbolFromEntry(entry))
+	}
+
+	slices.SortStableFunc(filtered, func(a, b GlobalSymbol) int {
+		return s.globalSymbolPriority(a.URI) - s.globalSymbolPriority(b.URI)
+	})
+	if max > 0 && len(filtered) > max {
+		filtered = filtered[:max]
+	}
+
+	return filtered
+}
+
+func (s *Server) symbolInformationFromEntry(entry *SymbolEntry) (SymbolInformation, bool) {
+	if entry == nil {
+		return SymbolInformation{}, false
+	}
+
+	doc, ok := s.Documents[entry.URI]
+	if !ok {
+		return SymbolInformation{}, false
+	}
+
+	kind := SymbolKindVariable
+	valID := doc.getAssignedValue(entry.NodeID)
+
+	if valID != ast.InvalidNode {
+		valKind := doc.Tree.Nodes[valID].Kind
+		if valKind == ast.KindFunctionExpr {
+			if entry.Key.ReceiverHash != 0 {
+				kind = SymbolKindMethod
+			} else {
+				kind = SymbolKindFunction
+			}
+		} else if valKind == ast.KindTableExpr {
+			kind = SymbolKindClass
+		} else if entry.Key.ReceiverHash != 0 {
+			kind = SymbolKindField
+		}
+	} else if entry.Key.ReceiverHash != 0 {
+		kind = SymbolKindField
+	}
+
+	return SymbolInformation{
+		Name: string(entry.Name),
+		Kind: kind,
+		Location: Location{
+			URI:   entry.URI,
+			Range: getNodeRange(doc.Tree, entry.NodeID),
+		},
+	}, true
+}
+
+func (s *Server) setGlobalIndexSymbol(resource ResourceURI, scope GlobalIndexScope, name SymbolName, entry *SymbolEntry) {
+	if s == nil || s.GlobalIndex == nil || resource == "" || name == "" || entry == nil {
+		return
+	}
+
+	s.GlobalIndex.mu.Lock()
+	defer s.GlobalIndex.mu.Unlock()
+
+	res := s.GlobalIndex.ensureResourceLocked(resource)
+	table := res.tableForScope(scope)
+	if previous := table[name]; previous != nil {
+		s.GlobalIndex.removeEntryFromHashLocked(previous)
+	}
+
+	entry.Name = name
+	if entry.URI == "" {
+		entry.URI = string(resource)
+	}
+	table[name] = entry
+
+	if entry.Key == (GlobalKey{}) {
+		return
+	}
+
+	entries := s.GlobalIndex.HashIndex[entry.Key]
+	priority := s.globalSymbolPriority(entry.URI)
+	insertAt := len(entries)
+	for i, existing := range entries {
+		if existing == nil {
+			continue
+		}
+		if existing.URI == entry.URI && existing.NodeID == entry.NodeID {
+			copy(entries[i:], entries[i+1:])
+			entries[len(entries)-1] = nil
+			entries = entries[:len(entries)-1]
+			insertAt = len(entries)
+			break
+		}
+		if s.globalSymbolPriority(existing.URI) > priority {
+			insertAt = i
+			break
+		}
+	}
+
+	entries = append(entries, nil)
+	copy(entries[insertAt+1:], entries[insertAt:])
+	entries[insertAt] = entry
+	s.GlobalIndex.HashIndex[entry.Key] = entries
+}
+
+func (idx *GlobalIndex) removeEntryFromHashLocked(stale *SymbolEntry) {
+	if idx == nil || stale == nil || stale.Key == (GlobalKey{}) {
+		return
+	}
+
+	entries := idx.HashIndex[stale.Key]
+	for i, entry := range entries {
+		if entry == stale || (entry != nil && entry.URI == stale.URI && entry.NodeID == stale.NodeID) {
+			copy(entries[i:], entries[i+1:])
+			entries[len(entries)-1] = nil
+			entries = entries[:len(entries)-1]
+			break
+		}
+	}
+
+	if len(entries) == 0 {
+		delete(idx.HashIndex, stale.Key)
+	} else {
+		idx.HashIndex[stale.Key] = entries
+	}
+}
+
 func (s *Server) handleReferences(req Request) {
 	var params ReferenceParams
 
@@ -675,56 +853,22 @@ func (s *Server) handleWorkspaceSymbol(req Request) {
 		count   int
 	)
 
-	for key, syms := range s.GlobalIndex {
-		for _, sym := range syms {
-			if !containsFold(sym.Name, queryLower) {
-				continue
-			}
-
-			doc, ok := s.Documents[sym.URI]
+	seenTargets := make(map[TargetKey]struct{})
+	if s.GlobalIndex != nil {
+		for _, entry := range s.GlobalIndex.WorkspaceSymbols(params.Query, MaxWorkspaceResults) {
+			info, ok := s.symbolInformationFromEntry(entry)
 			if !ok {
 				continue
 			}
 
-			kind := SymbolKindVariable
-
-			valID := doc.getAssignedValue(sym.NodeID)
-
-			if valID != ast.InvalidNode {
-				valKind := doc.Tree.Nodes[valID].Kind
-				if valKind == ast.KindFunctionExpr {
-					if key.ReceiverHash != 0 {
-						kind = SymbolKindMethod
-					} else {
-						kind = SymbolKindFunction
-					}
-				} else if valKind == ast.KindTableExpr {
-					kind = SymbolKindClass
-				} else if key.ReceiverHash != 0 {
-					kind = SymbolKindField
-				}
-			} else if key.ReceiverHash != 0 {
-				kind = SymbolKindField
-			}
-
-			results = append(results, SymbolInformation{
-				Name: sym.Name,
-				Kind: kind,
-				Location: Location{
-					URI:   sym.URI,
-					Range: getNodeRange(doc.Tree, sym.NodeID),
-				},
-			})
-
+			target := TargetKey{URI: entry.URI, Def: entry.NodeID}
+			seenTargets[target] = struct{}{}
+			results = append(results, info)
 			count++
 
 			if count >= MaxWorkspaceResults {
 				break
 			}
-		}
-
-		if count >= MaxWorkspaceResults {
-			break
 		}
 	}
 
@@ -1198,22 +1342,27 @@ func (s *Server) getFiveMResourceExportDefinitions(res *FiveMResource, exportNam
 
 	if len(defs) == 0 && isExported {
 		key := GlobalKey{ReceiverHash: 0, PropHash: ast.HashBytes([]byte(exportName))}
-		if gSyms, ok := s.GlobalIndex[key]; ok {
-			for _, sym := range gSyms {
-				symDoc, ok := s.Documents[sym.URI]
+		if s.GlobalIndex != nil {
+			for _, entry := range s.GlobalIndex.SymbolsByHash(key) {
+				if entry == nil {
+					continue
+				}
+
+				symDoc, ok := s.Documents[entry.URI]
 				if !ok || s.getDocResourceRoot(symDoc) != res.RootURI {
 					continue
 				}
 
-				target := TargetKey{URI: sym.URI, Def: sym.NodeID}
+				target := TargetKey{URI: entry.URI, Def: entry.NodeID}
 				if seen[target] {
 					continue
 				}
 
 				seen[target] = true
-				defs = append(defs, sym)
+				defs = append(defs, globalSymbolFromEntry(entry))
 			}
 		}
+
 	}
 
 	return defs, isExported
@@ -1570,29 +1719,16 @@ func (s *Server) getGlobalSymbols(srcDoc *Document, recHash, propHash uint64) ([
 
 	for range 10 {
 		key := GlobalKey{ReceiverHash: currRec, PropHash: propHash}
-		if syms, exists := s.GlobalIndex[key]; exists && len(syms) > 0 {
-			var filtered []GlobalSymbol
-
-			for _, sym := range syms {
-				if tgtDoc, ok := s.Documents[sym.URI]; ok && s.canSeeSymbol(srcDoc, tgtDoc) {
-					filtered = append(filtered, sym)
-					if len(filtered) >= 10 {
-						break
-					}
-				}
-			}
-
-			if len(filtered) > 0 {
-				return filtered, true
-			}
+		if syms := s.visibleGlobalSymbolsFromEntries(srcDoc, s.GlobalIndex.SymbolsByHash(key), 10); len(syms) > 0 {
+			return syms, true
 		}
 
 		if currRec == 0 {
 			break
 		}
 
-		classSyms, ok := s.GlobalIndex[GlobalKey{ReceiverHash: 0, PropHash: currRec}]
-		if ok && len(classSyms) > 0 && classSyms[0].Parent != "" {
+		classKey := GlobalKey{ReceiverHash: 0, PropHash: currRec}
+		if classSyms := s.visibleGlobalSymbolsFromEntries(srcDoc, s.GlobalIndex.SymbolsByHash(classKey), 1); len(classSyms) > 0 && classSyms[0].Parent != "" {
 			currRec = ast.HashBytes([]byte(classSyms[0].Parent))
 
 			continue
@@ -1697,67 +1833,87 @@ func (s *Server) setGlobalSymbol(key GlobalKey, uri string, nodeID ast.NodeID, n
 		})
 	}
 
-	sym := GlobalSymbol{
-		URI:           uri,
-		NodeID:        nodeID,
-		Name:          name,
-		Parent:        parent,
-		IsRoot:        isRoot,
-		IsDeprecated:  isDep,
-		DeprecatedMsg: depMsg,
-	}
-
-	syms := s.GlobalIndex[key]
-	insertAt := len(syms)
-	priority := s.globalSymbolPriority(uri)
-
-	for i, existing := range syms {
-		if s.globalSymbolPriority(existing.URI) > priority {
-			insertAt = i
-
-			break
+	if s.GlobalIndex != nil {
+		resource := ResourceURI(uri)
+		scope := GlobalIndexScopeShared
+		if doc, ok := s.Documents[uri]; ok {
+			resource, scope = s.globalIndexContext(doc)
+			if resource == "" {
+				resource = ResourceURI(uri)
+			}
 		}
+
+		s.setGlobalIndexSymbol(resource, scope, SymbolName(name), &SymbolEntry{
+			Name:          SymbolName(name),
+			Key:           key,
+			URI:           uri,
+			NodeID:        nodeID,
+			Parent:        parent,
+			IsRoot:        isRoot,
+			IsDeprecated:  isDep,
+			DeprecatedMsg: depMsg,
+		})
 	}
-
-	syms = append(syms, GlobalSymbol{})
-	copy(syms[insertAt+1:], syms[insertAt:])
-	syms[insertAt] = sym
-
-	s.GlobalIndex[key] = syms
 }
 
-func (s *Server) removeDocumentGlobals(uri string, doc *Document) {
-	for _, exp := range doc.ExportedGlobalDefs {
-		if syms, ok := s.GlobalIndex[exp.Key]; ok {
-			var n int
+func (s *Server) removeDocumentGlobals(uri string) {
+	s.removeFiveMDocumentExports(uri)
+	s.removeGlobalIndexDocumentSymbols(uri)
+}
 
-			for _, sym := range syms {
-				if sym.URI != uri {
-					syms[n] = sym
+func (s *Server) removeGlobalIndexDocumentSymbols(uri string) {
+	if s == nil || s.GlobalIndex == nil || uri == "" {
+		return
+	}
 
-					n++
+	s.GlobalIndex.mu.Lock()
+	defer s.GlobalIndex.mu.Unlock()
+
+	for _, res := range s.GlobalIndex.Resources {
+		if res == nil {
+			continue
+		}
+
+		for _, table := range []SymbolTable{res.Client, res.Server, res.Shared} {
+			for name, entry := range table {
+				if entry != nil && entry.URI == uri {
+					delete(table, name)
 				}
-			}
-
-			if n > 0 {
-				s.GlobalIndex[exp.Key] = syms[:n]
-			} else {
-				delete(s.GlobalIndex, exp.Key)
 			}
 		}
 	}
 
-	compactGlobalIndex(s)
+	for key, entries := range s.GlobalIndex.HashIndex {
+		kept := entries[:0]
+		for _, entry := range entries {
+			if entry == nil || entry.URI == uri {
+				continue
+			}
+			kept = append(kept, entry)
+		}
+
+		if len(kept) == 0 {
+			delete(s.GlobalIndex.HashIndex, key)
+		} else {
+			s.GlobalIndex.HashIndex[key] = kept
+		}
+	}
 }
 
 func (s *Server) getGlobalAlias(hash uint64) uint64 {
-	syms, ok := s.GlobalIndex[GlobalKey{ReceiverHash: 0, PropHash: hash}]
-	if !ok || len(syms) == 0 {
-		return 0
+	key := GlobalKey{ReceiverHash: 0, PropHash: hash}
+	if entries := s.GlobalIndex.SymbolsByHash(key); len(entries) > 0 {
+		for _, entry := range entries {
+			if alias := s.getGlobalAliasFromSymbol(globalSymbolFromEntry(entry)); alias != 0 {
+				return alias
+			}
+		}
 	}
 
-	sym := syms[0]
+	return 0
+}
 
+func (s *Server) getGlobalAliasFromSymbol(sym GlobalSymbol) uint64 {
 	doc, ok := s.Documents[sym.URI]
 	if !ok {
 		return 0
@@ -1835,6 +1991,15 @@ func (s *Server) getGlobalPath(doc *Document, id ast.NodeID, depth int) []byte {
 }
 
 func (s *Server) suggestGlobal(srcDoc *Document, name string) string {
+	if s.GlobalIndex != nil {
+		resource, scope := s.globalIndexContext(srcDoc)
+		for _, suggestion := range s.GlobalIndex.TypoSuggestions(SymbolName(name), resource, scope, 1) {
+			if suggestion != "" {
+				return string(suggestion)
+			}
+		}
+	}
+
 	var (
 		bestMatch string
 		minDist   = 3
@@ -1868,19 +2033,6 @@ func (s *Server) suggestGlobal(srcDoc *Document, name string) string {
 	// Prioritize known globals
 	for k := range s.KnownGlobals {
 		check(k)
-	}
-
-	// Then check workspace globals
-	for key, syms := range s.GlobalIndex {
-		if key.ReceiverHash == 0 && len(syms) > 0 {
-			for _, sym := range syms {
-				if tgtDoc, ok := s.Documents[sym.URI]; ok && s.canSeeSymbol(srcDoc, tgtDoc) {
-					check(sym.Name)
-
-					break
-				}
-			}
-		}
 	}
 
 	return bestMatch

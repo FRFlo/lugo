@@ -683,7 +683,7 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 	if doc != nil {
 		// Canonical source is owned by the Tree; ensure Tree reflects the latest source.
 		// Do not assign to doc.Source here.
-		s.removeDocumentGlobals(uri, doc)
+	s.removeDocumentGlobals(uri)
 
 		doc.ExportedGlobalDefs = doc.ExportedGlobalDefs[:0]
 
@@ -713,6 +713,11 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 	doc.FiveMProfile = FiveMExecutionProfile{}
 	doc.FiveMProfileCached = false
 	doc.FiveMEvents = doc.FiveMEvents[:0]
+
+	if s.GlobalIndex != nil {
+		s.GlobalIndex.EnsureResource(ResourceURI(uri))
+		s.GlobalIndex.SetSource(ResourceURI(uri), source, tree)
+	}
 
 	for _, c := range tree.Comments {
 		if bytes.Contains(tree.Source[c.Start:c.End], []byte("@meta")) {
@@ -1215,26 +1220,7 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 				recHash = pf.ReceiverHash
 			}
 
-			if recHash != 0 {
-				key := GlobalKey{ReceiverHash: recHash, PropHash: pf.PropHash}
-
-				actualKey := key
-				currRec := recHash
-
-				for range 10 {
-					if _, exists := s.GlobalIndex[actualKey]; exists {
-						break
-					}
-
-					nextRec := s.getGlobalAlias(currRec)
-					if nextRec == 0 {
-						break
-					}
-
-					currRec = nextRec
-					actualKey = GlobalKey{ReceiverHash: currRec, PropHash: pf.PropHash}
-				}
-			}
+			_ = recHash
 		}
 	}
 
@@ -1314,12 +1300,26 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 
 	s.Documents[uri] = doc
 
+	if s.FeatureFiveM {
+		s.syncFiveMDocumentExports(doc)
+	}
+
 	return needsWorkspaceRepublish
 }
 
 func (s *Server) clearDocument(uri string) {
+	resource := ResourceURI(uri)
+
 	if doc, ok := s.Documents[uri]; ok {
-		s.removeDocumentGlobals(uri, doc)
+		resource, _ = s.globalIndexContext(doc)
+		if resource == "" {
+			resource = ResourceURI(uri)
+		}
+	s.removeDocumentGlobals(uri)
+	}
+
+	if s.GlobalIndex != nil && !s.isGlobalIndexResourceReferencedByOpenDocument(resource, uri) {
+		s.GlobalIndex.EvictSource(ResourceURI(uri))
 	}
 
 	delete(s.Documents, uri)
@@ -1334,6 +1334,30 @@ func (s *Server) clearDocument(uri string) {
 			},
 		})
 	}
+}
+
+func (s *Server) isGlobalIndexResourceReferencedByOpenDocument(resource ResourceURI, closingURI string) bool {
+	if s == nil || resource == "" {
+		return false
+	}
+
+	for openURI, open := range s.OpenFiles {
+		if !open || openURI == closingURI {
+			continue
+		}
+
+		doc := s.Documents[openURI]
+		if doc == nil {
+			continue
+		}
+
+		openResource, _ := s.globalIndexContext(doc)
+		if openResource == resource {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (s *Server) compileIgnorePatterns() {

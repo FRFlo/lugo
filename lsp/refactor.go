@@ -2874,7 +2874,7 @@ func (s *Server) isNameSafe(doc *Document, defID ast.NodeID, newNameBytes []byte
 	}
 
 	hash := ast.HashBytes(newNameBytes)
-	if syms, exists := s.GlobalIndex[GlobalKey{ReceiverHash: 0, PropHash: hash}]; exists && len(syms) > 0 {
+	if entries := s.GlobalIndex.SymbolsByHash(GlobalKey{ReceiverHash: 0, PropHash: hash}); len(entries) > 0 {
 		return false
 	}
 
