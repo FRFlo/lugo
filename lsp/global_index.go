@@ -1,6 +1,7 @@
 package lsp
 
 import (
+	"iter"
 	"slices"
 	"strings"
 	"sync"
@@ -8,7 +9,7 @@ import (
 	"github.com/coalaura/lugo/ast"
 )
 
-const DefaultGlobalIndexV2MaxMemory uint64 = 256 * 1024 * 1024
+const DefaultGlobalIndexMaxMemory uint64 = 256 * 1024 * 1024
 
 type ResourceURI string
 type SymbolName string
@@ -23,12 +24,18 @@ const (
 type SymbolTable map[SymbolName]*SymbolEntry
 
 type SymbolEntry struct {
-	Name   SymbolName
-	Key    GlobalKey
-	Type   Type
-	LuaDoc *LuaDocData
-	FiveM  *FiveMData
-	Export *ExportData
+	Name          SymbolName
+	Key           GlobalKey
+	Type          Type
+	LuaDoc        *LuaDocData
+	FiveM         *FiveMData
+	Export        *ExportData
+	URI           string
+	NodeID        ast.NodeID
+	Parent        string
+	IsRoot        bool
+	IsDeprecated  bool
+	DeprecatedMsg string
 }
 
 type ResourceScope struct {
@@ -45,7 +52,7 @@ type ResourceScope struct {
 	lastAccess   uint64
 }
 
-type GlobalIndexV2 struct {
+type GlobalIndex struct {
 	mu          sync.RWMutex
 	Resources   map[ResourceURI]*ResourceScope
 	HashIndex   map[GlobalKey][]*SymbolEntry
@@ -55,13 +62,13 @@ type GlobalIndexV2 struct {
 	clock       uint64
 }
 
-func NewGlobalIndexV2(maxMemory ...uint64) *GlobalIndexV2 {
-	limit := DefaultGlobalIndexV2MaxMemory
+func NewGlobalIndex(maxMemory ...uint64) *GlobalIndex {
+	limit := DefaultGlobalIndexMaxMemory
 	if len(maxMemory) > 0 && maxMemory[0] > 0 {
 		limit = maxMemory[0]
 	}
 
-	return &GlobalIndexV2{
+	return &GlobalIndex{
 		Resources: make(map[ResourceURI]*ResourceScope),
 		HashIndex: make(map[GlobalKey][]*SymbolEntry),
 		DepGraph:  NewDependencyGraph(),
@@ -79,7 +86,7 @@ func NewResourceScope(uri ResourceURI) *ResourceScope {
 	}
 }
 
-func (idx *GlobalIndexV2) EnsureResource(uri ResourceURI) *ResourceScope {
+func (idx *GlobalIndex) EnsureResource(uri ResourceURI) *ResourceScope {
 	if idx == nil {
 		return nil
 	}
@@ -90,7 +97,7 @@ func (idx *GlobalIndexV2) EnsureResource(uri ResourceURI) *ResourceScope {
 	return idx.ensureResourceLocked(uri)
 }
 
-func (idx *GlobalIndexV2) ensureResourceLocked(uri ResourceURI) *ResourceScope {
+func (idx *GlobalIndex) ensureResourceLocked(uri ResourceURI) *ResourceScope {
 	if idx.Resources == nil {
 		idx.Resources = make(map[ResourceURI]*ResourceScope)
 	}
@@ -101,7 +108,7 @@ func (idx *GlobalIndexV2) ensureResourceLocked(uri ResourceURI) *ResourceScope {
 		idx.DepGraph = NewDependencyGraph()
 	}
 	if idx.MaxMemory == 0 {
-		idx.MaxMemory = DefaultGlobalIndexV2MaxMemory
+		idx.MaxMemory = DefaultGlobalIndexMaxMemory
 	}
 
 	res := idx.Resources[uri]
@@ -115,7 +122,7 @@ func (idx *GlobalIndexV2) ensureResourceLocked(uri ResourceURI) *ResourceScope {
 	return res
 }
 
-func (idx *GlobalIndexV2) AddSymbol(resource ResourceURI, scope GlobalIndexScope, name SymbolName, entry *SymbolEntry) *SymbolEntry {
+func (idx *GlobalIndex) AddSymbol(resource ResourceURI, scope GlobalIndexScope, name SymbolName, entry *SymbolEntry) *SymbolEntry {
 	if idx == nil || name == "" || entry == nil {
 		return nil
 	}
@@ -126,6 +133,9 @@ func (idx *GlobalIndexV2) AddSymbol(resource ResourceURI, scope GlobalIndexScope
 	res := idx.ensureResourceLocked(resource)
 	previous := res.tableForScope(scope)[name]
 	entry.Name = name
+	if entry.URI == "" {
+		entry.URI = string(resource)
+	}
 	table := res.tableForScope(scope)
 	if previous != nil && previous != entry && entry.Key != (GlobalKey{}) && previous.Key == entry.Key {
 		idx.HashIndex[entry.Key] = removeSymbolEntry(idx.HashIndex[entry.Key], previous)
@@ -138,7 +148,7 @@ func (idx *GlobalIndexV2) AddSymbol(resource ResourceURI, scope GlobalIndexScope
 	return entry
 }
 
-func (idx *GlobalIndexV2) LookupByHash(key GlobalKey) []SymbolEntry {
+func (idx *GlobalIndex) LookupByHash(key GlobalKey) []SymbolEntry {
 	if idx == nil {
 		return nil
 	}
@@ -161,7 +171,201 @@ func (idx *GlobalIndexV2) LookupByHash(key GlobalKey) []SymbolEntry {
 	return out
 }
 
-func (idx *GlobalIndexV2) LookupByScope(resource ResourceURI, scope GlobalIndexScope, name SymbolName) *SymbolEntry {
+func (idx *GlobalIndex) AllSymbols() iter.Seq2[ResourceURI, *SymbolEntry] {
+	return func(yield func(ResourceURI, *SymbolEntry) bool) {
+		if idx == nil {
+			return
+		}
+
+		type indexedSymbol struct {
+			resource ResourceURI
+			entry    *SymbolEntry
+		}
+
+		idx.mu.RLock()
+		symbols := make([]indexedSymbol, 0, idx.symbolCountLocked())
+		resources := sortedResourceKeys(idx.Resources)
+		for _, uri := range resources {
+			res := idx.Resources[uri]
+			appendTableSymbols := func(table SymbolTable) {
+				for _, name := range sortedSymbolNames(table) {
+					if entry := table[name]; entry != nil {
+						symbols = append(symbols, indexedSymbol{resource: uri, entry: entry})
+					}
+				}
+			}
+			appendTableSymbols(res.Client)
+			appendTableSymbols(res.Server)
+			appendTableSymbols(res.Shared)
+		}
+		idx.mu.RUnlock()
+
+		for _, symbol := range symbols {
+			if !yield(symbol.resource, symbol.entry) {
+				return
+			}
+		}
+	}
+}
+
+func (idx *GlobalIndex) SymbolsByHash(key GlobalKey) []*SymbolEntry {
+	if idx == nil {
+		return nil
+	}
+
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+
+	entries := idx.HashIndex[key]
+	if len(entries) == 0 {
+		return nil
+	}
+
+	out := make([]*SymbolEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry != nil {
+			out = append(out, entry)
+		}
+	}
+
+	return out
+}
+
+func (idx *GlobalIndex) VisibleSymbols(fromResource ResourceURI, scope GlobalIndexScope) []*SymbolEntry {
+	if idx == nil {
+		return nil
+	}
+
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+
+	seen := make(map[*SymbolEntry]struct{})
+	visible := make([]*SymbolEntry, 0)
+	appendScope := func(res *ResourceScope, includeScoped bool) {
+		if res == nil {
+			return
+		}
+		if includeScoped {
+			visible = appendUniqueEntries(visible, seen, res.tableForScopeRead(scope))
+		}
+		visible = appendUniqueEntries(visible, seen, res.Shared)
+	}
+
+	res := idx.Resources[fromResource]
+	appendScope(res, true)
+	if res != nil {
+		for _, dep := range res.Dependencies {
+			appendScope(idx.Resources[dep], true)
+		}
+	}
+
+	return visible
+}
+
+func (idx *GlobalIndex) WorkspaceSymbols(query string, limit int) []*SymbolEntry {
+	if idx == nil || limit == 0 {
+		return nil
+	}
+
+	type scoredSymbol struct {
+		entry *SymbolEntry
+		score int
+	}
+
+	idx.mu.RLock()
+	query = strings.ToLower(query)
+	matches := make([]scoredSymbol, 0)
+	for _, uri := range sortedResourceKeys(idx.Resources) {
+		res := idx.Resources[uri]
+		appendMatches := func(table SymbolTable) {
+			for _, name := range sortedSymbolNames(table) {
+				entry := table[name]
+				if entry == nil {
+					continue
+				}
+				if score, ok := workspaceSymbolScore(strings.ToLower(string(name)), query); ok {
+					matches = append(matches, scoredSymbol{entry: entry, score: score})
+				}
+			}
+		}
+		appendMatches(res.Client)
+		appendMatches(res.Server)
+		appendMatches(res.Shared)
+	}
+	idx.mu.RUnlock()
+
+	slices.SortStableFunc(matches, func(a, b scoredSymbol) int {
+		if a.score != b.score {
+			return a.score - b.score
+		}
+		return strings.Compare(string(a.entry.Name), string(b.entry.Name))
+	})
+	if limit > 0 && len(matches) > limit {
+		matches = matches[:limit]
+	}
+
+	out := make([]*SymbolEntry, 0, len(matches))
+	for _, match := range matches {
+		out = append(out, match.entry)
+	}
+
+	return out
+}
+
+func (idx *GlobalIndex) TypoSuggestions(name SymbolName, fromResource ResourceURI, scope GlobalIndexScope, max int) []SymbolName {
+	if idx == nil || name == "" || max == 0 {
+		return nil
+	}
+
+	type suggestion struct {
+		name SymbolName
+		dist int
+	}
+
+	needle := strings.ToLower(string(name))
+	candidates := idx.VisibleSymbols(fromResource, scope)
+	seen := make(map[SymbolName]struct{}, len(candidates))
+	suggestions := make([]suggestion, 0, max)
+	for _, entry := range candidates {
+		if entry == nil || entry.Name == "" || entry.Name == name {
+			continue
+		}
+		if _, ok := seen[entry.Name]; ok {
+			continue
+		}
+		seen[entry.Name] = struct{}{}
+
+		candidate := strings.ToLower(string(entry.Name))
+		threshold := 3
+		if len(needle) > 8 {
+			threshold = 4
+		}
+		dist := levenshteinFast(needle, candidate, threshold)
+		if dist > threshold {
+			continue
+		}
+		suggestions = append(suggestions, suggestion{name: entry.Name, dist: dist})
+	}
+
+	slices.SortStableFunc(suggestions, func(a, b suggestion) int {
+		if a.dist != b.dist {
+			return a.dist - b.dist
+		}
+		return strings.Compare(string(a.name), string(b.name))
+	})
+	if max > 0 && len(suggestions) > max {
+		suggestions = suggestions[:max]
+	}
+
+	out := make([]SymbolName, 0, len(suggestions))
+	for _, suggestion := range suggestions {
+		out = append(out, suggestion.name)
+	}
+
+	return out
+}
+
+func (idx *GlobalIndex) LookupByScope(resource ResourceURI, scope GlobalIndexScope, name SymbolName) *SymbolEntry {
 	if idx == nil || name == "" {
 		return nil
 	}
@@ -178,7 +382,7 @@ func (idx *GlobalIndexV2) LookupByScope(resource ResourceURI, scope GlobalIndexS
 	return res.tableForScope(scope)[name]
 }
 
-func (idx *GlobalIndexV2) RegisterFiveMResource(res *FiveMResource, featureFiveM bool) *ResourceScope {
+func (idx *GlobalIndex) RegisterFiveMResource(res *FiveMResource, featureFiveM bool) *ResourceScope {
 	if idx == nil || res == nil {
 		return nil
 	}
@@ -209,7 +413,7 @@ func (idx *GlobalIndexV2) RegisterFiveMResource(res *FiveMResource, featureFiveM
 	return scope
 }
 
-func (idx *GlobalIndexV2) TopologicalSort() ([]ResourceURI, []Diagnostic) {
+func (idx *GlobalIndex) TopologicalSort() ([]ResourceURI, []Diagnostic) {
 	if idx == nil {
 		return nil, nil
 	}
@@ -220,7 +424,7 @@ func (idx *GlobalIndexV2) TopologicalSort() ([]ResourceURI, []Diagnostic) {
 	return idx.DepGraph.TopologicalSort()
 }
 
-func (idx *GlobalIndexV2) MemoryUsage() uint64 {
+func (idx *GlobalIndex) MemoryUsage() uint64 {
 	if idx == nil {
 		return 0
 	}
@@ -231,7 +435,7 @@ func (idx *GlobalIndexV2) MemoryUsage() uint64 {
 	return idx.memoryUsage
 }
 
-func (idx *GlobalIndexV2) SetSource(uri ResourceURI, source []byte, tree *ast.Tree) {
+func (idx *GlobalIndex) SetSource(uri ResourceURI, source []byte, tree *ast.Tree) {
 	if idx == nil {
 		return
 	}
@@ -249,7 +453,7 @@ func (idx *GlobalIndexV2) SetSource(uri ResourceURI, source []byte, tree *ast.Tr
 	idx.evictLRULocked()
 }
 
-func (idx *GlobalIndexV2) EvictSource(uri ResourceURI) bool {
+func (idx *GlobalIndex) EvictSource(uri ResourceURI) bool {
 	if idx == nil {
 		return false
 	}
@@ -260,7 +464,7 @@ func (idx *GlobalIndexV2) EvictSource(uri ResourceURI) bool {
 	return idx.evictSourceLocked(uri)
 }
 
-func (idx *GlobalIndexV2) evictSourceLocked(uri ResourceURI) bool {
+func (idx *GlobalIndex) evictSourceLocked(uri ResourceURI) bool {
 	res := idx.Resources[uri]
 	if res == nil || res.SourceBytes == 0 {
 		return false
@@ -274,7 +478,7 @@ func (idx *GlobalIndexV2) evictSourceLocked(uri ResourceURI) bool {
 	return true
 }
 
-func (idx *GlobalIndexV2) evictLRULocked() {
+func (idx *GlobalIndex) evictLRULocked() {
 	if idx.MaxMemory == 0 || idx.memoryUsage <= idx.MaxMemory {
 		return
 	}
@@ -297,12 +501,12 @@ func (idx *GlobalIndexV2) evictLRULocked() {
 	}
 }
 
-func (idx *GlobalIndexV2) touchLocked(res *ResourceScope) {
+func (idx *GlobalIndex) touchLocked(res *ResourceScope) {
 	idx.clock++
 	res.lastAccess = idx.clock
 }
 
-func (idx *GlobalIndexV2) syncResourceEdgesLocked() {
+func (idx *GlobalIndex) syncResourceEdgesLocked() {
 	for uri, res := range idx.Resources {
 		res.Dependents = res.Dependents[:0]
 		res.Dependencies = idx.DepGraph.DependencyList(uri)
@@ -320,7 +524,7 @@ func (idx *GlobalIndexV2) syncResourceEdgesLocked() {
 	}
 }
 
-func (idx *GlobalIndexV2) registerFiveMScriptScopesLocked(scope *ResourceScope, res *FiveMResource) {
+func (idx *GlobalIndex) registerFiveMScriptScopesLocked(scope *ResourceScope, res *FiveMResource) {
 	client := make(map[ResourceURI]struct{})
 	server := make(map[ResourceURI]struct{})
 	shared := make(map[ResourceURI]struct{})
@@ -396,6 +600,102 @@ func (res *ResourceScope) tableForScope(scope GlobalIndexScope) SymbolTable {
 	default:
 		return res.Shared
 	}
+}
+
+func (res *ResourceScope) tableForScopeRead(scope GlobalIndexScope) SymbolTable {
+	if res == nil {
+		return nil
+	}
+	switch scope {
+	case GlobalIndexScopeClient:
+		return res.Client
+	case GlobalIndexScopeServer:
+		return res.Server
+	default:
+		return res.Shared
+	}
+}
+
+func (idx *GlobalIndex) symbolCountLocked() int {
+	count := 0
+	for _, res := range idx.Resources {
+		if res == nil {
+			continue
+		}
+		count += len(res.Client) + len(res.Server) + len(res.Shared)
+	}
+
+	return count
+}
+
+func sortedResourceKeys(resources map[ResourceURI]*ResourceScope) []ResourceURI {
+	keys := make([]ResourceURI, 0, len(resources))
+	for uri := range resources {
+		keys = append(keys, uri)
+	}
+	sortResourceURIs(keys)
+
+	return keys
+}
+
+func sortedSymbolNames(table SymbolTable) []SymbolName {
+	names := make([]SymbolName, 0, len(table))
+	for name := range table {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+
+	return names
+}
+
+func appendUniqueEntries(out []*SymbolEntry, seen map[*SymbolEntry]struct{}, table SymbolTable) []*SymbolEntry {
+	for _, name := range sortedSymbolNames(table) {
+		entry := table[name]
+		if entry == nil {
+			continue
+		}
+		if _, ok := seen[entry]; ok {
+			continue
+		}
+		seen[entry] = struct{}{}
+		out = append(out, entry)
+	}
+
+	return out
+}
+
+func workspaceSymbolScore(name, query string) (int, bool) {
+	if query == "" {
+		return 0, true
+	}
+	if name == query {
+		return 0, true
+	}
+	if strings.HasPrefix(name, query) {
+		return 1, true
+	}
+	if strings.Contains(name, query) {
+		return 2, true
+	}
+	if fuzzyMatch(name, query) {
+		return 3, true
+	}
+
+	return 0, false
+}
+
+func fuzzyMatch(name, query string) bool {
+	if query == "" {
+		return true
+	}
+	idx := 0
+	for i := 0; i < len(name) && idx < len(query); i++ {
+		if name[i] == query[idx] {
+			idx++
+		}
+	}
+
+	return idx == len(query)
 }
 
 func removeSymbolEntry(entries []*SymbolEntry, stale *SymbolEntry) []*SymbolEntry {

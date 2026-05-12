@@ -7,9 +7,9 @@ import (
 	"github.com/coalaura/lugo/ast"
 )
 
-func TestGlobalIndexV2(t *testing.T) {
+func TestGlobalIndex(t *testing.T) {
 	t.Run("Lookup", func(t *testing.T) {
-		idx := NewGlobalIndexV2()
+		idx := NewGlobalIndex()
 		key := GlobalKey{ReceiverHash: 7, PropHash: 11}
 		entry := &SymbolEntry{Key: key, Type: Type{Primitive: TypeString}, LuaDoc: &LuaDocData{}, FiveM: &FiveMData{}, Export: &ExportData{}}
 
@@ -30,7 +30,7 @@ func TestGlobalIndexV2(t *testing.T) {
 	})
 
 	t.Run("AddSymbolReplacesStaleHashEntry", func(t *testing.T) {
-		idx := NewGlobalIndexV2()
+		idx := NewGlobalIndex()
 		key := GlobalKey{ReceiverHash: 13, PropHash: 17}
 
 		first := idx.AddSymbol("file:///resource", GlobalIndexScopeClient, "PlayerName", &SymbolEntry{Key: key, Type: Type{Primitive: TypeString}})
@@ -56,7 +56,7 @@ func TestGlobalIndexV2(t *testing.T) {
 	})
 
 	t.Run("ScopePartitioning", func(t *testing.T) {
-		idx := NewGlobalIndexV2()
+		idx := NewGlobalIndex()
 		res := idx.RegisterFiveMResource(&FiveMResource{
 			Name:        "inventory",
 			RootURI:     "file:///resources/inventory",
@@ -97,7 +97,7 @@ func TestGlobalIndexV2(t *testing.T) {
 	})
 
 	t.Run("TopologicalSort", func(t *testing.T) {
-		idx := NewGlobalIndexV2()
+		idx := NewGlobalIndex()
 		idx.DepGraph.SetDependencies("A", []ResourceURI{"B"})
 		idx.DepGraph.SetDependencies("B", []ResourceURI{"C"})
 		idx.DepGraph.SetDependencies("C", nil)
@@ -112,7 +112,7 @@ func TestGlobalIndexV2(t *testing.T) {
 	})
 
 	t.Run("Eviction", func(t *testing.T) {
-		idx := NewGlobalIndexV2()
+		idx := NewGlobalIndex()
 		idx.AddSymbol("file:///res", GlobalIndexScopeShared, "Persisted", &SymbolEntry{Type: Type{Primitive: TypeNumber}})
 		tree := ast.NewTree([]byte("Persisted = 1\n"))
 		idx.SetSource("file:///res", []byte("Persisted = 1\n"), tree)
@@ -137,7 +137,7 @@ func TestGlobalIndexV2(t *testing.T) {
 	})
 
 	t.Run("MemoryBudgetEvictsLRU", func(t *testing.T) {
-		idx := NewGlobalIndexV2(8)
+		idx := NewGlobalIndex(8)
 		idx.SetSource("file:///old", []byte("old source"), nil)
 		idx.SetSource("file:///new", []byte("new source"), nil)
 
@@ -148,10 +148,111 @@ func TestGlobalIndexV2(t *testing.T) {
 			t.Fatal("oldest source should be evicted first")
 		}
 	})
+
+	t.Run("AllSymbols", func(t *testing.T) {
+		idx := NewGlobalIndex()
+		idx.AddSymbol("file:///a", GlobalIndexScopeClient, "ClientA", &SymbolEntry{})
+		idx.AddSymbol("file:///a", GlobalIndexScopeShared, "SharedA", &SymbolEntry{})
+		idx.AddSymbol("file:///b", GlobalIndexScopeServer, "ServerB", &SymbolEntry{})
+
+		got := make(map[ResourceURI][]SymbolName)
+		for uri, entry := range idx.AllSymbols() {
+			got[uri] = append(got[uri], entry.Name)
+		}
+
+		if !slices.Equal(got["file:///a"], []SymbolName{"ClientA", "SharedA"}) {
+			t.Fatalf("file:///a symbols = %#v, want ClientA and SharedA", got["file:///a"])
+		}
+		if !slices.Equal(got["file:///b"], []SymbolName{"ServerB"}) {
+			t.Fatalf("file:///b symbols = %#v, want ServerB", got["file:///b"])
+		}
+	})
+
+	t.Run("SymbolsByHash", func(t *testing.T) {
+		idx := NewGlobalIndex()
+		key := GlobalKey{PropHash: 42}
+		first := idx.AddSymbol("file:///a", GlobalIndexScopeShared, "First", &SymbolEntry{Key: key})
+		second := idx.AddSymbol("file:///b", GlobalIndexScopeShared, "Second", &SymbolEntry{Key: key})
+
+		got := idx.SymbolsByHash(key)
+		if len(got) != 2 || got[0] != first || got[1] != second {
+			t.Fatalf("SymbolsByHash = %#v, want original entries in hash index order", got)
+		}
+	})
+
+	t.Run("VisibleSymbolsWithDependencies", func(t *testing.T) {
+		idx := NewGlobalIndex()
+		idx.EnsureResource("app").Dependencies = []ResourceURI{"dep"}
+		idx.EnsureResource("dep")
+		idx.AddSymbol("app", GlobalIndexScopeClient, "AppClient", &SymbolEntry{})
+		idx.AddSymbol("app", GlobalIndexScopeServer, "AppServer", &SymbolEntry{})
+		idx.AddSymbol("app", GlobalIndexScopeShared, "AppShared", &SymbolEntry{})
+		idx.AddSymbol("dep", GlobalIndexScopeClient, "DepClient", &SymbolEntry{})
+		idx.AddSymbol("dep", GlobalIndexScopeServer, "DepServer", &SymbolEntry{})
+		idx.AddSymbol("dep", GlobalIndexScopeShared, "DepShared", &SymbolEntry{})
+
+		visible := idx.VisibleSymbols("app", GlobalIndexScopeClient)
+		got := symbolEntryNames(visible)
+		want := []SymbolName{"AppClient", "AppShared", "DepClient", "DepShared"}
+		if !slices.Equal(got, want) {
+			t.Fatalf("VisibleSymbols client = %#v, want %#v", got, want)
+		}
+		if slices.Contains(got, SymbolName("AppServer")) || slices.Contains(got, SymbolName("DepServer")) {
+			t.Fatalf("VisibleSymbols leaked server symbols: %#v", got)
+		}
+	})
+
+	t.Run("WorkspaceSymbols", func(t *testing.T) {
+		idx := NewGlobalIndex()
+		idx.AddSymbol("file:///a", GlobalIndexScopeShared, "AlphaBeta", &SymbolEntry{})
+		idx.AddSymbol("file:///a", GlobalIndexScopeShared, "AlphaGamma", &SymbolEntry{})
+		idx.AddSymbol("file:///a", GlobalIndexScopeShared, "BetaOnly", &SymbolEntry{})
+
+		got := symbolEntryNames(idx.WorkspaceSymbols("AB", 2))
+		want := []SymbolName{"AlphaBeta"}
+		if !slices.Equal(got, want) {
+			t.Fatalf("WorkspaceSymbols fuzzy = %#v, want %#v", got, want)
+		}
+
+		got = symbolEntryNames(idx.WorkspaceSymbols("Alpha", 1))
+		want = []SymbolName{"AlphaBeta"}
+		if !slices.Equal(got, want) {
+			t.Fatalf("WorkspaceSymbols limit = %#v, want %#v", got, want)
+		}
+	})
+
+	t.Run("TypoSuggestions", func(t *testing.T) {
+		idx := NewGlobalIndex()
+		idx.EnsureResource("app").Dependencies = []ResourceURI{"dep"}
+		idx.EnsureResource("dep")
+		idx.AddSymbol("app", GlobalIndexScopeClient, "PlayerName", &SymbolEntry{})
+		idx.AddSymbol("dep", GlobalIndexScopeShared, "PlayerCount", &SymbolEntry{})
+		idx.AddSymbol("dep", GlobalIndexScopeServer, "ServerSecret", &SymbolEntry{})
+
+		got := idx.TypoSuggestions("PlayerNane", "app", GlobalIndexScopeClient, 2)
+		want := []SymbolName{"PlayerName", "PlayerCount"}
+		if !slices.Equal(got, want) {
+			t.Fatalf("TypoSuggestions = %#v, want %#v", got, want)
+		}
+		if slices.Contains(got, SymbolName("ServerSecret")) {
+			t.Fatalf("TypoSuggestions included invisible server symbol: %#v", got)
+		}
+	})
+}
+
+func symbolEntryNames(entries []*SymbolEntry) []SymbolName {
+	names := make([]SymbolName, 0, len(entries))
+	for _, entry := range entries {
+		if entry != nil {
+			names = append(names, entry.Name)
+		}
+	}
+
+	return names
 }
 
 func TestDependencyCycle(t *testing.T) {
-	idx := NewGlobalIndexV2()
+	idx := NewGlobalIndex()
 	idx.DepGraph.SetDependencies("A", []ResourceURI{"B"})
 	idx.DepGraph.SetDependencies("B", []ResourceURI{"A"})
 
@@ -168,7 +269,7 @@ func TestDependencyCycle(t *testing.T) {
 }
 
 func TestScopePartitioning(t *testing.T) {
-	idx := NewGlobalIndexV2()
+	idx := NewGlobalIndex()
 	manifest := &FiveMManifest{Entries: []FiveMManifestEntry{
 		{EmittedName: "client_script", Value: "client.lua"},
 		{EmittedName: "server_script", Value: "server.lua"},
@@ -193,7 +294,7 @@ func TestScopePartitioning(t *testing.T) {
 }
 
 func TestTopologicalSort(t *testing.T) {
-	idx := NewGlobalIndexV2()
+	idx := NewGlobalIndex()
 	idx.RegisterFiveMResource(&FiveMResource{Name: "c", RootURI: "c"}, true)
 	idx.RegisterFiveMResource(&FiveMResource{Name: "b", RootURI: "b", Dependencies: []string{"c"}}, true)
 	idx.RegisterFiveMResource(&FiveMResource{Name: "a", RootURI: "a", Dependencies: []string{"b"}}, true)
@@ -217,7 +318,7 @@ func TestTopologicalSort(t *testing.T) {
 }
 
 func TestEviction(t *testing.T) {
-	idx := NewGlobalIndexV2()
+	idx := NewGlobalIndex()
 	idx.AddSymbol("file:///evict", GlobalIndexScopeShared, "KeepMe", &SymbolEntry{Type: Type{Primitive: TypeBoolean}})
 	idx.SetSource("file:///evict", []byte("KeepMe = true\n"), ast.NewTree([]byte("KeepMe = true\n")))
 
