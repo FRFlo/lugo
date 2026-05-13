@@ -99,6 +99,7 @@ type CIConfig struct {
 	Settings         InitializationOptions `json:"settings"`
 }
 
+// gost:preserve-layout
 type InitializationOptions struct {
 	LibraryPaths  []string          `json:"libraryPaths,omitempty"`
 	IgnoreGlobs   []string          `json:"ignoreGlobs,omitempty"`
@@ -108,32 +109,34 @@ type InitializationOptions struct {
 
 	ParserMaxErrors int `json:"parserMaxErrors"`
 
-	DiagUndefinedGlobals     bool `json:"diagUndefinedGlobals"`
-	DiagImplicitGlobals      bool `json:"diagImplicitGlobals"`
-	DiagUnusedLocal          bool `json:"diagUnusedLocal"`
-	DiagUnusedFunction       bool `json:"diagUnusedFunction"`
-	DiagUnusedParameter      bool `json:"diagUnusedParameter"`
-	DiagUnusedLoopVar        bool `json:"diagUnusedLoopVar"`
-	DiagShadowing            bool `json:"diagShadowing"`
-	DiagUnreachableCode      bool `json:"diagUnreachableCode"`
-	DiagAmbiguousReturns     bool `json:"diagAmbiguousReturns"`
-	DiagDeprecated           bool `json:"diagDeprecated"`
-	DiagDuplicateField       bool `json:"diagDuplicateField"`
-	DiagUnbalancedAssignment bool `json:"diagUnbalancedAssignment"`
-	DiagDuplicateLocal       bool `json:"diagDuplicateLocal"`
-	DiagSelfAssignment       bool `json:"diagSelfAssignment"`
-	DiagEmptyBlock           bool `json:"diagEmptyBlock"`
-	DiagFormatString         bool `json:"diagFormatString"`
-	DiagTypeCheck            bool `json:"diagTypeCheck"`
-	DiagRedundantParameter   bool `json:"diagRedundantParameter"`
-	DiagRedundantValue       bool `json:"diagRedundantValue"`
-	DiagRedundantReturn      bool `json:"diagRedundantReturn"`
-	DiagLoopVarMutation      bool `json:"diagLoopVarMutation"`
-	DiagIncorrectVararg      bool `json:"diagIncorrectVararg"`
-	DiagShadowingLoopVar     bool `json:"diagShadowingLoopVar"`
-	DiagConstantCondition    bool `json:"diagConstantCondition"`
-	DiagUnreachableElse      bool `json:"diagUnreachableElse"`
-	DiagUsedIgnoredVar       bool `json:"diagUsedIgnoredVar"`
+	DiagUndefinedGlobals      bool     `json:"diagUndefinedGlobals"`
+	DiagImplicitGlobals       bool     `json:"diagImplicitGlobals"`
+	DiagUnusedLocal           bool     `json:"diagUnusedLocal"`
+	DiagUnusedFunction        bool     `json:"diagUnusedFunction"`
+	DiagUnusedParameter       bool     `json:"diagUnusedParameter"`
+	DiagUnusedLoopVar         bool     `json:"diagUnusedLoopVar"`
+	DiagShadowing             bool     `json:"diagShadowing"`
+	DiagUnreachableCode       bool     `json:"diagUnreachableCode"`
+	DiagAmbiguousReturns      bool     `json:"diagAmbiguousReturns"`
+	DiagDeprecated            bool     `json:"diagDeprecated"`
+	DiagDuplicateField        bool     `json:"diagDuplicateField"`
+	DiagUnbalancedAssignment  bool     `json:"diagUnbalancedAssignment"`
+	DiagDuplicateLocal        bool     `json:"diagDuplicateLocal"`
+	DiagSelfAssignment        bool     `json:"diagSelfAssignment"`
+	DiagEmptyBlock            bool     `json:"diagEmptyBlock"`
+	DiagFormatString          bool     `json:"diagFormatString"`
+	DiagTypeCheck             bool     `json:"diagTypeCheck"`
+	DiagRedundantParameter    bool     `json:"diagRedundantParameter"`
+	DiagRedundantValue        bool     `json:"diagRedundantValue"`
+	DiagRedundantReturn       bool     `json:"diagRedundantReturn"`
+	DiagLoopVarMutation       bool     `json:"diagLoopVarMutation"`
+	DiagIncorrectVararg       bool     `json:"diagIncorrectVararg"`
+	DiagShadowingLoopVar      bool     `json:"diagShadowingLoopVar"`
+	DiagConstantCondition     bool     `json:"diagConstantCondition"`
+	DiagUnreachableElse       bool     `json:"diagUnreachableElse"`
+	DiagUsedIgnoredVar        bool     `json:"diagUsedIgnoredVar"`
+	DiagMinVariableNameLength int      `json:"diagMinVariableNameLength"`
+	DiagIgnoredVariableNames  []string `json:"diagIgnoredVariableNames"`
 
 	InlayParamHints    bool `json:"inlayParamHints"`
 	InlaySuppressMatch bool `json:"inlaySuppressMatch"`

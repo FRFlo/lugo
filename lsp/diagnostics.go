@@ -344,7 +344,7 @@ func (s *Server) publishDiagnostics(uri string) {
 	}
 
 	// 3. Implicit Globals
-	if s.DiagImplicitGlobals {
+	if s.DiagImplicitGlobals || s.DiagMinVariableNameLength > 0 {
 		for _, defID := range doc.Resolver.GlobalDefs {
 			node := doc.Tree.Nodes[defID]
 
@@ -359,6 +359,21 @@ func (s *Server) publishDiagnostics(uri string) {
 			}
 
 			if s.isKnownGlobal(identBytes) {
+				continue
+			}
+
+			if s.DiagMinVariableNameLength > 0 && len(identBytes) < s.DiagMinVariableNameLength {
+				if !s.DiagIgnoredVariableNames[string(identBytes)] {
+					s.diagBuf = append(s.diagBuf, Diagnostic{
+						Range:    getNodeRange(doc.Tree, defID),
+						Severity: SeverityWarning,
+						Code:     "short-variable-name",
+						Message:  fmt.Sprintf("Global name '%s' is too short (minimum length is %d).", ast.String(identBytes), s.DiagMinVariableNameLength),
+					})
+				}
+			}
+
+			if !s.DiagImplicitGlobals {
 				continue
 			}
 
@@ -401,7 +416,7 @@ func (s *Server) publishDiagnostics(uri string) {
 	}
 
 	// 4. Shadowing & Unused Variables
-	if s.DiagShadowing || s.DiagShadowingLoopVar || s.DiagUnusedLocal || s.DiagUnusedFunction || s.DiagUnusedParameter || s.DiagUnusedLoopVar {
+	if s.DiagMinVariableNameLength > 0 || s.DiagShadowing || s.DiagShadowingLoopVar || s.DiagUnusedLocal || s.DiagUnusedFunction || s.DiagUnusedParameter || s.DiagUnusedLoopVar {
 		actualReads := doc.ActualReads
 
 		for _, defID := range doc.Resolver.LocalDefs {
@@ -414,6 +429,17 @@ func (s *Server) publishDiagnostics(uri string) {
 			isIgnoredVar := len(nameBytes) > 0 && nameBytes[0] == '_'
 
 			r := getNodeRange(doc.Tree, defID)
+
+			if s.DiagMinVariableNameLength > 0 && len(nameBytes) < s.DiagMinVariableNameLength {
+				if !s.DiagIgnoredVariableNames[string(nameBytes)] {
+					s.diagBuf = append(s.diagBuf, Diagnostic{
+						Range:    r,
+						Severity: SeverityWarning,
+						Code:     "short-variable-name",
+						Message:  fmt.Sprintf("Variable name '%s' is too short (minimum length is %d).", ast.String(nameBytes), s.DiagMinVariableNameLength),
+					})
+				}
+			}
 
 			if actualReads[defID] > 0 && isIgnoredVar && s.DiagUsedIgnoredVar {
 				s.diagBuf = append(s.diagBuf, Diagnostic{

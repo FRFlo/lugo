@@ -74,33 +74,35 @@ type Server struct {
 	MaxFileSize    int64
 
 	// Diagnostics & Features
-	IsIndexing               bool
-	DiagUndefinedGlobals     bool
-	DiagImplicitGlobals      bool
-	DiagUnusedLocal          bool
-	DiagUnusedFunction       bool
-	DiagUnusedParameter      bool
-	DiagUnusedLoopVar        bool
-	DiagShadowing            bool
-	DiagUnreachableCode      bool
-	DiagAmbiguousReturns     bool
-	DiagDeprecated           bool
-	DiagDuplicateField       bool
-	DiagUnbalancedAssignment bool
-	DiagDuplicateLocal       bool
-	DiagSelfAssignment       bool
-	DiagEmptyBlock           bool
-	DiagFormatString         bool
-	DiagTypeCheck            bool
-	DiagRedundantParameter   bool
-	DiagRedundantValue       bool
-	DiagRedundantReturn      bool
-	DiagLoopVarMutation      bool
-	DiagIncorrectVararg      bool
-	DiagShadowingLoopVar     bool
-	DiagConstantCondition    bool
-	DiagUnreachableElse      bool
-	DiagUsedIgnoredVar       bool
+	IsIndexing                bool
+	DiagUndefinedGlobals      bool
+	DiagImplicitGlobals       bool
+	DiagUnusedLocal           bool
+	DiagUnusedFunction        bool
+	DiagUnusedParameter       bool
+	DiagUnusedLoopVar         bool
+	DiagShadowing             bool
+	DiagUnreachableCode       bool
+	DiagAmbiguousReturns      bool
+	DiagDeprecated            bool
+	DiagDuplicateField        bool
+	DiagUnbalancedAssignment  bool
+	DiagDuplicateLocal        bool
+	DiagSelfAssignment        bool
+	DiagEmptyBlock            bool
+	DiagFormatString          bool
+	DiagTypeCheck             bool
+	DiagRedundantParameter    bool
+	DiagRedundantValue        bool
+	DiagRedundantReturn       bool
+	DiagLoopVarMutation       bool
+	DiagIncorrectVararg       bool
+	DiagShadowingLoopVar      bool
+	DiagConstantCondition     bool
+	DiagUnreachableElse       bool
+	DiagUsedIgnoredVar        bool
+	DiagMinVariableNameLength int
+	DiagIgnoredVariableNames  map[string]bool
 
 	InlayParamHints    bool
 	InlaySuppressMatch bool
@@ -248,6 +250,24 @@ func (s *Server) applyInitializationOptions(opts InitializationOptions) (needsRe
 	setCfg(&s.DiagConstantCondition, opts.DiagConstantCondition, &needsRepublish)
 	setCfg(&s.DiagUnreachableElse, opts.DiagUnreachableElse, &needsRepublish)
 	setCfg(&s.DiagUsedIgnoredVar, opts.DiagUsedIgnoredVar, &needsRepublish)
+
+	setCfg(&s.DiagMinVariableNameLength, opts.DiagMinVariableNameLength, &needsRepublish)
+
+	var newIgnoredNames map[string]bool
+
+	if len(opts.DiagIgnoredVariableNames) > 0 {
+		newIgnoredNames = make(map[string]bool, len(opts.DiagIgnoredVariableNames))
+
+		for _, name := range opts.DiagIgnoredVariableNames {
+			newIgnoredNames[name] = true
+		}
+	}
+
+	if !maps.Equal(s.DiagIgnoredVariableNames, newIgnoredNames) {
+		s.DiagIgnoredVariableNames = newIgnoredNames
+
+		needsRepublish = true
+	}
 
 	setCfg(&s.InlayParamHints, opts.InlayParamHints, nil)
 	setCfg(&s.InlaySuppressMatch, opts.InlaySuppressMatch, nil)

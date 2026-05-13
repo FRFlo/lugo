@@ -302,6 +302,24 @@
                         "scope": "resource",
                         "markdownDescription": "Map of banned global functions/symbols to a custom warning message (e.g., `{\"print\": \"Use customLogger instead\"}`).",
                         "order": 28
+                    },
+                    "lugo.diagnostics.minVariableNameLength": {
+                        "type": "integer",
+                        "default": 0,
+                        "minimum": 0,
+                        "scope": "resource",
+                        "markdownDescription": "Minimum allowed length for variable names. Variables shorter than this are flagged. Set to `0` to disable.",
+                        "order": 29
+                    },
+                    "lugo.diagnostics.ignoredVariableNames": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "default": ["_", "i", "j", "x", "y", "z", "w", "id", "to"],
+                        "scope": "resource",
+                        "markdownDescription": "List of variable names that are exempt from the minimum length check.",
+                        "order": 30
                     }
                 }
             },

@@ -79,6 +79,8 @@ function buildInitializationOptions() {
 		diagConstantCondition: lugoConfig.get("diagnostics.constantCondition") !== false,
 		diagUnreachableElse: lugoConfig.get("diagnostics.unreachableElse") !== false,
 		diagUsedIgnoredVar: lugoConfig.get("diagnostics.usedIgnoredVariable") !== false,
+		diagMinVariableNameLength: lugoConfig.get("diagnostics.minVariableNameLength") ?? 0,
+		diagIgnoredVariableNames: lugoConfig.get("diagnostics.ignoredVariableNames") || ["_", "i", "j", "x", "y", "z", "w", "id", "to"],
 
 		inlayParamHints: lugoConfig.get("inlayHints.parameterNames") !== false,
 		inlaySuppressMatch: lugoConfig.get("inlayHints.suppressWhenArgumentMatchesName") !== false,
