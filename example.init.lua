@@ -59,6 +59,8 @@ lspconfig.lugo.setup({
 		diagConstantCondition = true,
 		diagUnreachableElse = true,
 		diagUsedIgnoredVar = true,
+		diagMinVariableNameLength = 0,
+		diagIgnoredVariableNames = { "_", "i", "j", "x", "y", "z", "w", "id", "to" },
 
 		-- Inlay Hints
 		inlayParamHints = true,

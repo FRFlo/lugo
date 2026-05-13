@@ -47,7 +47,7 @@ Lugo implements a comprehensive suite of modern Language Server Protocol feature
 * **Call Hierarchy:** Visually explore a tree of incoming and outgoing function calls.
 * **Document & Workspace Symbols:** Instant workspace-wide search (`Ctrl+T`) for fully qualified names (e.g., `OP.Math.Round`) and full VS Code "Outline" tree generation.
 * **Signature Help & Inlay Hints:** Real-time active-parameter tooltips and inline parameter name hints with smart implicit `self` offset calculation. Automatically suppresses hints when the argument matches the parameter name to reduce visual noise.
-* **Code Actions (Quick Fixes & Refactoring):** Fast automated fixes for common diagnostics (prefixing unused variables, adding `local`, fixing typos). Includes powerful **AST-aware refactorings**: invert conditions, recursively convert `if` chains to early returns, optimize `table.insert` to `t[#t+1]`, convert between dot/colon method signatures, merge nested `if` statements, split multiple assignments, swap `if`/`else` branches, remove redundant parentheses, convert `for i=1, #t` to `ipairs` and toggle between dot/bracket table indexing. Includes **bulk Safe Fixes** (via command palette) to automatically clean up unused variables, parameters and assignments across the current file or your entire workspace securely without breaking side-effects.
+* **Code Actions (Quick Fixes & Refactoring):** Fast automated fixes for common diagnostics (prefixing unused variables, adding `local`, fixing typos). Includes powerful **AST-aware refactorings**: extract to local variable, extract to local function, invert conditions, recursively convert `if` chains to early returns, optimize `table.insert` to `t[#t+1]`, convert between dot/colon method signatures, merge nested `if` statements, split multiple assignments, swap `if`/`else` branches, remove redundant parentheses, convert `for i=1, #t` to `ipairs` and toggle between dot/bracket table indexing. Includes **bulk Safe Fixes** (via command palette) to automatically clean up unused variables, parameters and assignments across the current file or your entire workspace securely without breaking side-effects.
 * **Diagnostic Suppression:** Disable specific diagnostics per-line or per-file using standard `---@diagnostic disable-line code` comments (with built-in Code Actions to instantly generate them).
 * **Full Lua 5.4 Support:** Native parsing, type-inference and semantic highlighting for `<const>` and `<close>` attributes, `goto` statements and `::labels::`.
 * **FiveM Resource Isolation:** Native support for parsing `fxmanifest.lua` and `__resource.lua`. Lugo automatically isolates `client`, `server` and `shared` environments, preventing cross-contamination of globals and providing warnings if a file isn't referenced in the manifest.
@@ -71,6 +71,7 @@ Lugo performs workspace-wide analysis to catch bugs before runtime:
 * **Type Checking:** Optionally catches strictly invalid operations like attempting to call a number or index a non-table.
 * **Format String Validation:** Warns when `string.format` is called with an incorrect number of arguments.
 * **Used Ignored Variables:** Warns when a variable conventionally marked as ignored (prefixed with `_`) is actually used in the code, offering a quick-fix to safely rename it.
+* **Short Variable Names:** Flags variable names that fall below a configured minimum length (with an exemption list for common variables like `i`, `j`, `x`, `y`).
 * **Deprecation:** Warns when using symbols marked with `@deprecated`.
 * **Banned Symbols:** Warns when using customized banned functions or properties (e.g., banning `print` to enforce a custom logger).
 
@@ -148,6 +149,8 @@ You can configure Lugo via your VS Code `settings.json` (also available via the 
 * `lugo.diagnostics.unreachableElse`: Toggle diagnostics for unreachable `elseif` or `else` branches.
 * `lugo.diagnostics.usedIgnoredVariable`: Toggle diagnostics for variables that are used but their name starts with `_`.
 * `lugo.diagnostics.deprecated`: Toggle warnings for usage of `@deprecated` symbols.
+* `lugo.diagnostics.minVariableNameLength`: Minimum allowed length for variable names (default: `0` / disabled).
+* `lugo.diagnostics.ignoredVariableNames`: List of variable names exempt from the minimum length check.
 
 **Editor Features**
 * `lugo.completion.suggestFunctionParams`: Automatically insert function parameters as snippets when autocompleting a function call.
