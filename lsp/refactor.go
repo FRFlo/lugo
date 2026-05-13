@@ -298,6 +298,7 @@ func (s *Server) handleCodeAction(req Request) {
 		targetIndexToMember ast.NodeID = ast.InvalidNode
 		indexToMemberStr    string
 		targetMemberToIndex ast.NodeID = ast.InvalidNode
+		targetConcat        ast.NodeID = ast.InvalidNode
 	)
 
 	cursorLine := params.Range.Start.Line
@@ -548,6 +549,20 @@ func (s *Server) handleCodeAction(req Request) {
 			targetMemberToIndex = curr
 		}
 
+		// 10. Convert concatenation to string.format
+		if node.Kind == ast.KindBinaryExpr && token.Kind(node.Extra) == token.Concat && targetConcat == ast.InvalidNode {
+			targetConcat = curr
+
+			for {
+				pID := doc.Tree.Nodes[targetConcat].Parent
+				if pID != ast.InvalidNode && doc.Tree.Nodes[pID].Kind == ast.KindBinaryExpr && token.Kind(doc.Tree.Nodes[pID].Extra) == token.Concat {
+					targetConcat = pID
+				} else {
+					break
+				}
+			}
+		}
+
 		curr = node.Parent
 	}
 
@@ -733,6 +748,20 @@ func (s *Server) handleCodeAction(req Request) {
 		})
 	}
 
+	// 12. Convert concatenation to string.format
+	if targetConcat != ast.InvalidNode {
+		actions = append(actions, CodeAction{
+			Title:       "Convert to 'string.format'",
+			Kind:        "refactor.rewrite",
+			IsPreferred: false,
+			Data: map[string]any{
+				"type":   "concatToFormat",
+				"uri":    uri,
+				"nodeId": float64(targetConcat),
+			},
+		})
+	}
+
 	if len(params.Context.Only) > 0 {
 		var n int
 
@@ -820,6 +849,8 @@ func (s *Server) handleCodeActionResolve(req Request) {
 		edit = s.resolveIndexToMember(doc, nodeID, uri, propStr)
 	case "memberToIndex":
 		edit = s.resolveMemberToIndex(doc, nodeID, uri)
+	case "concatToFormat":
+		edit = s.resolveConcatToFormat(doc, nodeID, uri)
 	}
 
 	if edit != nil {
@@ -1285,6 +1316,86 @@ func (s *Server) resolveMemberToIndex(doc *Document, nodeID ast.NodeID, uri stri
 	}
 
 	return nil
+}
+
+func (s *Server) resolveConcatToFormat(doc *Document, nodeID ast.NodeID, uri string) *WorkspaceEdit {
+	var (
+		leaves []ast.NodeID
+		walk   func(id ast.NodeID)
+	)
+
+	walk = func(id ast.NodeID) {
+		if id == ast.InvalidNode {
+			return
+		}
+
+		node := doc.Tree.Nodes[id]
+		if node.Kind == ast.KindBinaryExpr && token.Kind(node.Extra) == token.Concat {
+			walk(node.Left)
+			walk(node.Right)
+		} else {
+			leaves = append(leaves, id)
+		}
+	}
+
+	walk(nodeID)
+
+	if len(leaves) == 0 {
+		return nil
+	}
+
+	var (
+		formatStr strings.Builder
+		argsStr   strings.Builder
+	)
+
+	for _, leafID := range leaves {
+		leafNode := doc.Tree.Nodes[leafID]
+
+		var (
+			isLiteralString bool
+			leafText        string
+		)
+
+		if leafNode.Start <= leafNode.End && leafNode.End <= uint32(len(doc.Source)) {
+			leafText = ast.String(doc.Source[leafNode.Start:leafNode.End])
+		}
+
+		if leafNode.Kind == ast.KindString {
+			if formatInner, ok := extractFormatStringSafe(leafText); ok {
+				formatStr.WriteString(formatInner)
+
+				isLiteralString = true
+			}
+		}
+
+		if !isLiteralString {
+			formatStr.WriteString("%s")
+
+			if argsStr.Len() > 0 {
+				argsStr.WriteString(", ")
+			}
+
+			argsStr.WriteString(leafText)
+		}
+	}
+
+	var newText string
+
+	if argsStr.Len() > 0 {
+		newText = fmt.Sprintf("string.format(\"%s\", %s)", formatStr.String(), argsStr.String())
+	} else {
+		newText = fmt.Sprintf("string.format(\"%s\")", formatStr.String())
+	}
+
+	return &WorkspaceEdit{
+		Changes: map[string][]TextEdit{
+			uri: {{
+				Range:   getNodeRange(doc.Tree, nodeID),
+				NewText: newText,
+			}},
+		},
+	}
 }
 
 func (s *Server) handleExecuteCommand(req Request) {
@@ -3156,4 +3267,87 @@ func (s *Server) getInnerIndent(indent string) string {
 	}
 
 	return indent + "\t"
+}
+
+func extractFormatStringSafe(raw string) (string, bool) {
+	raw = strings.TrimSpace(raw)
+	if len(raw) < 2 {
+		return "", false
+	}
+
+	if raw[0] == '"' && raw[len(raw)-1] == '"' {
+		inner := raw[1 : len(raw)-1]
+
+		return strings.ReplaceAll(inner, "%", "%%"), true
+	}
+
+	if raw[0] == '\'' && raw[len(raw)-1] == '\'' {
+		var sb strings.Builder
+
+		inner := raw[1 : len(raw)-1]
+
+		for i := 0; i < len(inner); i++ {
+			c := inner[i]
+
+			switch c {
+			case '\\':
+				sb.WriteByte('\\')
+
+				if i+1 < len(inner) {
+					sb.WriteByte(inner[i+1])
+					i++
+				}
+			case '"':
+				sb.WriteString(`\"`)
+			case '%':
+				sb.WriteString("%%")
+			default:
+				sb.WriteByte(c)
+			}
+		}
+
+		return sb.String(), true
+	}
+
+	if strings.HasPrefix(raw, "[") {
+		idx := strings.IndexByte(raw[1:], '[')
+		if idx != -1 {
+			start := 2 + idx
+			if start < len(raw) && raw[start] == '\n' {
+				start++
+			}
+
+			end := len(raw) - (2 + idx)
+			if start <= end {
+				inner := raw[start:end]
+
+				var sb strings.Builder
+
+				for i := 0; i < len(inner); i++ {
+					c := inner[i]
+
+					switch c {
+					case '\\':
+						sb.WriteString(`\\`)
+					case '"':
+						sb.WriteString(`\"`)
+					case '\n':
+						sb.WriteString(`\n`)
+					case '\r':
+						sb.WriteString(`\r`)
+					case '\t':
+						sb.WriteString(`\t`)
+					case '%':
+						sb.WriteString(`%%`)
+					default:
+						sb.WriteByte(c)
+					}
+				}
+
+				return sb.String(), true
+			}
+		}
+	}
+
+	return "", false
 }
