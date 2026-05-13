@@ -282,6 +282,52 @@ func (s *Server) handleCodeAction(req Request) {
 		}
 	}
 
+	if params.Range.Start != params.Range.End {
+		startOff := doc.Tree.Offset(params.Range.Start.Line, params.Range.Start.Character)
+		endOff := doc.Tree.Offset(params.Range.End.Line, params.Range.End.Character)
+
+		startOff, endOff = s.trimSelectionRange(doc.Source, startOff, endOff)
+
+		if startOff < endOff {
+			// Extract Variable
+			exprNodeID := s.getEnclosingNode(doc, startOff, endOff)
+			if exprNodeID != ast.InvalidNode && isExpression(doc.Tree.Nodes[exprNodeID].Kind) {
+				node := doc.Tree.Nodes[exprNodeID]
+				// Ensure the selection reasonably matches the node
+				if node.Start >= startOff || (startOff-node.Start) <= 5 {
+					if node.End <= endOff || (node.End-endOff) <= 5 {
+						actions = append(actions, CodeAction{
+							Title:       "Extract to local variable",
+							Kind:        "refactor.extract",
+							IsPreferred: false,
+							Data: map[string]any{
+								"type":   "extractVariable",
+								"uri":    uri,
+								"nodeId": float64(exprNodeID),
+							},
+						})
+					}
+				}
+			}
+
+			// Extract Function
+			stmts := s.getStatementsInRange(doc, startOff, endOff)
+			if len(stmts) > 0 {
+				actions = append(actions, CodeAction{
+					Title:       "Extract to local function",
+					Kind:        "refactor.extract",
+					IsPreferred: false,
+					Data: map[string]any{
+						"type":  "extractFunction",
+						"uri":   uri,
+						"start": float64(startOff),
+						"end":   float64(endOff),
+					},
+				})
+			}
+		}
+	}
+
 	var (
 		targetIf            ast.NodeID = ast.InvalidNode
 		targetCond          ast.NodeID = ast.InvalidNode
@@ -808,6 +854,7 @@ func (s *Server) handleCodeActionResolve(req Request) {
 	data, ok := action.Data.(map[string]any)
 	if !ok {
 		WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: action})
+
 		return
 	}
 
@@ -817,8 +864,15 @@ func (s *Server) handleCodeActionResolve(req Request) {
 	nodeID := ast.NodeID(nodeIDFloat)
 
 	doc, ok := s.Documents[uri]
-	if !ok || nodeID == ast.InvalidNode || int(nodeID) >= len(doc.Tree.Nodes) {
+	if !ok {
 		WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: action})
+
+		return
+	}
+
+	if actionType != "extractFunction" && (nodeID == ast.InvalidNode || int(nodeID) >= len(doc.Tree.Nodes)) {
+		WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: action})
+
 		return
 	}
 
@@ -851,6 +905,13 @@ func (s *Server) handleCodeActionResolve(req Request) {
 		edit = s.resolveMemberToIndex(doc, nodeID, uri)
 	case "concatToFormat":
 		edit = s.resolveConcatToFormat(doc, nodeID, uri)
+	case "extractVariable":
+		edit = s.resolveExtractVariable(doc, nodeID, uri)
+	case "extractFunction":
+		startOff, _ := data["start"].(float64)
+		endOff, _ := data["end"].(float64)
+
+		edit = s.resolveExtractFunction(doc, uint32(startOff), uint32(endOff), uri)
 	}
 
 	if edit != nil {
@@ -1180,6 +1241,300 @@ func (s *Server) resolveSwapIfElse(doc *Document, nodeID ast.NodeID, uri string)
 			}},
 		},
 	}
+}
+
+func (s *Server) resolveExtractVariable(doc *Document, nodeID ast.NodeID, uri string) *WorkspaceEdit {
+	node := doc.Tree.Nodes[nodeID]
+	stmtID := s.getEnclosingStatement(doc, nodeID)
+	if stmtID == ast.InvalidNode {
+		return nil
+	}
+
+	stmtNode := doc.Tree.Nodes[stmtID]
+
+	indent := s.getIndent(doc, stmtNode.Start)
+	exprText := string(doc.Source[node.Start:node.End])
+
+	varName := s.generateSafeName(doc, stmtID, "extracted", false)
+
+	newText := "local " + varName + " = " + exprText + "\n" + indent
+
+	return &WorkspaceEdit{
+		Changes: map[string][]TextEdit{
+			uri: {
+				{
+					Range:   getRange(doc.Tree, stmtNode.Start, stmtNode.Start),
+					NewText: newText,
+				},
+				{
+					Range:   getNodeRange(doc.Tree, nodeID),
+					NewText: varName,
+				},
+			},
+		},
+	}
+}
+
+func (s *Server) resolveExtractFunction(doc *Document, start, end uint32, uri string) *WorkspaceEdit {
+	stmts := s.getStatementsInRange(doc, start, end)
+	if len(stmts) == 0 {
+		return nil
+	}
+
+	firstStmt := doc.Tree.Nodes[stmts[0]]
+	lastStmt := doc.Tree.Nodes[stmts[len(stmts)-1]]
+
+	var (
+		inputs        []ast.NodeID
+		newOutputs    []ast.NodeID
+		mutatedInputs []ast.NodeID
+	)
+
+	inSet := make(map[ast.NodeID]bool)
+	outSet := make(map[ast.NodeID]bool)
+	mutSet := make(map[ast.NodeID]bool)
+
+	for refID, defID := range doc.Resolver.References {
+		if defID == ast.InvalidNode || refID == int(defID) {
+			continue
+		}
+
+		pID := doc.Tree.Nodes[refID].Parent
+		if pID != ast.InvalidNode && int(pID) < len(doc.Tree.Nodes) {
+			pNode := doc.Tree.Nodes[pID]
+
+			var isProp bool
+
+			if (pNode.Kind == ast.KindMemberExpr || pNode.Kind == ast.KindMethodCall || pNode.Kind == ast.KindMethodName) && pNode.Right == ast.NodeID(refID) {
+				isProp = true
+			} else if pNode.Kind == ast.KindRecordField && pNode.Left == ast.NodeID(refID) {
+				isProp = true
+			}
+
+			if isProp {
+				continue
+			}
+		}
+
+		if isRootLevel(doc.Tree, defID) {
+			continue
+		}
+
+		refNode := doc.Tree.Nodes[refID]
+		defNode := doc.Tree.Nodes[defID]
+
+		refInside := refNode.Start >= firstStmt.Start && refNode.End <= lastStmt.End
+		defInside := defNode.Start >= firstStmt.Start && defNode.End <= lastStmt.End
+
+		refAfter := refNode.Start > lastStmt.End
+
+		if refInside && !defInside {
+			if !inSet[defID] {
+				inSet[defID] = true
+
+				inputs = append(inputs, defID)
+			}
+
+			if isWriteAccess(doc.Tree, ast.NodeID(refID)) {
+				if !mutSet[defID] {
+					mutSet[defID] = true
+
+					mutatedInputs = append(mutatedInputs, defID)
+				}
+			}
+		}
+
+		if !refInside && defInside && refAfter {
+			if !outSet[defID] {
+				outSet[defID] = true
+
+				newOutputs = append(newOutputs, defID)
+			}
+		}
+	}
+
+	sortNodes := func(a, b ast.NodeID) int {
+		if doc.Tree.Nodes[a].Start < doc.Tree.Nodes[b].Start {
+			return -1
+		}
+
+		if doc.Tree.Nodes[a].Start > doc.Tree.Nodes[b].Start {
+			return 1
+		}
+
+		return 0
+	}
+
+	slices.SortFunc(inputs, sortNodes)
+	slices.SortFunc(newOutputs, sortNodes)
+	slices.SortFunc(mutatedInputs, sortNodes)
+
+	var inNames []string
+
+	for _, id := range inputs {
+		inNames = append(inNames, string(doc.Source[doc.Tree.Nodes[id].Start:doc.Tree.Nodes[id].End]))
+	}
+
+	var allOutNames []string
+
+	for _, id := range mutatedInputs {
+		allOutNames = append(allOutNames, string(doc.Source[doc.Tree.Nodes[id].Start:doc.Tree.Nodes[id].End]))
+	}
+
+	for _, id := range newOutputs {
+		allOutNames = append(allOutNames, string(doc.Source[doc.Tree.Nodes[id].Start:doc.Tree.Nodes[id].End]))
+	}
+
+	funcName := s.generateSafeName(doc, stmts[0], "extractedFunc", false)
+
+	indent := s.getIndent(doc, firstStmt.Start)
+	innerIndent := s.getInnerIndent(indent)
+
+	var newFunc strings.Builder
+
+	newFunc.WriteString("local function ")
+	newFunc.WriteString(funcName)
+	newFunc.WriteString("(")
+	newFunc.WriteString(strings.Join(inNames, ", "))
+	newFunc.WriteString(")\n")
+
+	for _, stmtID := range stmts {
+		newFunc.WriteString(innerIndent)
+		newFunc.WriteString(reindentNodeText(doc, stmtID, innerIndent))
+		newFunc.WriteString("\n")
+	}
+
+	if len(allOutNames) > 0 {
+		newFunc.WriteString(innerIndent)
+		newFunc.WriteString("return ")
+		newFunc.WriteString(strings.Join(allOutNames, ", "))
+		newFunc.WriteString("\n")
+	}
+
+	newFunc.WriteString(indent)
+	newFunc.WriteString("end\n\n")
+
+	var replace strings.Builder
+
+	if len(newOutputs) > 0 {
+		replace.WriteString("local ")
+
+		var newOutNames []string
+
+		for _, id := range newOutputs {
+			newOutNames = append(newOutNames, string(doc.Source[doc.Tree.Nodes[id].Start:doc.Tree.Nodes[id].End]))
+		}
+
+		replace.WriteString(strings.Join(newOutNames, ", "))
+		replace.WriteString("\n")
+		replace.WriteString(indent)
+	}
+
+	if len(allOutNames) > 0 {
+		replace.WriteString(strings.Join(allOutNames, ", "))
+		replace.WriteString(" = ")
+	}
+
+	replace.WriteString(funcName)
+	replace.WriteString("(")
+	replace.WriteString(strings.Join(inNames, ", "))
+	replace.WriteString(")")
+
+	var combined strings.Builder
+
+	combined.WriteString(newFunc.String())
+	combined.WriteString(indent)
+	combined.WriteString(replace.String())
+
+	return &WorkspaceEdit{
+		Changes: map[string][]TextEdit{
+			uri: {
+				{
+					Range:   getRange(doc.Tree, firstStmt.Start, lastStmt.End),
+					NewText: combined.String(),
+				},
+			},
+		},
+	}
+}
+
+func (s *Server) trimSelectionRange(source []byte, start, end uint32) (uint32, uint32) {
+	for start < end && (source[start] == ' ' || source[start] == '\t' || source[start] == '\n' || source[start] == '\r') {
+		start++
+	}
+
+	for end > start && (source[end-1] == ' ' || source[end-1] == '\t' || source[end-1] == '\n' || source[end-1] == '\r' || source[end-1] == ';') {
+		end--
+	}
+
+	return start, end
+}
+
+func (s *Server) getEnclosingNode(doc *Document, start, end uint32) ast.NodeID {
+	curr := doc.Tree.NodeAt(start)
+
+	for curr != ast.InvalidNode {
+		node := doc.Tree.Nodes[curr]
+		if node.Start <= start && node.End >= end {
+			return curr
+		}
+
+		curr = node.Parent
+	}
+
+	return ast.InvalidNode
+}
+
+func (s *Server) getEnclosingStatement(doc *Document, id ast.NodeID) ast.NodeID {
+	curr := id
+
+	for curr != ast.InvalidNode {
+		pID := doc.Tree.Nodes[curr].Parent
+		if pID == ast.InvalidNode {
+			return curr
+		}
+
+		pNode := doc.Tree.Nodes[pID]
+		if pNode.Kind == ast.KindBlock || pNode.Kind == ast.KindFile || pNode.Kind == ast.KindRepeat {
+			return curr
+		}
+
+		curr = pID
+	}
+
+	return curr
+}
+
+func (s *Server) getStatementsInRange(doc *Document, start, end uint32) []ast.NodeID {
+	blockID := s.getEnclosingNode(doc, start, end)
+
+	for blockID != ast.InvalidNode {
+		k := doc.Tree.Nodes[blockID].Kind
+		if k == ast.KindBlock || k == ast.KindFile || k == ast.KindRepeat {
+			break
+		}
+
+		blockID = doc.Tree.Nodes[blockID].Parent
+	}
+
+	if blockID == ast.InvalidNode {
+		return nil
+	}
+
+	blockNode := doc.Tree.Nodes[blockID]
+
+	var stmts []ast.NodeID
+
+	for i := uint16(0); i < blockNode.Count; i++ {
+		childID := doc.Tree.ExtraList[blockNode.Extra+uint32(i)]
+
+		child := doc.Tree.Nodes[childID]
+		if child.Start >= start && child.End <= end {
+			stmts = append(stmts, childID)
+		}
+	}
+
+	return stmts
 }
 
 func (s *Server) isParenRedundant(doc *Document, id ast.NodeID) bool {

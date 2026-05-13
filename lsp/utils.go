@@ -654,3 +654,15 @@ func isOppositeCondition(tree *ast.Tree, a, b ast.NodeID) bool {
 
 	return checkNot(a, b) || checkNot(b, a)
 }
+
+func isExpression(kind ast.NodeKind) bool {
+	switch kind {
+	case ast.KindNumber, ast.KindString, ast.KindTrue, ast.KindFalse, ast.KindNil,
+		ast.KindBinaryExpr, ast.KindUnaryExpr, ast.KindParenExpr, ast.KindFunctionExpr,
+		ast.KindTableExpr, ast.KindIdent, ast.KindMemberExpr, ast.KindIndexExpr,
+		ast.KindCallExpr, ast.KindMethodCall, ast.KindVararg:
+		return true
+	}
+
+	return false
+}
