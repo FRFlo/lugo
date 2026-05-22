@@ -2,7 +2,7 @@
 
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **lugo** (2376 symbols, 8215 relationships, 198 execution flows). Use the
+This project is indexed by GitNexus as **lugo** (2364 symbols, 8164 relationships, 197 execution flows). Use the
 GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
