@@ -95,6 +95,9 @@ function buildInitializationOptions() {
 		formatOpinionated: lugoConfig.get("features.formatOpinionated") === true,
 		suggestFunctionParams: lugoConfig.get("completion.suggestFunctionParams") !== false,
 
+		diagFiveMEventDirection: lugoConfig.get("fivem.diagnostics.eventDirection") !== false,
+		diagFiveMUnregisteredNetEvent: lugoConfig.get("fivem.diagnostics.unregisteredNetEvent") !== false,
+		diagFiveMUnknownEvent: lugoConfig.get("fivem.diagnostics.unknownEvent") !== false,
 		diagFiveMUnaccountedFile: lugoConfig.get("fivem.diagnostics.unaccountedFile") !== false,
 		diagFiveMUnknownExport: lugoConfig.get("fivem.diagnostics.unknownExport") !== false,
 		diagFiveMUnknownResource: lugoConfig.get("fivem.diagnostics.unknownResource") !== false,

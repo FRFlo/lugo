@@ -387,6 +387,27 @@
                 "title": "Lugo: FiveM",
                 "order": 4,
                 "properties": {
+                    "lugo.fivem.diagnostics.eventDirection": {
+                        "type": "boolean",
+                        "default": true,
+                        "scope": "resource",
+                        "markdownDescription": "Enable diagnostics for event direction mismatches (server vs client) in FiveM event handlers.",
+                        "order": 1
+                    },
+                    "lugo.fivem.diagnostics.unregisteredNetEvent": {
+                        "type": "boolean",
+                        "default": true,
+                        "scope": "resource",
+                        "markdownDescription": "Enable diagnostics for network events that are registered with `RegisterNetEvent` but never triggered or triggered but never registered.",
+                        "order": 5
+                    },
+                    "lugo.fivem.diagnostics.unknownEvent": {
+                        "type": "boolean",
+                        "default": true,
+                        "scope": "resource",
+                        "markdownDescription": "Enable diagnostics for unknown event names referenced in `AddEventHandler`, `TriggerEvent`, or `TriggerClientEvent`.",
+                        "order": 6
+                    },
                     "lugo.fivem.diagnostics.unaccountedFile": {
                         "type": "boolean",
                         "default": true,
