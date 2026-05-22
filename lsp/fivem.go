@@ -835,64 +835,64 @@ func (g *FiveMResourceGraph) PublicNames() []string {
 	return names
 }
 
-func (r *FiveMResource) Equal(other *FiveMResource) bool {
-	if r == other {
+func (res *FiveMResource) Equal(other *FiveMResource) bool {
+	if res == other {
 		return true
 	}
 
-	if r == nil || other == nil {
+	if res == nil || other == nil {
 		return false
 	}
 
-	if r.Name != other.Name || r.RootURI != other.RootURI || r.ManifestURI != other.ManifestURI || r.ManifestSource != other.ManifestSource || r.ManifestVersion != other.ManifestVersion || r.FXVersion != other.FXVersion || r.UseExperimentalOAL != other.UseExperimentalOAL || r.UIPage != other.UIPage || r.ServerOnly != other.ServerOnly || r.IsCfxV2 != other.IsCfxV2 {
+	if res.Name != other.Name || res.RootURI != other.RootURI || res.ManifestURI != other.ManifestURI || res.ManifestSource != other.ManifestSource || res.ManifestVersion != other.ManifestVersion || res.FXVersion != other.FXVersion || res.UseExperimentalOAL != other.UseExperimentalOAL || res.UIPage != other.UIPage || res.ServerOnly != other.ServerOnly || res.IsCfxV2 != other.IsCfxV2 {
 		return false
 	}
 
-	if !r.Manifest.Equal(other.Manifest) {
+	if !res.Manifest.Equal(other.Manifest) {
 		return false
 	}
 
-	if !slices.Equal(r.Dependencies, other.Dependencies) {
+	if !slices.Equal(res.Dependencies, other.Dependencies) {
 		return false
 	}
 
-	if !slices.Equal(r.Games, other.Games) {
+	if !slices.Equal(res.Games, other.Games) {
 		return false
 	}
 
-	if !slices.Equal(r.Provides, other.Provides) {
+	if !slices.Equal(res.Provides, other.Provides) {
 		return false
 	}
 
-	if !slices.Equal(r.ClientGlobs, other.ClientGlobs) {
+	if !slices.Equal(res.ClientGlobs, other.ClientGlobs) {
 		return false
 	}
 
-	if !slices.Equal(r.ServerGlobs, other.ServerGlobs) {
+	if !slices.Equal(res.ServerGlobs, other.ServerGlobs) {
 		return false
 	}
 
-	if !slices.Equal(r.SharedGlobs, other.SharedGlobs) {
+	if !slices.Equal(res.SharedGlobs, other.SharedGlobs) {
 		return false
 	}
 
-	if !slices.Equal(r.ClientCrossIncludes, other.ClientCrossIncludes) {
+	if !slices.Equal(res.ClientCrossIncludes, other.ClientCrossIncludes) {
 		return false
 	}
 
-	if !slices.Equal(r.ServerCrossIncludes, other.ServerCrossIncludes) {
+	if !slices.Equal(res.ServerCrossIncludes, other.ServerCrossIncludes) {
 		return false
 	}
 
-	if !slices.Equal(r.SharedCrossIncludes, other.SharedCrossIncludes) {
+	if !slices.Equal(res.SharedCrossIncludes, other.SharedCrossIncludes) {
 		return false
 	}
 
-	if !slices.Equal(r.ClientExports, other.ClientExports) {
+	if !slices.Equal(res.ClientExports, other.ClientExports) {
 		return false
 	}
 
-	if !slices.Equal(r.ServerExports, other.ServerExports) {
+	if !slices.Equal(res.ServerExports, other.ServerExports) {
 		return false
 	}
 

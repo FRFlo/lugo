@@ -13,9 +13,10 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/coalaura/plain"
+
 	"github.com/coalaura/lugo/ast"
 	"github.com/coalaura/lugo/parser"
-	"github.com/coalaura/plain"
 )
 
 const (
