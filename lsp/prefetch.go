@@ -2,6 +2,7 @@ package lsp
 
 import "sync"
 
+// PrefetchEngine manages the background indexing of workspace dependencies to improve performance.
 type PrefetchEngine struct {
 	mu        sync.Mutex
 	Graph     *DependencyGraph
@@ -10,10 +11,12 @@ type PrefetchEngine struct {
 	IndexFunc func(ResourceURI)
 }
 
+// NewPrefetchEngine creates a new PrefetchEngine using the provided dependency graph and indexing function.
 func NewPrefetchEngine(graph *DependencyGraph, indexFn func(ResourceURI)) *PrefetchEngine {
 	return &PrefetchEngine{Graph: graph, IndexFunc: indexFn}
 }
 
+// Enqueue adds a resource and its dependencies up to a certain depth into the prefetch queue.
 func (engine *PrefetchEngine) Enqueue(uri ResourceURI, depth int) {
 	if engine == nil || uri == "" || depth < 0 {
 		return
@@ -49,6 +52,7 @@ func (engine *PrefetchEngine) enqueueLocked(uri ResourceURI, depth int) {
 	}
 }
 
+// ProcessQueue executes the indexing tasks for all resources currently in the prefetch queue.
 func (engine *PrefetchEngine) ProcessQueue(server *Server) {
 	if engine == nil {
 		return

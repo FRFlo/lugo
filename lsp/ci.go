@@ -10,6 +10,8 @@ import (
 	"github.com/coalaura/plain"
 )
 
+// RunCI executes the server in continuous integration mode using a config file.
+// It returns an exit code where 0 indicates success and 1 indicates failure or diagnostics with errors.
 func (s *Server) RunCI(configPath string) int {
 	s.IsCI = true
 

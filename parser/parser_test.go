@@ -121,7 +121,7 @@ func TestParser_ValidSyntax(t *testing.T) {
 
 			if len(p.Errors) > 0 {
 				for _, err := range p.Errors {
-					t.Errorf("Unexpected syntax error: %s", err.Message)
+					t.Fatalf("Unexpected syntax error: %s", err.Message)
 				}
 			}
 
@@ -198,7 +198,7 @@ func TestParser_ErrorRecovery(t *testing.T) {
 			}
 
 			if !found {
-				t.Errorf("Parser failed to recover! Could not find the subsequent identifier %q in the AST", tt.verifyIdent)
+				t.Fatalf("Parser failed to recover! Could not find the subsequent identifier %q in the AST", tt.verifyIdent)
 			}
 		})
 	}
@@ -214,7 +214,7 @@ func TestParser_VarargRule(t *testing.T) {
 	p.Parse()
 
 	if len(p.Errors) == 0 {
-		t.Errorf("Expected syntax error for vararg '...' not being the last parameter")
+		t.Fatalf("Expected syntax error for vararg '...' not being the last parameter")
 	} else {
 		var foundVarargErr bool
 
@@ -227,7 +227,7 @@ func TestParser_VarargRule(t *testing.T) {
 		}
 
 		if !foundVarargErr {
-			t.Errorf("Expected specific vararg error, got: %v", p.Errors)
+			t.Fatalf("Expected specific vararg error, got: %v", p.Errors)
 		}
 	}
 }

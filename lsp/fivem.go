@@ -550,7 +550,10 @@ func newFiveMResourceGraphExpansion(entry *FiveMManifestEntry) FiveMResourceGrap
 	if entry != nil && strings.HasPrefix(entry.Value, "@") {
 		expansion.Kind = FiveMResourceGraphExpansionInclude
 		expansion.Include = entry.Value
-		expansion.IncludeResource, expansion.IncludePath, _ = parseFiveMResourceInclude(entry.Value)
+		if includeResource, includePath, ok := parseFiveMResourceInclude(entry.Value); ok {
+			expansion.IncludeResource = includeResource
+			expansion.IncludePath = includePath
+		}
 
 		return expansion
 	}
@@ -582,7 +585,13 @@ func newFiveMResourceGraphNode(res *FiveMResource) *FiveMResourceGraphNode {
 
 		for _, include := range res.ClientCrossIncludes {
 			expansion := FiveMResourceGraphExpansion{Kind: FiveMResourceGraphExpansionInclude, Include: include}
-			expansion.IncludeResource, expansion.IncludePath, _ = parseFiveMResourceInclude(include)
+			includeResource, includePath, ok := parseFiveMResourceInclude(include)
+			if !ok {
+				continue
+			}
+
+			expansion.IncludeResource = includeResource
+			expansion.IncludePath = includePath
 			node.ClientEntries = append(node.ClientEntries, expansion)
 		}
 
@@ -592,7 +601,13 @@ func newFiveMResourceGraphNode(res *FiveMResource) *FiveMResourceGraphNode {
 
 		for _, include := range res.ServerCrossIncludes {
 			expansion := FiveMResourceGraphExpansion{Kind: FiveMResourceGraphExpansionInclude, Include: include}
-			expansion.IncludeResource, expansion.IncludePath, _ = parseFiveMResourceInclude(include)
+			includeResource, includePath, ok := parseFiveMResourceInclude(include)
+			if !ok {
+				continue
+			}
+
+			expansion.IncludeResource = includeResource
+			expansion.IncludePath = includePath
 			node.ServerEntries = append(node.ServerEntries, expansion)
 		}
 
@@ -602,7 +617,13 @@ func newFiveMResourceGraphNode(res *FiveMResource) *FiveMResourceGraphNode {
 
 		for _, include := range res.SharedCrossIncludes {
 			expansion := FiveMResourceGraphExpansion{Kind: FiveMResourceGraphExpansionInclude, Include: include}
-			expansion.IncludeResource, expansion.IncludePath, _ = parseFiveMResourceInclude(include)
+			includeResource, includePath, ok := parseFiveMResourceInclude(include)
+			if !ok {
+				continue
+			}
+
+			expansion.IncludeResource = includeResource
+			expansion.IncludePath = includePath
 			node.SharedEntries = append(node.SharedEntries, expansion)
 		}
 
@@ -1099,6 +1120,22 @@ func (s *Server) buildFiveMManifestDiagnostics(doc *Document) []Diagnostic {
 				Code:     "fivem-manifest-unknown-directive",
 				Message:  fmt.Sprintf("Unknown manifest directive '%s'. Manifest directives should use lowercase identifiers; runtime APIs are unavailable in manifest files.", rawName),
 			})
+		}
+
+		for _, entry := range entries {
+			switch entry.EmittedName {
+			case "client_script", "server_script", "shared_script", "file":
+				if strings.HasPrefix(entry.Value, "@") {
+					if _, _, ok := parseFiveMResourceInclude(entry.Value); !ok {
+						diags = append(diags, Diagnostic{
+							Range:    entry.ValueRange,
+							Severity: SeverityWarning,
+							Code:     "fivem-manifest-invalid-include",
+							Message:  fmt.Sprintf("Invalid cross-resource include %q. Use @resource/path.", entry.Value),
+						})
+					}
+				}
+			}
 		}
 	}
 

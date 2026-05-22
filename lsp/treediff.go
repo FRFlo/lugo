@@ -7,12 +7,14 @@ import (
 	"github.com/coalaura/lugo/ast"
 )
 
+// TreeDiffResult holds the sets of nodes that were added, removed, or modified between two ASTs.
 type TreeDiffResult struct {
 	Added    []ast.NodeID
 	Removed  []ast.NodeID
 	Modified []ast.NodeID
 }
 
+// TreeDiffer provides methods to efficiently compare two AST trees and identify structural changes.
 type TreeDiffer struct{}
 
 type treeDiffEntry struct {
@@ -20,6 +22,7 @@ type treeDiffEntry struct {
 	node ast.Node
 }
 
+// Diff performs a structural comparison between oldTree and newTree, returning the differences.
 func (d TreeDiffer) Diff(oldTree, newTree *ast.Tree) TreeDiffResult {
 	oldBuckets := buildTreeDiffBuckets(oldTree)
 	newBuckets := buildTreeDiffBuckets(newTree)

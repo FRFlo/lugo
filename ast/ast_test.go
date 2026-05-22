@@ -29,24 +29,24 @@ func TestTree_PositionAndOffset(t *testing.T) {
 	for _, tt := range tests {
 		line, col := tree.Position(tt.offset)
 		if line != tt.expectedLn || col != tt.expectedCol {
-			t.Errorf("Position(%d): expected %d:%d, got %d:%d", tt.offset, tt.expectedLn, tt.expectedCol, line, col)
+			t.Fatalf("Position(%d): expected %d:%d, got %d:%d", tt.offset, tt.expectedLn, tt.expectedCol, line, col)
 		}
 
 		offset := tree.Offset(tt.expectedLn, tt.expectedCol)
 		if offset != tt.offset {
-			t.Errorf("Offset(%d, %d): expected %d, got %d", tt.expectedLn, tt.expectedCol, tt.offset, offset)
+			t.Fatalf("Offset(%d, %d): expected %d, got %d", tt.expectedLn, tt.expectedCol, tt.offset, offset)
 		}
 	}
 
 	// Out of bounds check
 	outLine, _ := tree.Position(999)
 	if outLine != 2 {
-		t.Errorf("Out of bounds Position should clamp to last line, got %d", outLine)
+		t.Fatalf("Out of bounds Position should clamp to last line, got %d", outLine)
 	}
 
 	outOffset := tree.Offset(99, 99)
 	if outOffset != uint32(len(input)) {
-		t.Errorf("Out of bounds Offset should clamp to EOF (%d), got %d", len(input), outOffset)
+		t.Fatalf("Out of bounds Offset should clamp to EOF (%d), got %d", len(input), outOffset)
 	}
 }
 
@@ -64,7 +64,7 @@ func TestTree_NodeAt(t *testing.T) {
 
 	node := tree.Nodes[nodeID]
 	if node.Kind != ast.KindIdent || string(tree.Source[node.Start:node.End]) != "a" {
-		t.Errorf("Expected identifier 'a', got %v", node.Kind)
+		t.Fatalf("Expected identifier 'a', got %v", node.Kind)
 	}
 }
 

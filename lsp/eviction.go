@@ -5,19 +5,23 @@ import (
 	"time"
 )
 
+// DefaultEvictionPolicyMaxSources is the default maximum number of workspace sources to keep in the cache.
 const DefaultEvictionPolicyMaxSources = 1024
 
+// EvictionEntry represents a resource and its last access timestamp for cache eviction.
 type EvictionEntry struct {
 	URI       ResourceURI
 	Timestamp int64
 }
 
+// EvictionPolicy manages the cache eviction for workspace sources based on access frequency and dependencies.
 type EvictionPolicy struct {
 	maxSources   int
 	evictionList []EvictionEntry
 	mu           sync.Mutex
 }
 
+// NewEvictionPolicy creates a new EvictionPolicy with an optional custom source limit.
 func NewEvictionPolicy(maxSources ...int) *EvictionPolicy {
 	limit := DefaultEvictionPolicyMaxSources
 	if len(maxSources) > 0 && maxSources[0] > 0 {
@@ -27,6 +31,7 @@ func NewEvictionPolicy(maxSources ...int) *EvictionPolicy {
 	return &EvictionPolicy{maxSources: limit}
 }
 
+// RegisterEviction records an access event for a resource to update its position in the eviction queue.
 func (p *EvictionPolicy) RegisterEviction(uri ResourceURI) {
 	if p == nil || uri == "" {
 		return
@@ -56,6 +61,7 @@ func (p *EvictionPolicy) registerEvictionLocked(uri ResourceURI, timestamp int64
 	p.evictionList = append(p.evictionList, EvictionEntry{URI: uri, Timestamp: timestamp})
 }
 
+// EvictOldest removes the oldest or least important entries from the cache when the source limit is exceeded.
 func (p *EvictionPolicy) EvictOldest(index *GlobalIndex, docs map[string]*Document) {
 	if p == nil || index == nil {
 		return

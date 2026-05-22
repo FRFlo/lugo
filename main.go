@@ -10,6 +10,7 @@ import (
 	"github.com/coalaura/lugo/lsp"
 )
 
+// Version specifies the current build version of the Lugo binary.
 var Version = "dev"
 
 func main() {

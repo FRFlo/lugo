@@ -10,6 +10,8 @@ import (
 
 var contentLengthPrefix = []byte("Content-Length: ")
 
+// ReadMessage reads a JSON-RPC message from a buffered reader.
+// It parses the Content-Length header and returns the raw message body.
 func ReadMessage(r *bufio.Reader) ([]byte, error) {
 	var length int
 
@@ -52,6 +54,8 @@ func ReadMessage(r *bufio.Reader) ([]byte, error) {
 	return content, nil
 }
 
+// WriteMessage writes a JSON-RPC message to an io.Writer.
+// It marshals the message to JSON and prepends the Content-Length header.
 func WriteMessage(w io.Writer, msg any) error {
 	body, err := json.Marshal(msg)
 	if err != nil {

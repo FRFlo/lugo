@@ -5,6 +5,8 @@ import (
 	"strings"
 )
 
+// SignatureFromEntry creates a SignatureInformation object from a symbol table entry.
+// It returns nil if the entry does not represent a function.
 func SignatureFromEntry(entry *SymbolEntry) *SignatureInformation {
 	fn := signatureFunctionType(entry)
 	if fn == nil {
@@ -34,6 +36,8 @@ func SignatureFromEntry(entry *SymbolEntry) *SignatureInformation {
 	}
 }
 
+// SignatureHelpForEntry builds a SignatureHelp object for a given symbol entry.
+// It wraps the result of SignatureFromEntry in a SignatureHelp structure.
 func SignatureHelpForEntry(entry *SymbolEntry) *SignatureHelp {
 	sig := SignatureFromEntry(entry)
 	if sig == nil {
@@ -47,6 +51,8 @@ func SignatureHelpForEntry(entry *SymbolEntry) *SignatureHelp {
 	}
 }
 
+// SignatureHelpForMethodCall provides signature help for a method call on an object.
+// It resolves the function signature based on the object type and symbol name.
 func SignatureHelpForMethodCall(name SymbolName, objType *Type, index *GlobalIndex, resource ResourceURI) *SignatureHelp {
 	if name == "" {
 		return nil

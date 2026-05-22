@@ -2,16 +2,19 @@ package lsp
 
 import "slices"
 
+// ExportBridge bridges FiveM export lookups between resources using a global index.
 type ExportBridge struct {
 	Index *GlobalIndex
 }
 
+// RegisterExports registers a slice of exports for a resource in a given scope.
 func (eb *ExportBridge) RegisterExports(resource ResourceURI, scope GlobalIndexScope, exports []ExportData) {
 	for _, data := range exports {
 		eb.RegisterExport(resource, scope, data)
 	}
 }
 
+// RegisterExport registers a single export for a resource and returns its symbol entry.
 func (eb *ExportBridge) RegisterExport(resource ResourceURI, scope GlobalIndexScope, data ExportData) *SymbolEntry {
 	if eb == nil || eb.Index == nil || data.Name == "" {
 		return nil
@@ -24,6 +27,7 @@ func (eb *ExportBridge) RegisterExport(resource ResourceURI, scope GlobalIndexSc
 	return eb.Index.AddSymbol(resource, scope, SymbolName(data.Name), entry)
 }
 
+// LookupExport searches for an export by name in the resource's dependencies.
 func (eb *ExportBridge) LookupExport(name SymbolName, fromResource ResourceURI, desiredScope GlobalIndexScope) *SymbolEntry {
 	if eb == nil || eb.Index == nil || name == "" || fromResource == "" {
 		return nil

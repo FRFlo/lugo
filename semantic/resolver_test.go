@@ -9,7 +9,9 @@ import (
 )
 
 // Helper to find all identifiers matching a specific string in the AST
-func findIdents(tree *ast.Tree, name string) []ast.NodeID {
+func findIdents(t testing.TB, tree *ast.Tree, name string) []ast.NodeID {
+	t.Helper()
+
 	var ids []ast.NodeID
 
 	for i := 1; i < len(tree.Nodes); i++ {
@@ -40,7 +42,7 @@ func TestResolver_LocalScope(t *testing.T) {
 
 	res.Resolve(root)
 
-	targets := findIdents(tree, "target")
+	targets := findIdents(t, tree, "target")
 	if len(targets) != 2 {
 		t.Fatalf("Expected 2 'target' identifiers, found %d", len(targets))
 	}
@@ -49,7 +51,7 @@ func TestResolver_LocalScope(t *testing.T) {
 	refID := targets[1]
 
 	if res.References[refID] != defID {
-		t.Errorf("Reference did not resolve to correct local definition")
+		t.Fatalf("Reference did not resolve to correct local definition")
 	}
 }
 
@@ -72,7 +74,7 @@ func TestResolver_Shadowing(t *testing.T) {
 
 	res.Resolve(root)
 
-	aNodes := findIdents(tree, "a")
+	aNodes := findIdents(t, tree, "a")
 	if len(aNodes) != 3 {
 		t.Fatalf("Expected 3 'a' identifiers, found %d", len(aNodes))
 	}
@@ -83,7 +85,7 @@ func TestResolver_Shadowing(t *testing.T) {
 
 	// The reference should point to the INNER definition, not the outer one
 	if res.References[innerRef] != innerDef {
-		t.Errorf("Shadowed variable resolved to outer scope instead of inner scope")
+		t.Fatalf("Shadowed variable resolved to outer scope instead of inner scope")
 	}
 
 	// Verify the resolver explicitly logged the shadow event for Diagnostics
@@ -93,7 +95,7 @@ func TestResolver_Shadowing(t *testing.T) {
 
 	shadowEvent := res.ShadowedOuter[0]
 	if shadowEvent.Shadowing != innerDef || shadowEvent.Shadowed != outerDef {
-		t.Errorf("Shadow event recorded incorrect nodes")
+		t.Fatalf("Shadow event recorded incorrect nodes")
 	}
 }
 
@@ -114,13 +116,13 @@ func TestResolver_Globals(t *testing.T) {
 	res.Resolve(root)
 
 	if len(res.GlobalDefs) != 1 {
-		t.Errorf("Expected 1 global definition, got %d", len(res.GlobalDefs))
+		t.Fatalf("Expected 1 global definition, got %d", len(res.GlobalDefs))
 	}
 
 	if len(res.GlobalRefs) != 1 { // 'print' is also a global ref, but let's check total including MyGlobal
 		// Actually print + MyGlobal = 2 global refs
 		if len(res.GlobalRefs) != 2 {
-			t.Errorf("Expected 2 global references (print, MyGlobal), got %d", len(res.GlobalRefs))
+			t.Fatalf("Expected 2 global references (print, MyGlobal), got %d", len(res.GlobalRefs))
 		}
 	}
 }
@@ -144,7 +146,7 @@ func TestResolver_TablesAndMethods(t *testing.T) {
 	res.Resolve(root)
 
 	if len(res.FieldDefs) != 1 {
-		t.Errorf("Expected 1 field definition (method), got %d", len(res.FieldDefs))
+		t.Fatalf("Expected 1 field definition (method), got %d", len(res.FieldDefs))
 	}
 }
 
@@ -166,7 +168,7 @@ func TestResolver_LoopScopeLeakage(t *testing.T) {
 
 	res.Resolve(root)
 
-	iNodes := findIdents(tree, "i")
+	iNodes := findIdents(t, tree, "i")
 	if len(iNodes) != 3 {
 		t.Fatalf("Expected 3 'i' identifiers, found %d", len(iNodes))
 	}
@@ -176,11 +178,11 @@ func TestResolver_LoopScopeLeakage(t *testing.T) {
 	outerRef := iNodes[2]
 
 	if res.References[innerRef] != loopDef {
-		t.Errorf("Inner 'i' did not resolve to the loop variable")
+		t.Fatalf("Inner 'i' did not resolve to the loop variable")
 	}
 
 	if res.References[outerRef] != ast.InvalidNode {
-		t.Errorf("Outer 'i' should be unresolved (global), but resolved to local def %d", res.References[outerRef])
+		t.Fatalf("Outer 'i' should be unresolved (global), but resolved to local def %d", res.References[outerRef])
 	}
 }
 
@@ -202,7 +204,7 @@ func TestResolver_GlobalFields(t *testing.T) {
 	res.Resolve(root)
 
 	if len(res.GlobalDefs) != 1 {
-		t.Errorf("Expected 1 global definition (Config), got %d", len(res.GlobalDefs))
+		t.Fatalf("Expected 1 global definition (Config), got %d", len(res.GlobalDefs))
 	}
 
 	if len(res.FieldDefs) != 2 {
@@ -211,7 +213,7 @@ func TestResolver_GlobalFields(t *testing.T) {
 
 	debugField := res.FieldDefs[0]
 	if string(debugField.ReceiverName) != "Config" {
-		t.Errorf("Expected receiver 'Config', got %q", debugField.ReceiverName)
+		t.Fatalf("Expected receiver 'Config', got %q", debugField.ReceiverName)
 	}
 }
 
