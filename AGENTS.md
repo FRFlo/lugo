@@ -1,3 +1,114 @@
+# Lugo — Lua 5.4 Parser & LSP
+
+**Module**: `github.com/coalaura/lugo` · **Go** 1.26.1 · **License**: MIT
+
+A ridiculously fast, zero-allocation Lua 5.4 parser and Language Server (LSP) written in Go. Designed for massive codebases (game servers, modding frameworks) where traditional LSPs struggle with RAM and indexing speed.
+
+---
+
+## Architecture Overview
+
+```
+main.go                      # Binary entry point (creates LSP server, handles --ci flag)
+│
+├── ast/              (2)    # Flat-array arena AST — all nodes in []Node slice
+├── lexer/            (2)    # Zero-allocation tokenizer ([]byte offsets, no heap strings)
+├── token/            (1)    # Token type definitions + TokenSet bitmask utility
+├── parser/           (2)    # Pratt parser with precedence climbing + panic-mode error recovery
+├── semantic/         (2)    # Resolver: links variable references to definitions
+├── lsp/             (71)    # Full LSP implementation (hover, completion, diagnostics, etc.)
+│   ├── server.go            # JSON-RPC handler, lifecycle, capability registration
+│   ├── rpc.go               # Content-Length framed message parsing
+│   ├── messages.go          # All LSP type definitions (729 lines)
+│   ├── features.go          # Hover, completion, signature help, inlay hints, semantic tokens
+│   ├── symbols.go           # Go-to-definition, references, document/workspace symbols
+│   ├── diagnostics.go       # 30+ diagnostic types with pragma suppression
+│   ├── refactor.go          # 20+ AST-aware refactoring transformations
+│   ├── infer.go             # Type inference engine (union types, control-flow narrowing)
+│   ├── workspace.go         # File indexing, change detection, job scheduling
+│   ├── resolver.go          # Semantic resolver (scope tracking, field resolution)
+│   ├── global_index.go      # Cross-document symbol index with resource scoping
+│   ├── format.go            # Built-in Lua formatter
+│   ├── luadoc.go            # LuaDoc annotation parser (@param, @return, @class, etc.)
+│   ├── signatures.go        # Signature help parameter inference
+│   ├── fivem.go             # FiveM: manifests, resources, events, natives
+│   ├── fivem_natives.go     # FiveM native function catalog
+│   ├── export_bridge.go     # Cross-resource export resolution
+│   ├── stdlib/              # Embedded Lua + FiveM standard library stubs
+│   ├── completion*.go       # Completion item providers
+│   └── fivem_*.go           # FiveM-specific LSP features (25+ files)
+├── vscode/            (10)  # VS Code extension (extension.js, package.json)
+├── fivem-specs/             # FiveM reference documentation
+└── scripts/                 # Build utilities (fivem_native_catalog generator)
+```
+
+**Numbers**: 233 source files, ~31K lines Go, 82 Go files, 93 Lua files, 20 files >500 lines.
+
+---
+
+## Key Conventions
+
+### Go Code
+- **gofmt** formatting (tabs, standard layout) — no external formatter config
+- **No type error suppression** (`as any`, `@ts-ignore`) in any language
+- **Table-driven tests** with `t.Run()` subtests
+- **Benchmarks** use `b.ReportAllocs()` and `b.Loop()` (Go 1.24+)
+- **Minimal dependencies** — only `github.com/coalaura/plain` (logging)
+
+### Zero-Allocation Design (pervasive)
+- Byte offsets (`uint32`), never heap strings
+- Flat `[]Node` arena for AST (no per-node pointers/allocations)
+- `TokenSet [2]uint64` bitmask for O(1) token lookups
+- Pre-computed character property table (`[256]uint8`)
+- Compiler-optimized `switch string([]byte)` for keyword matching (zero-alloc)
+- `Reset()` methods reuse slice capacities across parses
+
+### Lua (in stdlib + fixtures)
+- **LuaCATS-style annotations**: `---@class`, `---@param`, `---@return`, `---@field`, `---@alias`, `---@type`, `---@generic`, `---@overload`, `---@deprecated`, `---@see`
+- **Diagnostic suppression**: `---@diagnostic disable-next-line code` or `---@diagnostic disable-file code`
+- **Ignored variables**: Prefix with `_` to mark as intentionally unused
+- **Special comment tags**: `NOTE:`, `TODO:`, `FIXME:`, `WARNING:` auto-formatted in hovers
+
+### FiveM
+- Resources identified by `fxmanifest.lua` or `__resource.lua`
+- Execution profiles: `client`, `server`, `shared`
+- Export bridge: `exports.resourceName:method()` syntax
+
+---
+
+## Build & Test
+
+```bash
+# Test (race detector enabled)
+go test -v -race ./...
+
+# Build LSP binary
+go build -o lugo .
+
+# VS Code extension (from vscode/ dir)
+cd vscode && npm install && npm run build
+
+# CI mode (headless diagnostics)
+./lugo --ci example.ci.json
+```
+
+**Release pipeline** (`.github/workflows/release.yml`): Zig 0.15.2 cross-compilation for 6 platforms (linux/windows/darwin × amd64/arm64), static musl builds, dual artifact strategy (CLI binaries + VS Code extension binaries).
+
+---
+
+## Key Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| **Flat-array AST** ([]Node, not pointers) | Cache locality, zero GC pressure, compact (48 bytes/node), reusable arena |
+| **Byte offsets instead of strings** | No heap allocation during lexing/parsing; deferred string conversion |
+| **Three-token lookahead** | Efficient Pratt parsing without backtracking |
+| **Panic-mode error recovery** | Parser syncs on statement boundaries, continues after errors |
+| **Incremental indexing** | File hashing skips unchanged files; map `clear()` reuses memory |
+| **Monolithic `lsp/` package** | Avoids import cycles in LSP handler code; all internal state shared |
+| **LSP-as-linter** (`--ci` flag) | Server doubles as CI linter via `--ci` flag, outputs GitHub Actions annotations |
+| **Zig cross-compilation** | Enables CGO static builds across 6 platforms without native toolchains |
+
 <!-- gitnexus:start -->
 
 # GitNexus — Code Intelligence
