@@ -1198,24 +1198,6 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 				res.PendingFields[i].ReceiverHash = modHash
 			}
 		}
-
-		if res.References[pf.PropNodeID] == ast.InvalidNode {
-			var recHash uint64
-
-			if pf.ReceiverDef != ast.InvalidNode {
-				valID := doc.getAssignedValue(pf.ReceiverDef)
-				if valID != ast.InvalidNode {
-					path := s.getGlobalPath(doc, valID, 0)
-					if path != nil {
-						recHash = ast.HashBytes(path)
-					}
-				}
-			} else {
-				recHash = pf.ReceiverHash
-			}
-
-			_ = recHash
-		}
 	}
 
 	if cap(doc.TypeCache) >= len(tree.Nodes) {

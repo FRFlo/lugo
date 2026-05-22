@@ -127,9 +127,6 @@ func (s *Server) publishDiagnostics(uri string) {
 		for i := 1; i < len(doc.Tree.Nodes); i++ {
 			node := doc.Tree.Nodes[i]
 
-			// Backtick strings are valid in FiveM mode (always enabled in this fork)
-			_ = s // diagnostics for hashed strings are skipped since FiveM is always enabled
-
 			// 1. Check for valid export access
 			if node.Kind == ast.KindMethodCall || node.Kind == ast.KindMemberExpr {
 				if resObj, exportRes := s.resolveFiveMExportResource(doc, node.Left); exportRes != "" {

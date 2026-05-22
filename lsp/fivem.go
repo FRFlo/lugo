@@ -1453,8 +1453,6 @@ func (s *Server) registerFiveMManifestResource(res *FiveMResource) *FiveMResourc
 }
 
 func (s *Server) getDocFileEnv(res *FiveMResource, doc *Document) FileEnv {
-	_ = res
-
 	return s.getDocumentFiveMProfile(doc).Env()
 }
 
