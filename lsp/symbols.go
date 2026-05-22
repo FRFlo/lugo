@@ -271,7 +271,7 @@ func (s *Server) globalIndexContext(doc *Document) (ResourceURI, GlobalIndexScop
 	}
 
 	profile := s.getDocumentFiveMProfile(doc)
-	if profile.IsFiveMActive() && profile.ResourceRoot != "" {
+	if profile.IsResourceProfile() && profile.ResourceRoot != "" {
 		return ResourceURI(profile.ResourceRoot), globalIndexScopeFromFiveMEnv(profile.Env())
 	}
 
@@ -1782,6 +1782,10 @@ func (s *Server) canSeeLibrarySymbol(srcDoc, tgtDoc *Document) bool {
 
 		selection := s.getFiveMNativeSelection(srcDoc)
 		return selection.Active() && selection.Build == bundleName
+	}
+
+	if profile.Kind == FiveMProfilePlainLua {
+		return true
 	}
 
 	if !strings.HasPrefix(uri, "std:///") || srcDoc == nil {

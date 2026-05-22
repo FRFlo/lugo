@@ -24,25 +24,39 @@ const (
 type SymbolTable map[SymbolName]*SymbolEntry
 
 type SymbolEntry struct {
-	Name          SymbolName
-	Key           GlobalKey
-	Type          Type
-	LuaDoc        *LuaDocData
-	FiveM         *FiveMData
-	Export        *ExportData
-	URI           string
-	NodeID        ast.NodeID
-	Parent        string
+	// Identity
+	Name SymbolName
+	Key  GlobalKey
+
+	// Type Info
+	Type   Type
+	LuaDoc *LuaDocData
+
+	// FiveM Data
+	FiveM  *FiveMData
+	Export *ExportData
+
+	// Source Location
+	URI    string
+	NodeID ast.NodeID
+	Parent string
+
+	// Booleans
 	IsRoot        bool
 	IsDeprecated  bool
 	DeprecatedMsg string
 }
 
 type ResourceScope struct {
-	URI          ResourceURI
-	Client       SymbolTable
-	Server       SymbolTable
-	Shared       SymbolTable
+	// Identity
+	URI ResourceURI
+
+	// Symbol Tables
+	Client SymbolTable
+	Server SymbolTable
+	Shared SymbolTable
+
+	// Metadata
 	Dependencies []ResourceURI
 	Dependents   []ResourceURI
 	ScriptScopes map[ResourceURI]GlobalIndexScope

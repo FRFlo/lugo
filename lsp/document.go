@@ -18,30 +18,39 @@ type DiagPragmas struct {
 }
 
 type Document struct {
-	Server             *Server
-	Tree               *ast.Tree
-	Resolver           *semantic.Resolver
+	// Identity
+	Server     *Server
+	URI        string
+	Path       string
+	LowerPath  string
+	Dir        string
+	ModuleName string
+
+	// Parser State
+	Tree     *ast.Tree
+	Resolver *semantic.Resolver
+	// Source bytes are owned by the canonical Tree. Use Tree.Source as the authoritative source.
+	Errors []parser.ParseError
+
+	// Caches
 	TypeCache          []TypeSet
 	Inferring          []bool
 	LuaDocCache        []*LuaDoc
 	ActualReads        []uint16
 	MutatedLocals      []bool
 	ExportedGlobalDefs []ExportedSymbol
-	// Source bytes are owned by the canonical Tree. Use Tree.Source as the authoritative source.
-	Errors             []parser.ParseError
-	URI                string
-	Path               string
-	LowerPath          string
-	Dir                string
-	ModuleName         string
 	ExportedNode       ast.NodeID
-	FiveMProfile       FiveMExecutionProfile
+
+	// FiveM Fields
+	FiveMProfile    FiveMExecutionProfile
+	FiveMLuaExports []FiveMLuaExport
+	FiveMEvents     []FiveMEventInfo
+
+	// Metadata
 	IsMeta             bool
 	IsLibrary          bool
 	IsWorkspace        bool
 	IsFiveMManifest    bool
-	FiveMLuaExports    []FiveMLuaExport
-	FiveMEvents        []FiveMEventInfo
 	FiveMProfileCached bool
 	ModTime            time.Time
 	DiagPragmas        DiagPragmas

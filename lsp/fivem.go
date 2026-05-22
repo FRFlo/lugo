@@ -173,7 +173,10 @@ func (profile FiveMExecutionProfile) HasResource() bool {
 	return profile.ResourceRoot != ""
 }
 
-func (profile FiveMExecutionProfile) IsFiveMActive() bool {
+// IsResourceProfile returns true when the profile kind corresponds to a FiveM
+// resource document (manifest, client, server, shared, or export bridge).
+// Plain Lua documents return false.
+func (profile FiveMExecutionProfile) IsResourceProfile() bool {
 	switch profile.Kind {
 	case FiveMProfileManifest, FiveMProfileClient, FiveMProfileServer, FiveMProfileShared, FiveMProfileExportBridge:
 		return true

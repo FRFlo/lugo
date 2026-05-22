@@ -26,6 +26,23 @@ const (
 )
 
 type Server struct {
+	// Identity
+	Version               string
+	RootURI               string
+	lowerRootPath         string
+	WorkspaceFolders      []string
+	lowerWorkspaceFolders []string
+
+	// Config
+	LibraryPaths      []string
+	lowerLibraryPaths []string
+	IgnoreGlobs       []string
+	compiledIgnores   []IgnorePattern
+	BannedSymbols     map[string]string
+	MaxParseErrors    int
+	MaxFileSize       int64
+
+	// Transport & Logging
 	Reader *bufio.Reader
 	Writer io.Writer
 	Log    *plain.Plain
@@ -39,41 +56,12 @@ type Server struct {
 	uriCache           map[string]string
 	symlinkCache       map[string]string
 
-	// Global Index & Resolution
-	GlobalIndex       *GlobalIndex
-	KnownGlobals      map[string]bool
-	KnownGlobalGlobs  []string
-	LibraryPaths      []string
-	lowerLibraryPaths []string
-	IgnoreGlobs       []string
-	compiledIgnores   []IgnorePattern
-	BannedSymbols     map[string]string
+	// Global Index
+	GlobalIndex      *GlobalIndex
+	KnownGlobals     map[string]bool
+	KnownGlobalGlobs []string
 
-	// Shared Buffers & Parsers
-	sharedParser     *parser.Parser
-	diagBuf          []Diagnostic
-	semTokensBuf     []SemanticToken
-	semDataBuf       []uint32
-	actualReadsBuf   []int
-	depCache         map[ast.NodeID]DepInfo
-	seenKeysBuf      map[uint64]ast.NodeID
-	unusedDefsBuf    []bool
-	deadStoresBuf    map[ast.NodeID]*DeadStoreInfo
-	suggestCache     map[string]string
-	visibilityCache  map[*Document]bool
-	sharedCommentBuf []byte
-	sharedDepBuf     []byte
-
-	Version               string
-	RootURI               string
-	lowerRootPath         string
-	WorkspaceFolders      []string
-	lowerWorkspaceFolders []string
-
-	MaxParseErrors int
-	MaxFileSize    int64
-
-	// Diagnostics & Features
+	// Feature Toggles
 	IsIndexing               bool
 	DiagUndefinedGlobals     bool
 	DiagImplicitGlobals      bool
@@ -114,6 +102,7 @@ type Server struct {
 	SuggestFunctionParams bool
 	FeatureFormatAlerts   bool
 
+	// FiveM-specific Fields
 	DiagFiveMUnaccountedFile      bool
 	DiagFiveMUnknownExport        bool
 	DiagFiveMUnknownResource      bool
@@ -122,9 +111,25 @@ type Server struct {
 	DiagFiveMUnknownEvent         bool
 	fiveMNativeBundleLoader       func(name string) ([]byte, error)
 
+	// CI Fields
 	IsCI              bool
 	CIDiagnosticCount int
 	CIErrorCount      int
+
+	// Shared Buffers
+	sharedParser     *parser.Parser
+	diagBuf          []Diagnostic
+	semTokensBuf     []SemanticToken
+	semDataBuf       []uint32
+	actualReadsBuf   []int
+	depCache         map[ast.NodeID]DepInfo
+	seenKeysBuf      map[uint64]ast.NodeID
+	unusedDefsBuf    []bool
+	deadStoresBuf    map[ast.NodeID]*DeadStoreInfo
+	suggestCache     map[string]string
+	visibilityCache  map[*Document]bool
+	sharedCommentBuf []byte
+	sharedDepBuf     []byte
 }
 
 // evictClosedDocumentCaches drops memory-heavy caches for documents that are closed
