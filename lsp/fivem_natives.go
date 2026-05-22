@@ -381,7 +381,7 @@ func (s *Server) syncFiveMDocumentExports(doc *Document) {
 		return
 	}
 	profile := s.getDocumentFiveMProfile(doc)
-	if !profile.IsFiveMActive() || profile.ResourceRoot == "" {
+	if profile.ResourceRoot == "" {
 		return
 	}
 	res := s.resolveFiveMResourceByRoot(profile.ResourceRoot)

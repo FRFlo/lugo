@@ -1788,10 +1788,6 @@ func (s *Server) canSeeLibrarySymbol(srcDoc, tgtDoc *Document) bool {
 		return true
 	}
 
-	if !profile.IsFiveMActive() {
-		return true
-	}
-
 	switch uri {
 	case "std:///file.lua", "std:///require.lua":
 		return false
