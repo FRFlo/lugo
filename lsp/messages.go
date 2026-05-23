@@ -167,9 +167,9 @@ type InitializationOptions struct {
 	FeatureFormatAlerts   bool `json:"featureFormatAlerts"`
 
 	// DiagFiveMUnaccountedFile enables diagnostics for files not referenced in fxmanifest/resource files.
-	DiagFiveMUnaccountedFile      bool `json:"diagFiveMUnaccountedFile"`
+	DiagFiveMUnaccountedFile bool `json:"diagFiveMUnaccountedFile"`
 	// DiagFiveMUnknownExport enables diagnostics for unknown export lookups.
-	DiagFiveMUnknownExport        bool `json:"diagFiveMUnknownExport"`
+	DiagFiveMUnknownExport bool `json:"diagFiveMUnknownExport"`
 	// DiagFiveMUnknownResource enables diagnostics for exports addressing unknown resources.
 	DiagFiveMUnknownResource      bool `json:"diagFiveMUnknownResource"`
 	DiagFiveMEventDirection       bool `json:"diagFiveMEventDirection"`
@@ -179,28 +179,28 @@ type InitializationOptions struct {
 
 // ServerCapabilities represents the capabilities provided by the language server.
 type ServerCapabilities struct {
-	CodeLensProvider                *CodeLensOptions       `json:"codeLensProvider,omitempty"`
-	SignatureHelpProvider           *SignatureHelpOptions  `json:"signatureHelpProvider,omitempty"`
-	CompletionProvider              *CompletionOptions     `json:"completionProvider,omitempty"`
-	SemanticTokensProvider          *SemanticTokensOptions `json:"semanticTokensProvider,omitempty"`
-	ExecuteCommandProvider          *ExecuteCommandOptions `json:"executeCommandProvider,omitempty"`
-	RenameProvider                  any                    `json:"renameProvider"`
-	CodeActionProvider              any                    `json:"codeActionProvider"`
+	CodeLensProvider       *CodeLensOptions       `json:"codeLensProvider,omitempty"`
+	SignatureHelpProvider  *SignatureHelpOptions  `json:"signatureHelpProvider,omitempty"`
+	CompletionProvider     *CompletionOptions     `json:"completionProvider,omitempty"`
+	SemanticTokensProvider *SemanticTokensOptions `json:"semanticTokensProvider,omitempty"`
+	ExecuteCommandProvider *ExecuteCommandOptions `json:"executeCommandProvider,omitempty"`
+	RenameProvider         any                    `json:"renameProvider"`
+	CodeActionProvider     any                    `json:"codeActionProvider"`
 	// TextDocumentSync defines how text documents are synced with the server.
-	TextDocumentSync                int                    `json:"textDocumentSync"`
-	DefinitionProvider              bool                   `json:"definitionProvider"`
-	HoverProvider                   bool                   `json:"hoverProvider"`
-	ReferencesProvider              bool                   `json:"referencesProvider"`
-	DocumentSymbolProvider          bool                   `json:"documentSymbolProvider"`
-	WorkspaceSymbolProvider         bool                   `json:"workspaceSymbolProvider"`
-	InlayHintProvider               bool                   `json:"inlayHintProvider"`
-	FoldingRangeProvider            bool                   `json:"foldingRangeProvider"`
-	SelectionRangeProvider          bool                   `json:"selectionRangeProvider,omitempty"`
-	LinkedEditingRangeProvider      bool                   `json:"linkedEditingRangeProvider"`
-	CallHierarchyProvider           bool                   `json:"callHierarchyProvider"`
-	DocumentHighlightProvider       bool                   `json:"documentHighlightProvider,omitempty"`
-	DocumentFormattingProvider      bool                   `json:"documentFormattingProvider,omitempty"`
-	DocumentRangeFormattingProvider bool                   `json:"documentRangeFormattingProvider,omitempty"`
+	TextDocumentSync                int  `json:"textDocumentSync"`
+	DefinitionProvider              bool `json:"definitionProvider"`
+	HoverProvider                   bool `json:"hoverProvider"`
+	ReferencesProvider              bool `json:"referencesProvider"`
+	DocumentSymbolProvider          bool `json:"documentSymbolProvider"`
+	WorkspaceSymbolProvider         bool `json:"workspaceSymbolProvider"`
+	InlayHintProvider               bool `json:"inlayHintProvider"`
+	FoldingRangeProvider            bool `json:"foldingRangeProvider"`
+	SelectionRangeProvider          bool `json:"selectionRangeProvider,omitempty"`
+	LinkedEditingRangeProvider      bool `json:"linkedEditingRangeProvider"`
+	CallHierarchyProvider           bool `json:"callHierarchyProvider"`
+	DocumentHighlightProvider       bool `json:"documentHighlightProvider,omitempty"`
+	DocumentFormattingProvider      bool `json:"documentFormattingProvider,omitempty"`
+	DocumentRangeFormattingProvider bool `json:"documentRangeFormattingProvider,omitempty"`
 }
 
 // TextDocumentItem represents a text document that was opened on the client.
@@ -725,5 +725,15 @@ type ReadStdParams struct {
 
 // ReadStdResult represents the result of the custom readStd request.
 type ReadStdResult struct {
+	Content string `json:"content"`
+}
+
+// DebugExportParams represents parameters for the custom debugExport request.
+type DebugExportParams struct {
+	Categories []string `json:"categories,omitempty"`
+}
+
+// DebugExportResult represents the result of the custom debugExport request.
+type DebugExportResult struct {
 	Content string `json:"content"`
 }

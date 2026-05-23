@@ -441,6 +441,8 @@ func (s *Server) handleMessage(req Request) {
 		s.handleReindex(req)
 	case "lugo/readStd":
 		s.handleReadStd(req)
+	case "lugo/debugExport":
+		s.handleDebugExport(req)
 
 	// Symbols & Navigation
 	case "textDocument/definition":
