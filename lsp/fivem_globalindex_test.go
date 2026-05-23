@@ -2,6 +2,8 @@ package lsp
 
 import (
 	"testing"
+
+	"github.com/coalaura/lugo/ast"
 )
 
 // TestFiveMGlobalIndexCompaction tests that GlobalIndex compaction correctly removes
@@ -149,4 +151,73 @@ func TestFiveMGlobalIndexCompaction(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestFiveMLuaExportDoesNotShadowSameNamedGlobal(t *testing.T) {
+	h := newFiveMFixtureHarnessWithoutIndex(t, "resource_client_server_shared")
+	h.writeWorkspaceFile("surface_resource/server.lua", `
+function BroadcastEvent(eventName, ...)
+	return true
+end
+
+exports("BroadcastEvent", BroadcastEvent)
+`)
+	h.reindex()
+
+	uri := h.server.pathToURI(h.root + "/surface_resource/server.lua")
+	doc := h.server.Documents[uri]
+	if doc == nil {
+		t.Fatal("server.lua should be indexed")
+	}
+
+	// The reported failure appears when a document containing an exports(...)
+	// call is processed after the FiveM resource graph is available. Force the
+	// same post-profile sync path here so the export symbol and same-named global
+	// coexist in the GlobalIndex.
+	h.server.syncFiveMDocumentExports(doc)
+
+	for _, diag := range h.diagnostics("surface_resource/server.lua") {
+		if diag.Code == "undefined-global" && diag.Message == "Undefined global 'BroadcastEvent'." {
+			t.Fatalf("BroadcastEvent export argument should resolve to the same-named global, got diagnostic: %+v", diag)
+		}
+	}
+
+	globalKey := GlobalKey{ReceiverHash: 0, PropHash: ast.HashBytes([]byte("BroadcastEvent"))}
+	globalEntries := h.server.GlobalIndex.SymbolsByHash(globalKey)
+	if len(globalEntries) == 0 {
+		t.Fatal("root global BroadcastEvent should remain indexed after syncing same-named FiveM export")
+	}
+
+	var foundGlobal bool
+	for _, entry := range globalEntries {
+		if entry != nil && entry.URI == uri && entry.Export == nil {
+			foundGlobal = true
+			break
+		}
+	}
+	if !foundGlobal {
+		t.Fatalf("root global BroadcastEvent entry for %s not found: %+v", uri, globalEntries)
+	}
+
+	exportKey := GlobalKey{ReceiverHash: ast.HashBytes([]byte("exports")), PropHash: ast.HashBytes([]byte("BroadcastEvent"))}
+	exportEntries := h.server.GlobalIndex.SymbolsByHash(exportKey)
+	if len(exportEntries) == 0 {
+		t.Fatalf("FiveM export BroadcastEvent should remain indexed under exports.BroadcastEvent; doc exports=%+v profile=%+v", doc.FiveMLuaExports, h.server.getDocumentFiveMProfile(doc))
+	}
+
+	var foundExport bool
+	for _, entry := range exportEntries {
+		if entry != nil && entry.Export != nil && entry.Export.SourceURI == ResourceURI(uri) {
+			foundExport = true
+			break
+		}
+	}
+	if !foundExport {
+		t.Fatalf("FiveM export BroadcastEvent entry for %s not found: %+v", uri, exportEntries)
+	}
+
+	resource, scope := h.server.globalIndexContext(doc)
+	if export := h.server.GlobalIndex.LookupFiveMExport(resource, resource, scope, "BroadcastEvent"); export == nil || export.Export == nil {
+		t.Fatalf("LookupFiveMExport did not find same-named export, got %+v", export)
+	}
 }

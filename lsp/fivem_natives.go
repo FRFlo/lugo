@@ -258,7 +258,14 @@ func (idx *GlobalIndex) addFiveMExportSymbolLocked(scope *ResourceScope, targetS
 		typ = Type{Primitive: TypeFunction, Structural: &StructuralType{Function: &FunctionType{Variadic: true, Returns: []Type{{Primitive: TypeAny}}}}}
 	}
 	symName := SymbolName(name)
-	scope.tableForScope(targetScope)[symName] = &SymbolEntry{Name: symName, Key: GlobalKey{ReceiverHash: ast.HashBytes([]byte("exports")), PropHash: ast.HashBytes([]byte(name))}, Type: typ, Export: &ExportData{Name: name, Resource: scope.URI, ResourceName: res.Name, Scope: targetScope}}
+	scope.tableForScope(targetScope)[fiveMExportSymbolTableName(symName)] = &SymbolEntry{Name: symName, Key: GlobalKey{ReceiverHash: ast.HashBytes([]byte("exports")), PropHash: ast.HashBytes([]byte(name))}, Type: typ, Export: &ExportData{Name: name, Resource: scope.URI, ResourceName: res.Name, Scope: targetScope}}
+}
+
+func fiveMExportSymbolTableName(name SymbolName) SymbolName {
+	if name == "" {
+		return ""
+	}
+	return SymbolName("\x00fivem-export:") + name
 }
 
 func (idx *GlobalIndex) rebuildHashIndexLocked() {
@@ -319,8 +326,11 @@ func (idx *GlobalIndex) lookupVisibleFiveMSymbol(resource ResourceURI, scope Glo
 
 func lookupVisibleFiveMSymbolInScope(res *ResourceScope, scope GlobalIndexScope, name SymbolName, match func(*SymbolEntry) bool) *SymbolEntry {
 	for _, visibleScope := range fiveMVisibleGlobalIndexScopes(scope) {
-		entry := res.tableForScope(visibleScope)[name]
-		if match(entry) {
+		table := res.tableForScope(visibleScope)
+		if entry := table[name]; match(entry) {
+			return entry
+		}
+		if entry := table[fiveMExportSymbolTableName(name)]; match(entry) {
 			return entry
 		}
 	}
@@ -402,7 +412,7 @@ func (s *Server) syncFiveMDocumentExports(doc *Document) {
 		}
 		typ := s.fiveMExportTypeFromDocument(doc, exp.NodeID)
 		s.GlobalIndex.addFiveMExportSymbolLocked(resourceScope, scope, res, exp.Name, typ)
-		entry := resourceScope.tableForScope(scope)[SymbolName(exp.Name)]
+		entry := resourceScope.tableForScope(scope)[fiveMExportSymbolTableName(SymbolName(exp.Name))]
 		if entry != nil && entry.Export != nil {
 			entry.Export.SourceURI = ResourceURI(doc.URI)
 			entry.Export.NodeID = exp.NodeID
