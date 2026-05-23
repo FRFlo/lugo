@@ -6,6 +6,8 @@ import (
 	"strings"
 )
 
+//go:generate go run fivem_native_generate.go
+
 //go:embed stdlib/*.lua stdlib/fivem/*.lua
 var stdlibFS embed.FS
 
@@ -13,8 +15,6 @@ var fiveMNativeBundleNames = map[string]struct{}{
 	"natives_21e43a33.lua":  {},
 	"natives_0193d0af.lua":  {},
 	"natives_universal.lua": {},
-	"rdr3_universal.lua":    {},
-	"ny_universal.lua":      {},
 	"natives_server.lua":    {},
 }
 

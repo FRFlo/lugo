@@ -94,6 +94,8 @@ jobs:
           LDFLAGS=""
         fi
 
+        go generate ./lsp
+
         go build \
           -trimpath \
           -buildvcs=false \

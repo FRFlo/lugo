@@ -16,5 +16,8 @@ jobs:
       with:
         go-version-file: 'go.mod'
 
+    - name: Generate native bundles
+      run: go generate ./lsp
+
     - name: Run Tests
       run: go test -v -race ./...

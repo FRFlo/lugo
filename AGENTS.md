@@ -39,7 +39,7 @@ main.go                      # Binary entry point (creates LSP server, handles -
 │   └── fivem_*.go           # FiveM-specific LSP features (25+ files)
 ├── vscode/            (10)  # VS Code extension (extension.js, package.json)
 ├── fivem-specs/             # FiveM reference documentation
-└── scripts/                 # Build utilities (fivem_native_catalog generator)
+└── scripts/                 # Build utilities
 ```
 
 **Numbers**: 233 source files, ~31K lines Go, 82 Go files, 93 Lua files, 20 files >500 lines.
@@ -79,6 +79,9 @@ main.go                      # Binary entry point (creates LSP server, handles -
 ## Build & Test
 
 ```bash
+# Regenerate FiveM native structs from live upstream metadata
+go generate ./lsp
+
 # Test (race detector enabled)
 go test -v -race ./...
 
@@ -91,6 +94,8 @@ cd vscode && npm install && npm run build
 # CI mode (headless diagnostics)
 ./lugo --ci example.ci.json
 ```
+
+`build.sh`, `build.cmd`, and CI workflows run `go generate ./lsp` before testing/building so scripted builds fetch current FiveM native metadata. A plain `go build` uses the checked-in generated Go structs and does not contact upstream by itself.
 
 **Release pipeline** (`.github/workflows/release.yml`): Zig 0.15.2 cross-compilation for 6 platforms (linux/windows/darwin × amd64/arm64), static musl builds, dual artifact strategy (CLI binaries + VS Code extension binaries).
 

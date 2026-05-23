@@ -2,6 +2,7 @@ package lsp
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -65,22 +66,6 @@ function GetDisplayNameFromVehicleModel(model) end
 ---@return string
 function GetInvokingResource() end
 `,
-		"rdr3_universal.lua": `---@meta
-
----**PLAYER client**  
----[Native Documentation](https://rdr3natives.com/?_0x275F255ED201B937)  
----Returns a player ped handle for the given player index.
----@param playerIndex integer
----@return integer
-function GetPlayerPed(playerIndex) end
-`,
-		"ny_universal.lua": `---@meta
-
----Returns the world position for the specified character.
----@param charHandle integer
----@return any
-function GetCharCoordinates(charHandle) end
-`,
 	}
 
 	return func(name string) ([]byte, error) {
@@ -107,7 +92,7 @@ func materializeTestFiveMNativeLibrary(tb testing.TB, s *Server) string {
 		if err != nil {
 			tb.Fatalf("load test FiveM native bundle %s: %v", name, err)
 		}
-		if err := writeRuntimeFiveMNativeBundle(filepath.Join(dir, name), content); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), content, 0o644); err != nil {
 			tb.Fatalf("write test FiveM native bundle %s: %v", name, err)
 		}
 	}

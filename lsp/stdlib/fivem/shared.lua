@@ -120,7 +120,7 @@ function Citizen.ClearTimeout(timeoutId) end
 ---Invokes a native through the FiveM marshaling bridge.
 ---The active runtime selects the later native-wrapper catalog from the resource manifest:
 ---GTA Five resources use `natives_21e43a33.lua`, `natives_0193d0af.lua`, or `natives_universal.lua`,
----RDR3 uses `rdr3_universal.lua`, NY uses `ny_universal.lua`, and server runtimes use `natives_server.lua`.
+---and server runtimes use `natives_server.lua`.
 ---@param native any
 ---@param ... any
 ---@return any

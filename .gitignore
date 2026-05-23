@@ -11,3 +11,4 @@ node_modules
 bin
 dist
 .gitnexus
+/lsp/fivem_native_generated.go

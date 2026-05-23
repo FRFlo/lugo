@@ -36,20 +36,20 @@ func TestNativeIntegration(t *testing.T) {
 		}
 	})
 
-	t.Run("NoManifestAndNYBundle", func(t *testing.T) {
+	t.Run("NoManifestAndUnsupportedGameUsesGTA", func(t *testing.T) {
 		idx := NewGlobalIndex()
 		if res := idx.RegisterFiveMResource(&FiveMResource{}); res != nil {
 			t.Fatalf("empty no-manifest resource registered: %+v", res)
 		}
-		nyRes := &FiveMResource{Name: "ny", RootURI: "ny", Games: []string{"ny"}, FXVersion: "cerulean", IsCfxV2: true, ClientGlobs: []string{"client.lua"}}
-		nyScope := idx.RegisterFiveMResource(nyRes)
-		registerTestNativeCatalog(t, idx, nyScope, nyRes)
-		native := idx.LookupFiveMNative("ny", GlobalIndexScopeClient, "GetCharCoordinates")
+		redMRes := &FiveMResource{Name: "redm", RootURI: "redm", Games: []string{"rdr3"}, FXVersion: "cerulean", IsCfxV2: true, ClientGlobs: []string{"client.lua"}}
+		redMScope := idx.RegisterFiveMResource(redMRes)
+		registerTestNativeCatalog(t, idx, redMScope, redMRes)
+		native := idx.LookupFiveMNative("redm", GlobalIndexScopeClient, "PlayerPedId")
 		if native == nil {
-			t.Fatal("NY native GetCharCoordinates missing")
+			t.Fatal("FiveM GTA native PlayerPedId missing for unsupported game fallback")
 		}
-		if native.FiveM == nil || native.FiveM.Bundle != "ny_universal.lua" || native.FiveM.Family != FiveMNativeFamilyNY {
-			t.Fatalf("NY metadata = %+v, want ny_universal.lua family NY", native.FiveM)
+		if native.FiveM == nil || native.FiveM.Bundle != "natives_universal.lua" || native.FiveM.Family != FiveMNativeFamilyGTA5 {
+			t.Fatalf("fallback metadata = %+v, want natives_universal.lua family GTA5", native.FiveM)
 		}
 	})
 }
@@ -131,6 +131,30 @@ function SharedNative() end
 	if got := idx.LookupFiveMNative("scoped", GlobalIndexScopeShared, "SharedNative"); got == nil || got.FiveM.Scope != GlobalIndexScopeShared {
 		t.Fatalf("shared native = %+v, want shared scope", got)
 	}
+}
+
+func TestCompiledNativeLuaDocMultipleReturns(t *testing.T) {
+	native := compiledFiveMNative{
+		Name:        "CompiledMultiReturn",
+		Description: "---Compiled multi-return fixture.",
+		Params: []compiledFiveMNativeParam{
+			{Name: "entity", Type: "number"},
+		},
+		Returns: []string{"boolean", "integer"},
+	}
+	luadoc := compiledFiveMNativeLuaDoc(native)
+	entry := fiveMNativeCatalogEntry{
+		Name:       native.Name,
+		Bundle:     "natives_universal.lua",
+		LuaDoc:     luaDocDataFromLuaDoc(luadoc),
+		ParamNames: []string{"entity"},
+	}
+	entry.Type = structuralFunctionTypeFromLuaDoc(entry.ParamNames, luadoc.Params, luadoc.Returns)
+
+	if len(entry.LuaDoc.Returns) != 2 {
+		t.Fatalf("compiled LuaDoc returns = %+v, want two return annotations", entry.LuaDoc)
+	}
+	assertFunctionShape(t, entry.Type, 1, []BasicType{TypeBoolean, TypeNumber})
 }
 
 func assertFunctionShape(t *testing.T, typ Type, wantParams int, wantReturns []BasicType) {

@@ -37,14 +37,20 @@ func (catalog *FiveMNativeCatalog) Bundle(name string) (map[string]fiveMNativeCa
 	if entries, ok := catalog.bundles[name]; ok {
 		return entries, nil
 	}
+	var entries map[string]fiveMNativeCatalogEntry
+	var err error
 	if catalog.loader == nil {
-		catalog.loader = readEmbeddedFiveMNativeBundle
+		entries, err = compiledFiveMNativeCatalogEntries(name)
+	} else {
+		var b []byte
+		b, err = catalog.loader(name)
+		if err == nil {
+			entries = parseFiveMNativeBundleCatalog(name, string(b))
+		}
 	}
-	b, err := catalog.loader(name)
 	if err != nil {
 		return nil, err
 	}
-	entries := parseFiveMNativeBundleCatalog(name, string(b))
 	catalog.bundles[name] = entries
 	return entries, nil
 }
@@ -53,10 +59,7 @@ func readEmbeddedFiveMNativeBundle(name string) ([]byte, error) {
 	if name == "" {
 		return nil, errors.New("empty FiveM native bundle name")
 	}
-	if b, err := loadRuntimeFiveMNativeBundle(name); err == nil {
-		return b, nil
-	}
-	return stdlibFS.ReadFile("stdlib/fivem/" + name)
+	return readCompiledFiveMNativeBundle(name)
 }
 
 func parseFiveMNativeBundleCatalog(bundleName, source string) map[string]fiveMNativeCatalogEntry {

@@ -260,8 +260,6 @@ type FiveMNativeFamily int
 const (
 	FiveMNativeFamilyUnknown FiveMNativeFamily = iota
 	FiveMNativeFamilyGTA5
-	FiveMNativeFamilyRDR3
-	FiveMNativeFamilyNY
 	FiveMNativeFamilyServer
 )
 
@@ -269,10 +267,6 @@ func (family FiveMNativeFamily) String() string {
 	switch family {
 	case FiveMNativeFamilyGTA5:
 		return "gta5"
-	case FiveMNativeFamilyRDR3:
-		return "rdr3"
-	case FiveMNativeFamilyNY:
-		return "ny"
 	case FiveMNativeFamilyServer:
 		return "server"
 	default:
@@ -315,26 +309,11 @@ func isFiveMManifestVersionAtLeastAdamant(fxVersion string) bool {
 }
 
 func (res *FiveMResource) clientNativeFamily() FiveMNativeFamily {
-	for _, game := range res.Games {
-		switch normalizeFiveMGameName(game) {
-		case "rdr3":
-			return FiveMNativeFamilyRDR3
-		case "ny":
-			return FiveMNativeFamilyNY
-		case "gta5":
-			return FiveMNativeFamilyGTA5
-		}
-	}
-
 	return FiveMNativeFamilyGTA5
 }
 
 func (res *FiveMResource) clientNativeBuild() string {
 	switch res.clientNativeFamily() {
-	case FiveMNativeFamilyRDR3:
-		return "rdr3_universal.lua"
-	case FiveMNativeFamilyNY:
-		return "ny_universal.lua"
 	case FiveMNativeFamilyGTA5:
 		if res.IsCfxV2 && isFiveMManifestVersionAtLeastAdamant(res.FXVersion) {
 			return "natives_universal.lua"

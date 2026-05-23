@@ -53,12 +53,7 @@ func (s *Server) readFiveMNativeBundle(name string) ([]byte, error) {
 		return s.fiveMNativeBundleLoader(name)
 	}
 
-	b, err := loadRuntimeFiveMNativeBundle(name)
-	if err == nil {
-		return b, nil
-	}
-
-	return stdlibFS.ReadFile("stdlib/fivem/" + name)
+	return readCompiledFiveMNativeBundle(name)
 }
 
 func (s *Server) ensureFiveMNativeSymbol(doc *Document, name string) bool {

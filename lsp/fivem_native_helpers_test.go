@@ -165,26 +165,6 @@ func TestFiveMNativeBuildSelection(t *testing.T) {
 			wantBuild:    "natives_21e43a33.lua",
 			wantFamily:   FiveMNativeFamilyGTA5,
 		},
-		{
-			name:         "rdr3 client",
-			resourceDir:  "rdr_resource",
-			manifestName: "fxmanifest.lua",
-			manifest:     "fx_version 'cerulean'\ngame 'rdr3'\nclient_script 'client.lua'\n",
-			docName:      "client.lua",
-			source:       "return GetPlayerPed(0)",
-			wantBuild:    "rdr3_universal.lua",
-			wantFamily:   FiveMNativeFamilyRDR3,
-		},
-		{
-			name:         "ny client",
-			resourceDir:  "ny_resource",
-			manifestName: "fxmanifest.lua",
-			manifest:     "fx_version 'cerulean'\ngame 'ny'\nclient_script 'client.lua'\n",
-			docName:      "client.lua",
-			source:       "return GetCharCoordinates(0)",
-			wantBuild:    "ny_universal.lua",
-			wantFamily:   FiveMNativeFamilyNY,
-		},
 	}
 
 	for _, tc := range tests {
@@ -258,28 +238,6 @@ func TestFiveMNativeCatalogSelection(t *testing.T) {
 			symbol:       "GetDisplayNameFromVehicleModel",
 			wantBuild:    "natives_21e43a33.lua",
 			wantFamily:   FiveMNativeFamilyGTA5,
-		},
-		{
-			name:         "rdr3 client",
-			resourceDir:  "rdr_resource",
-			manifestName: "fxmanifest.lua",
-			manifest:     "fx_version 'cerulean'\ngame 'rdr3'\nclient_script 'client.lua'\n",
-			docName:      "client.lua",
-			source:       "return GetPlayerPed(0)",
-			symbol:       "GetPlayerPed",
-			wantBuild:    "rdr3_universal.lua",
-			wantFamily:   FiveMNativeFamilyRDR3,
-		},
-		{
-			name:         "ny client",
-			resourceDir:  "ny_resource",
-			manifestName: "fxmanifest.lua",
-			manifest:     "fx_version 'cerulean'\ngame 'ny'\nclient_script 'client.lua'\n",
-			docName:      "client.lua",
-			source:       "return GetCharCoordinates(0)",
-			symbol:       "GetCharCoordinates",
-			wantBuild:    "ny_universal.lua",
-			wantFamily:   FiveMNativeFamilyNY,
 		},
 	}
 
