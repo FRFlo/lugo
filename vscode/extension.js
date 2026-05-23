@@ -8,6 +8,38 @@ let client, restarting, indexing, debounce;
 
 const fiveMNativeCacheVersion = "v1";
 const fiveMNativeCacheFolderName = "fivem-native-bundles";
+const debugExportCategories = [
+	{
+		label: "Tokens",
+		category: "tokens",
+		description: "All lexer tokens with byte offsets and text",
+		picked: true,
+	},
+	{
+		label: "Identifiers",
+		category: "identifiers",
+		description: "Identifier-only token stream for name diffs",
+		picked: true,
+	},
+	{
+		label: "AST nodes",
+		category: "ast",
+		description: "Flat arena nodes, comments, ranges, and links",
+		picked: true,
+	},
+	{
+		label: "Semantic refs",
+		category: "semantic",
+		description: "Definitions, references, fields, shadows, reassignments",
+		picked: true,
+	},
+	{
+		label: "Global index",
+		category: "globalIndex",
+		description: "Workspace symbols and cross-document index entries",
+		picked: true,
+	},
+];
 
 async function restartClient(context) {
 	if (restarting) {
@@ -197,6 +229,12 @@ async function activate(context) {
 	);
 
 	context.subscriptions.push(
+		vscode.commands.registerCommand("lugo.exportDebugData", () => {
+			return exportDebugData();
+		})
+	);
+
+	context.subscriptions.push(
 		vscode.commands.registerCommand("lugo.ignoreDiagnostic", async (uriStr, line, rule, isFile) => {
 			const editor = vscode.window.activeTextEditor;
 
@@ -277,6 +315,68 @@ async function startClient(context) {
 	await client.start();
 
 	triggerReindex();
+}
+
+async function exportDebugData() {
+	try {
+		if (!client?.isRunning()) {
+			vscode.window.showWarningMessage("Lugo LSP is not running yet.");
+			return;
+		}
+
+		const selected = await vscode.window.showQuickPick(debugExportCategories, {
+			canPickMany: true,
+			title: "Lugo: Export Debug Data",
+			placeHolder: "Select the debug data to export",
+			ignoreFocusOut: true,
+			matchOnDescription: true,
+		});
+
+		if (!selected || selected.length === 0) {
+			return;
+		}
+
+		const workspaceName = vscode.workspace.name || "workspace",
+			safeName = workspaceName.replace(/[^a-z0-9._-]+/gi, "-").replace(/^-+|-+$/g, "") || "workspace",
+			stamp = new Date().toISOString().replace(/[:.]/g, "-");
+
+		const target = await vscode.window.showSaveDialog({
+			defaultUri: vscode.Uri.file(path.join(os.homedir(), `${safeName}-lugo-debug-${stamp}.json`)),
+			saveLabel: "Export Debug Data",
+			filters: {
+				"JSON files": ["json"],
+				"All files": ["*"],
+			},
+		});
+
+		if (!target) {
+			return;
+		}
+
+		await vscode.window.withProgress(
+			{
+				location: vscode.ProgressLocation.Notification,
+				title: "Lugo: Exporting debug data...",
+				cancellable: false,
+			},
+			async () => {
+				const res = await client.sendRequest("lugo/debugExport", {
+					categories: selected.map(item => item.category),
+				});
+
+				await vscode.workspace.fs.writeFile(target, new TextEncoder().encode(res.content));
+			}
+		);
+
+		const action = await vscode.window.showInformationMessage(`Lugo debug data exported to ${target.fsPath}`, "Open File");
+		if (action === "Open File") {
+			const doc = await vscode.workspace.openTextDocument(target);
+			await vscode.window.showTextDocument(doc, {preview: false});
+		}
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		vscode.window.showErrorMessage(`Lugo debug export failed: ${message}`);
+	}
 }
 
 function triggerReindex() {

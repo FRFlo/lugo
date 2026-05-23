@@ -51,6 +51,10 @@
                 "title": "Lugo: Apply Safe Fixes (Current File)"
             },
             {
+              "command": "lugo.exportDebugData",
+              "title": "Lugo: Export Debug Data..."
+            },
+          {
                 "command": "lugo.ignoreDiagnostic",
                 "title": "Lugo: Ignore Diagnostic"
             }
