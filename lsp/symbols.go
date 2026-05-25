@@ -1787,7 +1787,7 @@ func (s *Server) canSeeLibrarySymbol(srcDoc, tgtDoc *Document) bool {
 
 	profile := s.getDocumentFiveMProfile(srcDoc)
 	if !profile.IsResourceProfile() {
-		return name != "fivem_shared.lua" && name != "fivem_client.lua" && name != "fivem_server.lua" && name != "io.lua" && name != "os.lua"
+		return name != "fivem_client.lua" && name != "fivem_server.lua" && name != "io.lua" && name != "os.lua"
 	}
 
 	switch name {

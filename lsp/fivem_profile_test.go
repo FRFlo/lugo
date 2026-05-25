@@ -166,10 +166,10 @@ client_script 'client.lua'
 server_script 'server.lua'
 shared_script 'shared.lua'
 `)
-	plainDoc := addFiveMTestDocument(t, s, filepath.Join(root, "plain.lua"), "return package, collectgarbage, json, msgpack, AppGetFloat, GetPedFromCoverPoint, StateBagHasKey")
-	clientDoc := addFiveMTestDocument(t, s, filepath.Join(root, "resource", "client.lua"), "return package, collectgarbage, json, msgpack, AppGetFloat, GetPedFromCoverPoint, StateBagHasKey, TriggerServerEvent, TriggerClientEvent, LocalPlayer, GlobalState")
-	serverDoc := addFiveMTestDocument(t, s, filepath.Join(root, "resource", "server.lua"), "return package, collectgarbage, json, msgpack, AppGetFloat, GetPedFromCoverPoint, StateBagHasKey, TriggerServerEvent, TriggerClientEvent, PerformHttpRequest, source, GlobalState")
-	sharedDoc := addFiveMTestDocument(t, s, filepath.Join(root, "resource", "shared.lua"), "return package, collectgarbage, json, msgpack, AppGetFloat, GetPedFromCoverPoint, StateBagHasKey, TriggerServerEvent, TriggerClientEvent, GlobalState")
+	plainDoc := addFiveMTestDocument(t, s, filepath.Join(root, "plain.lua"), "return json, msgpack, package, collectgarbage, TriggerServerEvent, TriggerClientEvent, GlobalState")
+	clientDoc := addFiveMTestDocument(t, s, filepath.Join(root, "resource", "client.lua"), "return json, msgpack, package, collectgarbage, TriggerServerEvent, TriggerClientEvent, LocalPlayer, GlobalState")
+	serverDoc := addFiveMTestDocument(t, s, filepath.Join(root, "resource", "server.lua"), "return json, msgpack, package, collectgarbage, TriggerServerEvent, TriggerClientEvent, PerformHttpRequest, source, GlobalState")
+	sharedDoc := addFiveMTestDocument(t, s, filepath.Join(root, "resource", "shared.lua"), "return json, msgpack, package, collectgarbage, TriggerServerEvent, TriggerClientEvent, GlobalState")
 
 	for _, doc := range []*Document{plainDoc, clientDoc, serverDoc, sharedDoc} {
 		assertResolvedGlobal(t, s, doc, "json")
@@ -178,26 +178,24 @@ shared_script 'shared.lua'
 		assertUnresolvedGlobal(t, s, doc, "collectgarbage")
 	}
 
-	assertResolvedGlobal(t, s, plainDoc, "StateBagHasKey")
-	assertUnresolvedGlobal(t, s, plainDoc, "AppGetFloat")
-	assertUnresolvedGlobal(t, s, plainDoc, "GetPedFromCoverPoint")
+	assertResolvedGlobal(t, s, plainDoc, "GlobalState")
+	assertUnresolvedGlobal(t, s, plainDoc, "TriggerServerEvent")
+	assertUnresolvedGlobal(t, s, plainDoc, "TriggerClientEvent")
 
 	for _, doc := range []*Document{clientDoc, serverDoc, sharedDoc} {
 		assertResolvedGlobal(t, s, doc, "GlobalState")
 	}
 
-	assertResolvedGlobal(t, s, clientDoc, "AppGetFloat")
 	assertResolvedGlobal(t, s, clientDoc, "TriggerServerEvent")
 	assertResolvedGlobal(t, s, clientDoc, "LocalPlayer")
 	assertUnresolvedGlobal(t, s, clientDoc, "TriggerClientEvent")
 
-	assertResolvedGlobal(t, s, serverDoc, "GetPedFromCoverPoint")
 	assertResolvedGlobal(t, s, serverDoc, "TriggerClientEvent")
 	assertResolvedGlobal(t, s, serverDoc, "PerformHttpRequest")
 	assertResolvedGlobal(t, s, serverDoc, "source")
 	assertUnresolvedGlobal(t, s, serverDoc, "TriggerServerEvent")
 
-	assertResolvedGlobal(t, s, sharedDoc, "StateBagHasKey")
+	assertResolvedGlobal(t, s, sharedDoc, "GlobalState")
 	assertUnresolvedGlobal(t, s, sharedDoc, "TriggerServerEvent")
 	assertUnresolvedGlobal(t, s, sharedDoc, "TriggerClientEvent")
 }
