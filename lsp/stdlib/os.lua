@@ -32,6 +32,11 @@ function os.exit(code, close) end
 ---@return string|nil
 function os.getenv(varname) end
 
+---Creates a directory.
+---@param dirname string
+---@return boolean|nil, string?, integer?
+function os.createdir(dirname) end
+
 ---Deletes the file (or empty directory, on POSIX systems) with the given name.
 ---@param filename string
 ---@return boolean|nil, string?, integer?
@@ -57,3 +62,23 @@ function os.time(table) end
 ---Returns a string with a file name that can be used for a temporary file.
 ---@return string
 function os.tmpname() end
+
+---Returns the elapsed runtime delta in seconds.
+---@return number
+function os.deltatime() end
+
+---Returns a high-resolution timestamp in microseconds.
+---@return integer
+function os.microtime() end
+
+---Returns a high-resolution timestamp in nanoseconds.
+---@return integer
+function os.nanotime() end
+
+---Returns the CPU timestamp counter when supported by the runtime platform.
+---@return integer
+function os.rdtsc() end
+
+---Returns the serializing CPU timestamp counter when supported by the runtime platform.
+---@return integer
+function os.rdtscp() end
