@@ -138,6 +138,69 @@ shared_scripts { 'shared.lua', 'shared_consumer.lua' }
 	}
 }
 
+func TestFiveMStdlibVisibility(t *testing.T) {
+	s, root := newFiveMProfileTestServer(t)
+	indexEmbeddedStdlibForTest(t, s,
+		"basic.lua",
+		"fivem_client.lua",
+		"fivem_server.lua",
+		"fivem_shared.lua",
+		"io.lua",
+		"json.lua",
+		"msgpack.lua",
+		"os.lua",
+		"package.lua",
+	)
+
+	addFiveMTestDocument(t, s, filepath.Join(root, "resource", "fxmanifest.lua"), `
+client_script 'client.lua'
+server_script 'server.lua'
+shared_script 'shared.lua'
+`)
+	plainDoc := addFiveMTestDocument(t, s, filepath.Join(root, "plain.lua"), "return io, os, package, json, msgpack, collectgarbage, Citizen, Wait")
+	clientDoc := addFiveMTestDocument(t, s, filepath.Join(root, "resource", "client.lua"), "return io, os, package, json, msgpack, collectgarbage, Citizen, Wait, TriggerServerEvent, TriggerClientEvent, LocalPlayer, GlobalState")
+	serverDoc := addFiveMTestDocument(t, s, filepath.Join(root, "resource", "server.lua"), "return io, os, package, json, msgpack, collectgarbage, Citizen, Wait, TriggerServerEvent, TriggerClientEvent, PerformHttpRequest, source, GlobalState")
+	sharedDoc := addFiveMTestDocument(t, s, filepath.Join(root, "resource", "shared.lua"), "return io, os, package, json, msgpack, collectgarbage, Citizen, Wait, TriggerServerEvent, TriggerClientEvent, GlobalState")
+
+	for _, doc := range []*Document{plainDoc, serverDoc} {
+		assertResolvedGlobal(t, s, doc, "io")
+		assertResolvedGlobal(t, s, doc, "os")
+	}
+
+	for _, doc := range []*Document{clientDoc, sharedDoc} {
+		assertUnresolvedGlobal(t, s, doc, "io")
+		assertUnresolvedGlobal(t, s, doc, "os")
+	}
+
+	for _, doc := range []*Document{plainDoc, clientDoc, serverDoc, sharedDoc} {
+		assertResolvedGlobal(t, s, doc, "json")
+		assertResolvedGlobal(t, s, doc, "msgpack")
+		assertUnresolvedGlobal(t, s, doc, "package")
+		assertUnresolvedGlobal(t, s, doc, "collectgarbage")
+	}
+
+	assertUnresolvedGlobal(t, s, plainDoc, "Citizen")
+	assertUnresolvedGlobal(t, s, plainDoc, "Wait")
+
+	for _, doc := range []*Document{clientDoc, serverDoc, sharedDoc} {
+		assertResolvedGlobal(t, s, doc, "Citizen")
+		assertResolvedGlobal(t, s, doc, "Wait")
+		assertResolvedGlobal(t, s, doc, "GlobalState")
+	}
+
+	assertResolvedGlobal(t, s, clientDoc, "TriggerServerEvent")
+	assertResolvedGlobal(t, s, clientDoc, "LocalPlayer")
+	assertUnresolvedGlobal(t, s, clientDoc, "TriggerClientEvent")
+
+	assertResolvedGlobal(t, s, serverDoc, "TriggerClientEvent")
+	assertResolvedGlobal(t, s, serverDoc, "PerformHttpRequest")
+	assertResolvedGlobal(t, s, serverDoc, "source")
+	assertUnresolvedGlobal(t, s, serverDoc, "TriggerServerEvent")
+
+	assertUnresolvedGlobal(t, s, sharedDoc, "TriggerServerEvent")
+	assertUnresolvedGlobal(t, s, sharedDoc, "TriggerClientEvent")
+}
+
 func newFiveMProfileTestServer(t *testing.T) (*Server, string) {
 	t.Helper()
 
@@ -169,6 +232,23 @@ func addFiveMTestDocument(t *testing.T, s *Server, path, source string) *Documen
 	}
 
 	return doc
+}
+
+func indexEmbeddedStdlibForTest(t *testing.T, s *Server, names ...string) {
+	t.Helper()
+
+	for _, name := range names {
+		b, err := stdlibFS.ReadFile("stdlib/" + name)
+		if err != nil {
+			if name == "package.lua" {
+				continue
+			}
+
+			t.Fatalf("read embedded stdlib %s: %v", name, err)
+		}
+
+		s.updateDocument(embeddedStdlibURIPrefix+name, b)
+	}
 }
 
 func mustFindIdentNode(t testing.TB, doc *Document, name string) ast.NodeID {
