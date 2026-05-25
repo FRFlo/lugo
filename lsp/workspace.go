@@ -17,10 +17,13 @@ import (
 	"github.com/coalaura/lugo/semantic"
 )
 
+const embeddedStdlibURIPrefix = "lugo-stdlib/"
+
 type IndexJob struct {
 	Uri            string
 	Path           string
 	ModTime        time.Time
+	IsStd          bool
 	ExistingTree   *ast.Tree
 	ExistingSource []byte
 	Doc            *Document
@@ -267,6 +270,8 @@ func (s *Server) refreshWorkspace() {
 
 	var pendingJobs []*IndexJob
 
+	s.indexEmbeddedStdlib(&pendingJobs, &unchanged)
+
 	for _, libPath := range s.LibraryPaths {
 		s.Log.Printf("Indexing external library: %s\n", libPath)
 
@@ -294,7 +299,11 @@ func (s *Server) refreshWorkspace() {
 					err error
 				)
 
-				b, err = os.ReadFile(job.Path)
+				if job.IsStd {
+					b, err = stdlibFS.ReadFile("stdlib/" + job.Path)
+				} else {
+					b, err = os.ReadFile(job.Path)
+				}
 
 				if err != nil {
 					results <- &IndexResult{Job: job, Uri: job.Uri, Err: err}
@@ -1199,6 +1208,55 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 	return needsWorkspaceRepublish
 }
 
+func (s *Server) indexEmbeddedStdlib(pendingJobs *[]*IndexJob, unchanged *int) {
+	entries, err := stdlibFS.ReadDir("stdlib")
+	if err != nil {
+		s.Log.Warnf("Failed to read embedded stdlib: %v\n", err)
+
+		return
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".lua") {
+			continue
+		}
+
+		name := entry.Name()
+		uri := embeddedStdlibURIPrefix + name
+
+		if s.OpenFiles[uri] {
+			if s.activeURIs != nil {
+				s.activeURIs[uri] = true
+			}
+
+			*unchanged++
+
+			continue
+		}
+
+		var (
+			existingTree   *ast.Tree
+			existingSource []byte
+			doc            *Document
+		)
+
+		if existing, ok := s.Documents[uri]; ok {
+			existingTree = existing.Tree
+			existingSource = existing.Source()
+			doc = existing
+		}
+
+		*pendingJobs = append(*pendingJobs, &IndexJob{
+			Uri:            uri,
+			Path:           name,
+			IsStd:          true,
+			ExistingTree:   existingTree,
+			ExistingSource: existingSource,
+			Doc:            doc,
+		})
+	}
+}
+
 func (s *Server) clearDocument(uri string) {
 	resource := ResourceURI(uri)
 
@@ -1328,7 +1386,7 @@ func (s *Server) isIgnoredURI(uri string) bool {
 }
 
 func (s *Server) checkIsLibrary(uri, lowerPath string) bool {
-	if strings.HasPrefix(uri, "std://") {
+	if strings.HasPrefix(uri, embeddedStdlibURIPrefix) {
 		return true
 	}
 
@@ -1346,7 +1404,7 @@ func (s *Server) checkIsLibrary(uri, lowerPath string) bool {
 }
 
 func (s *Server) checkIsWorkspace(uri, lowerPath string) bool {
-	if strings.HasPrefix(uri, "std://") {
+	if strings.HasPrefix(uri, embeddedStdlibURIPrefix) {
 		return false
 	}
 
@@ -1414,8 +1472,8 @@ func (s *Server) pathToURI(pathStr string) string {
 }
 
 func (s *Server) computeModuleName(uri, path, lowerPath string) string {
-	if strings.HasPrefix(uri, "std:///") {
-		name := uri[7:]
+	if strings.HasPrefix(uri, embeddedStdlibURIPrefix) {
+		name := strings.TrimPrefix(uri, embeddedStdlibURIPrefix)
 
 		name = strings.TrimSuffix(name, ".lua")
 
@@ -1543,7 +1601,7 @@ func (s *Server) resolveModule(currentURI string, modName string) *Document {
 	}
 
 	for _, d := range s.Documents {
-		if strings.HasPrefix(d.URI, "std://") {
+		if strings.HasPrefix(d.URI, embeddedStdlibURIPrefix) {
 			continue
 		}
 
