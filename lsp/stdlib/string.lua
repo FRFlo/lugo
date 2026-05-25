@@ -65,17 +65,6 @@ function string.lower(s) end
 ---@return string|nil ...
 function string.match(s, pattern, init) end
 
----Returns a binary string containing the values v1, v2, etc. serialized in binary form (packed) according to the format string fmt.
----@param fmt string
----@param ... any
----@return string
-function string.pack(fmt, ...) end
-
----Returns the size of a string resulting from string.pack with the given format.
----@param fmt string
----@return integer
-function string.packsize(fmt) end
-
 ---Returns a string that is the concatenation of n copies of the string s separated by the string sep.
 ---@param s string
 ---@param n integer
@@ -94,13 +83,6 @@ function string.reverse(s) end
 ---@param j? integer
 ---@return string
 function string.sub(s, i, j) end
-
----Returns the values packed in string s according to the format string fmt.
----@param fmt string
----@param s string
----@param pos? integer
----@return any ..., integer
-function string.unpack(fmt, s, pos) end
 
 ---Receives a string and returns a copy of this string with all lowercase letters changed to uppercase.
 ---@param s string

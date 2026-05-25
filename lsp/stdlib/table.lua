@@ -1,6 +1,10 @@
 ---@meta
 table = {}
 
+---Removes all entries from the table in place.
+---@param t table
+function table.clear(t) end
+
 ---Given a list where all elements are strings or numbers, returns the string list[i]..sep..list[i+1] ··· sep..list[j].
 ---@param list table
 ---@param sep? string

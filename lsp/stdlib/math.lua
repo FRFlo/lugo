@@ -37,12 +37,6 @@ function math.asin(x) end
 ---@return number
 function math.atan(x) end
 
----Returns the arc tangent of y/x (in radians), using the signs of both parameters to find the quadrant.
----@param y number
----@param x number
----@return number
-function math.atan2(y, x) end
-
 ---Returns the smallest integral value larger than or equal to x.
 ---@param x number
 ---@return integer
@@ -52,11 +46,6 @@ function math.ceil(x) end
 ---@param x number
 ---@return number
 function math.cos(x) end
-
----Returns the hyperbolic cosine of x.
----@param x number
----@return number
-function math.cosh(x) end
 
 ---Converts the angle x from radians to degrees.
 ---@param x number
@@ -79,27 +68,11 @@ function math.floor(x) end
 ---@return number
 function math.fmod(x, y) end
 
----Decomposes x into tails and exponent. Returns m and e such that x = m * (2 ^ e).
----@param x number
----@return number, integer
-function math.frexp(x) end
-
----Returns m * (2 ^ e).
----@param m number
----@param e integer
----@return number
-function math.ldexp(m, e) end
-
 ---Returns the logarithm of x in the given base (default is natural logarithm, e).
 ---@param x number
 ---@param base? number
 ---@return number
 function math.log(x, base) end
-
----Returns the base-10 logarithm of x.
----@param x number
----@return number
-function math.log10(x) end
 
 ---Returns the argument with the maximum value.
 ---@param x number
@@ -145,11 +118,6 @@ function math.randomseed(x, y) end
 ---@return number
 function math.sin(x) end
 
----Returns the hyperbolic sine of x.
----@param x number
----@return number
-function math.sinh(x) end
-
 ---Returns the square root of x.
 ---@param x number
 ---@return number
@@ -159,11 +127,6 @@ function math.sqrt(x) end
 ---@param x number
 ---@return number
 function math.tan(x) end
-
----Returns the hyperbolic tangent of x.
----@param x number
----@return number
-function math.tanh(x) end
 
 ---If the value x is convertible to an integer, returns that integer. Otherwise, returns nil.
 ---@param x any
