@@ -227,7 +227,7 @@ func nativeParams(data NativeDefinition) (string, string) {
 	params := make([]string, 0, len(data.Params))
 	docParams := make([]string, 0, len(data.Params))
 	for _, p := range data.Params {
-		if strings.Contains(p.Type, "*") {
+		if isOutParamType(p.Type) {
 			continue
 		}
 		params = append(params, fieldToReplace(p.Name))
@@ -237,6 +237,16 @@ func nativeParams(data NativeDefinition) (string, string) {
 		return strings.Join(params, ", "), strings.Join(docParams, "\n") + "\n"
 	}
 	return strings.Join(params, ", "), ""
+}
+
+func isOutParamType(typ string) bool {
+	typ = strings.ToLower(strings.TrimSpace(typ))
+	typ = strings.TrimPrefix(typ, "const ")
+	if typ == "char*" || typ == "char *" {
+		return false
+	}
+
+	return strings.Contains(typ, "*")
 }
 
 func convertOutParams(data NativeDefinition) ([]string, []NativeParam) {

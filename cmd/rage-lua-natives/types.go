@@ -107,6 +107,8 @@ func fieldToReplace(field string) string {
 
 func getNativeType(typ string, input bool) string {
 	typ = strings.ToLower(strings.TrimSpace(typ))
+	typ = strings.TrimPrefix(typ, "const ")
+	typ = strings.ReplaceAll(typ, " ", "")
 
 	switch typ {
 	case "vector3", "string", "void":
