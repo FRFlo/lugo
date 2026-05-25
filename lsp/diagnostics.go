@@ -39,7 +39,7 @@ func (s *Server) publishDiagnostics(uri string) {
 		return
 	}
 
-	if strings.HasPrefix(uri, "std://") {
+	if strings.HasPrefix(uri, embeddedStdlibURIPrefix) {
 		return
 	}
 

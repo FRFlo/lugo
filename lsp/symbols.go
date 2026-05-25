@@ -106,6 +106,10 @@ func (s *Server) handleDefinition(req Request) {
 
 		if len(ctx.GlobalDefs) > 0 {
 			for _, def := range ctx.GlobalDefs {
+				if strings.HasPrefix(def.URI, embeddedStdlibURIPrefix) {
+					continue
+				}
+
 				if tDoc, ok := s.Documents[def.URI]; ok {
 					locs = append(locs, Location{
 						URI:   def.URI,
@@ -113,7 +117,7 @@ func (s *Server) handleDefinition(req Request) {
 					})
 				}
 			}
-		} else if ctx.TargetDefID != ast.InvalidNode {
+		} else if ctx.TargetDefID != ast.InvalidNode && !strings.HasPrefix(ctx.TargetURI, embeddedStdlibURIPrefix) {
 			locs = append(locs, Location{
 				URI:   ctx.TargetURI,
 				Range: getNodeRange(ctx.TargetDoc.Tree, ctx.TargetDefID),
@@ -340,6 +344,9 @@ func (s *Server) visibleGlobalSymbolsFromEntries(srcDoc *Document, entries []*Sy
 
 func (s *Server) symbolInformationFromEntry(entry *SymbolEntry) (SymbolInformation, bool) {
 	if entry == nil {
+		return SymbolInformation{}, false
+	}
+	if strings.HasPrefix(entry.URI, embeddedStdlibURIPrefix) {
 		return SymbolInformation{}, false
 	}
 
@@ -1531,6 +1538,10 @@ func (s *Server) getReferences(ctx *SymbolContext, includeDeclaration bool) []Lo
 	seen := make(map[RefKey]bool)
 
 	addRef := func(dDoc *Document, dUri string, nodeID ast.NodeID) {
+		if strings.HasPrefix(dUri, embeddedStdlibURIPrefix) {
+			return
+		}
+
 		if !includeDeclaration && dUri == ctx.TargetURI && nodeID == ctx.TargetDefID {
 			return
 		}

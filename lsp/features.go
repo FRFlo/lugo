@@ -545,7 +545,7 @@ func (s *Server) handleHover(req Request) {
 			}
 
 			if fromFile != "" {
-				if after, ok := strings.CutPrefix(ctx.TargetURI, "std:///"); ok {
+				if after, ok := strings.CutPrefix(ctx.TargetURI, embeddedStdlibURIPrefix); ok {
 					hoverText += "\n\n---\n\n*Standard Library (`" + after + "`)*"
 				} else {
 					hoverText += "\n\n---\n\n*Defined in `" + fromFile + "`*"
