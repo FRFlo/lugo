@@ -6,8 +6,6 @@ const { LanguageClient } = require("vscode-languageclient/node");
 
 let client, restarting, indexing, debounce;
 
-const fiveMNativeCacheVersion = "v1";
-const fiveMNativeCacheFolderName = "fivem-native-bundles";
 const debugExportCategories = [
 	{
 		label: "Tokens",
@@ -80,7 +78,7 @@ function buildInitializationOptions() {
 	ignoreGlobs = [...new Set(ignoreGlobs)];
 
 	return {
-		libraryPaths: buildLibraryPaths(lugoConfig.get("workspace.libraryPaths") || []),
+		libraryPaths: lugoConfig.get("workspace.libraryPaths") || [],
 		ignoreGlobs: ignoreGlobs,
 		knownGlobals: lugoConfig.get("environment.knownGlobals") || [],
 		bannedSymbols: lugoConfig.get("diagnostics.bannedSymbols") || {},
@@ -136,35 +134,6 @@ function buildInitializationOptions() {
 	};
 }
 
-function buildLibraryPaths(paths) {
-	const libraryPaths = [...paths];
-
-	const runtimePath = resolveFiveMNativeCacheDir();
-	if (!libraryPaths.includes(runtimePath)) {
-		libraryPaths.push(runtimePath);
-	}
-
-	return libraryPaths;
-}
-
-function resolveFiveMNativeCacheDir() {
-	let base = "";
-
-	if (process.platform === "win32") {
-		base = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
-	} else if (process.platform === "darwin") {
-		base = path.join(os.homedir(), "Library", "Caches");
-	} else {
-		base = process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache");
-	}
-
-	if (!base) {
-		base = os.tmpdir();
-	}
-
-	return path.join(base, "lugo", fiveMNativeCacheFolderName, fiveMNativeCacheVersion);
-}
-
 function scheduleConfigUpdate() {
 	clearTimeout(debounce);
 
@@ -180,24 +149,6 @@ function scheduleConfigUpdate() {
 }
 
 async function activate(context) {
-	const stdProvider = {
-		provideTextDocumentContent: uri => {
-			if (!client?.isRunning()) {
-				return "";
-			}
-
-			return client
-				.sendRequest("lugo/readStd", {
-					uri: uri.toString(),
-				})
-				.then(res => {
-					return res.content;
-				});
-		},
-	};
-
-	context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider("std", stdProvider));
-
 	context.subscriptions.push(
 		vscode.workspace.onDidChangeConfiguration(async e => {
 			if (e.affectsConfiguration("lugo") || e.affectsConfiguration("files.exclude") || e.affectsConfiguration("search.exclude")) {
@@ -302,7 +253,6 @@ async function startClient(context) {
 		documentSelector: [
 			{ scheme: "file", language: "lua" },
 			{ scheme: "untitled", language: "lua" },
-			{ scheme: "std", language: "lua" },
 		],
 		synchronize: {
 			fileEvents: vscode.workspace.createFileSystemWatcher("**/*.lua"),

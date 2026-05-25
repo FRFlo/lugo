@@ -2,7 +2,6 @@ package lsp
 
 import (
 	"bytes"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -139,90 +138,11 @@ shared_scripts { 'shared.lua', 'shared_consumer.lua' }
 	}
 }
 
-func TestFiveMScopedStdlibOverlay(t *testing.T) {
-	s, root := newFiveMProfileTestServer(t)
-	indexEmbeddedStdlibForTest(t, s)
-
-	addFiveMTestDocument(t, s, filepath.Join(root, "resource", "fxmanifest.lua"), `
-client_script 'client.lua'
-server_script 'server.lua'
-shared_script 'shared.lua'
-`)
-
-	plainDoc := addFiveMTestDocument(t, s, filepath.Join(root, "plain.lua"), `return require("plain")`)
-	clientDoc := addFiveMTestDocument(t, s, filepath.Join(root, "resource", "client.lua"), `return require("client")`)
-	serverDoc := addFiveMTestDocument(t, s, filepath.Join(root, "resource", "server.lua"), `return require("server")`)
-	sharedDoc := addFiveMTestDocument(t, s, filepath.Join(root, "resource", "shared.lua"), `return require("shared")`)
-
-	assertResolvedGlobalTarget(t, s, plainDoc, "require", "std:///require.lua")
-	assertResolvedGlobalTarget(t, s, clientDoc, "require", "std:///fivem/shared.lua")
-	assertResolvedGlobalTarget(t, s, serverDoc, "require", "std:///fivem/shared.lua")
-	assertResolvedGlobalTarget(t, s, sharedDoc, "require", "std:///fivem/shared.lua")
-}
-
-func TestFiveMStdlibOverrides(t *testing.T) {
-	s, root := newFiveMProfileTestServer(t)
-	indexEmbeddedStdlibForTest(t, s)
-
-	addFiveMTestDocument(t, s, filepath.Join(root, "resource", "fxmanifest.lua"), `
-client_script 'client.lua'
-server_script 'server.lua'
-shared_script 'shared.lua'
-`)
-
-	plainDoc := addFiveMTestDocument(t, s, filepath.Join(root, "plain.lua"), `return dofile, loadfile, io, os`)
-	clientDoc := addFiveMTestDocument(t, s, filepath.Join(root, "resource", "client.lua"), `return dofile, loadfile, io, os`)
-	serverDoc := addFiveMTestDocument(t, s, filepath.Join(root, "resource", "server.lua"), `return dofile, loadfile, io, os`)
-	sharedDoc := addFiveMTestDocument(t, s, filepath.Join(root, "resource", "shared.lua"), `return dofile, loadfile, io, os`)
-
-	assertResolvedGlobalTarget(t, s, plainDoc, "dofile", "std:///file.lua")
-	assertResolvedGlobalTarget(t, s, plainDoc, "loadfile", "std:///file.lua")
-	assertResolvedGlobalTarget(t, s, plainDoc, "io", "std:///io.lua")
-	assertResolvedGlobalTarget(t, s, plainDoc, "os", "std:///os.lua")
-
-	for _, doc := range []*Document{clientDoc, serverDoc, sharedDoc} {
-		assertUnresolvedGlobal(t, s, doc, "dofile")
-		assertUnresolvedGlobal(t, s, doc, "loadfile")
-	}
-
-	for _, doc := range []*Document{clientDoc, sharedDoc} {
-		assertUnresolvedGlobal(t, s, doc, "io")
-		assertUnresolvedGlobal(t, s, doc, "os")
-	}
-
-	assertResolvedGlobalTarget(t, s, serverDoc, "io", "std:///fivem/server.lua")
-	assertResolvedGlobalTarget(t, s, serverDoc, "os", "std:///fivem/server.lua")
-}
-
-func TestFiveMMetadataPrecedence(t *testing.T) {
-	s, root := newFiveMProfileTestServer(t)
-	indexEmbeddedStdlibForTest(t, s)
-
-	addFiveMTestDocument(t, s, filepath.Join(root, "resource", "fxmanifest.lua"), `
-client_script 'provider.lua'
-client_script 'consumer.lua'
-`)
-
-	provider := addFiveMTestDocument(t, s, filepath.Join(root, "resource", "provider.lua"), `
-function require(modname)
-	return modname
-end
-`)
-	consumer := addFiveMTestDocument(t, s, filepath.Join(root, "resource", "consumer.lua"), `return require("client")`)
-	plainDoc := addFiveMTestDocument(t, s, filepath.Join(root, "plain.lua"), `return require("plain")`)
-
-	assertResolvedGlobalTarget(t, s, plainDoc, "require", "std:///require.lua")
-	assertResolvedGlobalTarget(t, s, consumer, "require", provider.URI)
-}
-
 func newFiveMProfileTestServer(t *testing.T) (*Server, string) {
 	t.Helper()
 
 	root := t.TempDir()
 	s := NewServer("test")
-
-	attachTestFiveMNativeBundleLoader(t, s)
-	s.setLibraryPaths([]string{materializeTestFiveMNativeLibrary(t, s)})
 
 	return s, root
 }
@@ -249,38 +169,6 @@ func addFiveMTestDocument(t *testing.T, s *Server, path, source string) *Documen
 	}
 
 	return doc
-}
-
-func indexEmbeddedStdlibForTest(t *testing.T, s *Server) {
-	t.Helper()
-
-	var pendingJobs []*IndexJob
-	unchanged := 0
-
-	s.indexEmbeddedStdlib(&pendingJobs, &unchanged)
-
-	for _, job := range pendingJobs {
-		b, err := stdlibFS.ReadFile("stdlib/" + job.Path)
-		if err != nil {
-			t.Fatalf("read stdlib %s: %v", job.Path, err)
-		}
-
-		s.updateDocument(job.Uri, b)
-	}
-
-	pendingJobs = pendingJobs[:0]
-	for _, libPath := range s.LibraryPaths {
-		s.indexWorkspace(libPath, &pendingJobs, &unchanged, new(int))
-	}
-
-	for _, job := range pendingJobs {
-		b, err := os.ReadFile(job.Path)
-		if err != nil {
-			t.Fatalf("read library %s: %v", job.Path, err)
-		}
-
-		s.updateDocument(job.Uri, b)
-	}
 }
 
 func mustFindIdentNode(t testing.TB, doc *Document, name string) ast.NodeID {
@@ -326,15 +214,4 @@ func assertUnresolvedGlobal(t *testing.T, s *Server, doc *Document, name string)
 	if ctx != nil && (ctx.TargetDefID != ast.InvalidNode || len(ctx.GlobalDefs) > 0) {
 		t.Fatalf("expected %s to stay hidden in %s", name, doc.URI)
 	}
-}
-
-func requireFiveMNativeBundleURI(t testing.TB, s *Server, name string) string {
-	t.Helper()
-
-	uri := s.findFiveMNativeBundleURI(name)
-	if uri == "" {
-		t.Fatalf("FiveM native bundle %s was not indexed", name)
-	}
-
-	return uri
 }

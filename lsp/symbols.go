@@ -272,7 +272,14 @@ func (s *Server) globalIndexContext(doc *Document) (ResourceURI, GlobalIndexScop
 
 	profile := s.getDocumentFiveMProfile(doc)
 	if profile.IsResourceProfile() && profile.ResourceRoot != "" {
-		return ResourceURI(profile.ResourceRoot), globalIndexScopeFromFiveMEnv(profile.Env())
+		scope := GlobalIndexScopeShared
+		switch profile.Env() {
+		case EnvClient:
+			scope = GlobalIndexScopeClient
+		case EnvServer:
+			scope = GlobalIndexScopeServer
+		}
+		return ResourceURI(profile.ResourceRoot), scope
 	}
 
 	return ResourceURI(doc.URI), GlobalIndexScopeShared
@@ -951,8 +958,6 @@ func (s *Server) resolveSymbolNode(uri string, doc *Document, nodeID ast.NodeID)
 		return nil
 	}
 
-	s.ensureFiveMNativeBundleLoaded(doc)
-
 	identNode := doc.Tree.Nodes[nodeID]
 
 	if identNode.Kind != ast.KindIdent && identNode.Kind != ast.KindVararg {
@@ -1152,10 +1157,6 @@ func (s *Server) resolveSymbolNode(uri string, doc *Document, nodeID ast.NodeID)
 	}
 
 	if ctx.TargetDefID == ast.InvalidNode && gKey.PropHash != 0 {
-		if !ctx.IsProp && gKey.ReceiverHash == 0 && ctx.FiveMExportRes == "" {
-			s.ensureFiveMNativeSymbol(doc, identName)
-		}
-
 		var resolved bool
 
 		if ctx.FiveMExportRes != "" {
@@ -1750,71 +1751,14 @@ func (s *Server) canSeeLibrarySymbol(srcDoc, tgtDoc *Document) bool {
 		return false
 	}
 
-	uri := tgtDoc.URI
-	profile := s.getDocumentFiveMProfile(srcDoc)
-	bundleName := fiveMNativeBundleNameFromDocument(tgtDoc)
-
-	if strings.HasPrefix(uri, "std:///fivem/") && bundleName == "" {
-		if srcDoc == nil {
-			return false
-		}
-
-		switch strings.TrimPrefix(uri, "std:///fivem/") {
-		case "manifest.lua":
-			return profile.Kind == FiveMProfileManifest
-		case "shared.lua":
-			return profile.AllowsRuntimeLibrary()
-		case "client.lua":
-			return profile.Kind == FiveMProfileClient
-		case "server.lua":
-			return profile.Kind == FiveMProfileServer
-		case "export_bridge.lua":
-			return s.hasFiveMExportBridge(srcDoc)
-		default:
-			return false
-		}
-	}
-
-	if bundleName != "" {
-		if srcDoc == nil {
-			return false
-		}
-
-		selection := s.getFiveMNativeSelection(srcDoc)
-		return selection.Active() && selection.Build == bundleName
-	}
-
-	if profile.Kind == FiveMProfilePlainLua {
+	if srcDoc == nil {
 		return true
 	}
 
-	if !strings.HasPrefix(uri, "std:///") || srcDoc == nil {
-		return true
-	}
-
-	switch uri {
-	case "std:///file.lua", "std:///require.lua":
-		return false
-	case "std:///io.lua", "std:///os.lua":
-		return profile.Kind == FiveMProfileServer
-	default:
-		return true
-	}
+	return true
 }
 
 func (s *Server) globalSymbolPriority(uri string) int {
-	if doc, ok := s.Documents[uri]; ok && fiveMNativeBundleNameFromDocument(doc) != "" {
-		return 1
-	}
-
-	if name := fiveMNativeBundleNameFromURI(uri); name != "" {
-		return 1
-	}
-
-	if strings.HasPrefix(uri, "std:///fivem/") {
-		return 1
-	}
-
 	if doc, ok := s.Documents[uri]; ok && !doc.IsLibrary {
 		return 0
 	}
@@ -1857,7 +1801,6 @@ func (s *Server) setGlobalSymbol(key GlobalKey, uri string, nodeID ast.NodeID, n
 }
 
 func (s *Server) removeDocumentGlobals(uri string) {
-	s.removeFiveMDocumentExports(uri)
 	s.removeGlobalIndexDocumentSymbols(uri)
 }
 

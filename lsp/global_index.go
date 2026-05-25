@@ -419,7 +419,6 @@ func (idx *GlobalIndex) RegisterFiveMResource(res *FiveMResource) *ResourceScope
 	idx.DepGraph.SetDependencies(uri, deps)
 	idx.syncResourceEdgesLocked()
 	idx.registerFiveMScriptScopesLocked(scope, res)
-	idx.registerFiveMRuntimeMetadataLocked(scope, res)
 
 	return scope
 }

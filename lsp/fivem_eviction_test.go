@@ -1,7 +1,6 @@
 package lsp
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/coalaura/lugo/ast"
@@ -334,45 +333,4 @@ func TestFiveMEviction(t *testing.T) {
 		_ = h.hover("bridge_ping_call")
 	})
 
-	t.Run("ReopenedRuntimeHoverKeepsLibraryDocs", func(t *testing.T) {
-		h := newFiveMFixtureHarness(t, "resource_runtime_abi")
-
-		marker := h.requireMarker("runtime_citizen_wait_hover")
-		doc := h.docForMarker("runtime_citizen_wait_hover")
-		source := append([]byte(nil), doc.Source()...)
-		if len(source) == 0 {
-			t.Fatal("runtime hover document should start with source bytes")
-		}
-
-		nativeURI := requireFiveMNativeBundleURI(t, h.server, "natives_universal.lua")
-		nativeDoc := h.server.Documents[nativeURI]
-		if nativeDoc == nil {
-			t.Fatal("native bundle should be indexed")
-		}
-		if !nativeDoc.IsLibrary {
-			t.Fatal("native bundle should be marked as a library document")
-		}
-
-		h.server.OpenFiles[marker.URI] = true
-		delete(h.server.OpenFiles, marker.URI)
-		evictClosedDocumentCaches(h.server)
-
-		if nativeDoc.Tree == nil || nativeDoc.Tree.Source == nil {
-			t.Fatal("library native bundle should keep source after eviction")
-		}
-
-		h.server.updateDocument(marker.URI, source)
-		h.server.OpenFiles[marker.URI] = true
-
-		hover := h.hover("runtime_citizen_wait_hover")
-		if hover == nil {
-			t.Fatal("runtime hover should survive reopen")
-		}
-		if !strings.Contains(hover.Contents.Value, "function Citizen.Wait(milliseconds: integer?)") {
-			t.Fatalf("runtime hover after reopen = %q, want runtime signature", hover.Contents.Value)
-		}
-		if !strings.Contains(hover.Contents.Value, "Yields the current scheduler coroutine") {
-			t.Fatalf("runtime hover after reopen = %q, want runtime description", hover.Contents.Value)
-		}
-	})
 }

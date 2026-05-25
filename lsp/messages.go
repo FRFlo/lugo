@@ -718,16 +718,6 @@ type LinkedEditingRanges struct {
 	Ranges      []Range `json:"ranges"`
 }
 
-// ReadStdParams represents parameters for the custom readStd request.
-type ReadStdParams struct {
-	URI string `json:"uri"`
-}
-
-// ReadStdResult represents the result of the custom readStd request.
-type ReadStdResult struct {
-	Content string `json:"content"`
-}
-
 // DebugExportParams represents parameters for the custom debugExport request.
 type DebugExportParams struct {
 	Categories []string `json:"categories,omitempty"`

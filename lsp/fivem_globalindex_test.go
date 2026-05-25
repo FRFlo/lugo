@@ -174,8 +174,6 @@ exports("BroadcastEvent", BroadcastEvent)
 	// call is processed after the FiveM resource graph is available. Force the
 	// same post-profile sync path here so the export symbol and same-named global
 	// coexist in the GlobalIndex.
-	h.server.syncFiveMDocumentExports(doc)
-
 	for _, diag := range h.diagnostics("surface_resource/server.lua") {
 		if diag.Code == "undefined-global" && diag.Message == "Undefined global 'BroadcastEvent'." {
 			t.Fatalf("BroadcastEvent export argument should resolve to the same-named global, got diagnostic: %+v", diag)
@@ -214,10 +212,5 @@ exports("BroadcastEvent", BroadcastEvent)
 	}
 	if !foundExport {
 		t.Fatalf("FiveM export BroadcastEvent entry for %s not found: %+v", uri, exportEntries)
-	}
-
-	resource, scope := h.server.globalIndexContext(doc)
-	if export := h.server.GlobalIndex.LookupFiveMExport(resource, resource, scope, "BroadcastEvent"); export == nil || export.Export == nil {
-		t.Fatalf("LookupFiveMExport did not find same-named export, got %+v", export)
 	}
 }

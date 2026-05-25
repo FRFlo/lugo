@@ -20,7 +20,6 @@ import (
 type IndexJob struct {
 	Uri            string
 	Path           string
-	IsStd          bool
 	ModTime        time.Time
 	ExistingTree   *ast.Tree
 	ExistingSource []byte
@@ -241,38 +240,6 @@ func (s *Server) handleReindex(req Request) {
 	WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: "ok"})
 }
 
-func (s *Server) handleReadStd(req Request) {
-	var params ReadStdParams
-
-	err := json.Unmarshal(req.Params, &params)
-	if err != nil {
-		return
-	}
-
-	var content string
-
-	filename := params.URI
-
-	if strings.HasPrefix(filename, "std:///") {
-		filename = filename[7:]
-	} else if strings.HasPrefix(filename, "std:/") {
-		filename = filename[5:]
-	} else if strings.HasPrefix(filename, "std://") {
-		filename = filename[6:]
-	}
-
-	b, err := stdlibFS.ReadFile("stdlib/" + filename)
-	if err == nil {
-		content = ast.String(b)
-	}
-
-	WriteMessage(s.Writer, Response{
-		RPC:    "2.0",
-		ID:     req.ID,
-		Result: ReadStdResult{Content: content},
-	})
-}
-
 func (s *Server) refreshWorkspace() {
 	s.Log.Println("Starting workspace re-index...")
 
@@ -299,8 +266,6 @@ func (s *Server) refreshWorkspace() {
 	)
 
 	var pendingJobs []*IndexJob
-
-	s.indexEmbeddedStdlib(&pendingJobs, &unchanged)
 
 	for _, libPath := range s.LibraryPaths {
 		s.Log.Printf("Indexing external library: %s\n", libPath)
@@ -329,11 +294,7 @@ func (s *Server) refreshWorkspace() {
 					err error
 				)
 
-				if job.IsStd {
-					b, err = stdlibFS.ReadFile("stdlib/" + job.Path)
-				} else {
-					b, err = os.ReadFile(job.Path)
-				}
+				b, err = os.ReadFile(job.Path)
 
 				if err != nil {
 					results <- &IndexResult{Job: job, Uri: job.Uri, Err: err}
@@ -588,7 +549,6 @@ func (s *Server) indexWorkspace(rootPathOrURI string, pendingJobs *[]*IndexJob, 
 				*pendingJobs = append(*pendingJobs, &IndexJob{
 					Uri:            uri,
 					Path:           fullPath,
-					IsStd:          false,
 					ModTime:        modTime,
 					ExistingTree:   existingTree,
 					ExistingSource: existingSource,
@@ -599,46 +559,6 @@ func (s *Server) indexWorkspace(rootPathOrURI string, pendingJobs *[]*IndexJob, 
 	}
 
 	walk(path, true)
-}
-
-func (s *Server) indexEmbeddedStdlib(pendingJobs *[]*IndexJob, unchanged *int) {
-	err := fs.WalkDir(stdlibFS, "stdlib", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-
-		if d.IsDir() || !strings.HasSuffix(d.Name(), ".lua") {
-			return nil
-		}
-
-		relPath := strings.TrimPrefix(path, "stdlib/")
-		if isFiveMNativeBundlePath(relPath) {
-			return nil
-		}
-
-		uri := "std:///" + relPath
-
-		if _, ok := s.Documents[uri]; ok {
-			if s.activeURIs != nil {
-				s.activeURIs[uri] = true
-			}
-
-			*unchanged++
-
-			return nil
-		}
-
-		*pendingJobs = append(*pendingJobs, &IndexJob{
-			Uri:   uri,
-			Path:  relPath,
-			IsStd: true,
-		})
-
-		return nil
-	})
-	if err != nil {
-		return
-	}
 }
 
 func (s *Server) updateDocument(uri string, source []byte) bool {
@@ -1275,8 +1195,6 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 	}
 
 	s.Documents[uri] = doc
-
-	s.syncFiveMDocumentExports(doc)
 
 	return needsWorkspaceRepublish
 }

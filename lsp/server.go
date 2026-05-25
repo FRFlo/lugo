@@ -109,7 +109,6 @@ type Server struct {
 	DiagFiveMEventDirection       bool
 	DiagFiveMUnregisteredNetEvent bool
 	DiagFiveMUnknownEvent         bool
-	fiveMNativeBundleLoader       func(name string) ([]byte, error)
 
 	// CI Fields
 	IsCI              bool
@@ -336,8 +335,6 @@ func (s *Server) setIgnoreGlobs(globs []string) bool {
 func (s *Server) buildConfiguredLibraryPaths(paths []string) []string {
 	configured := slices.Clone(paths)
 
-	// Native bundles are loaded on-demand via ensureFiveMNativeBundleLoaded,
-	// not eagerly indexed via LibraryPaths during refreshWorkspace.
 	return configured
 }
 
@@ -439,8 +436,6 @@ func (s *Server) handleMessage(req Request) {
 		s.handleDidClose(req)
 	case "lugo/reindex":
 		s.handleReindex(req)
-	case "lugo/readStd":
-		s.handleReadStd(req)
 	case "lugo/debugExport":
 		s.handleDebugExport(req)
 

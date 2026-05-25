@@ -48,8 +48,6 @@ func (s *Server) publishDiagnostics(uri string) {
 		return
 	}
 
-	s.ensureFiveMNativeBundleLoaded(doc)
-
 	emitDiagnostics := func(diags []Diagnostic) {
 		if s.IsCI {
 			s.printCIDiagnostics(uri, diags)
@@ -275,10 +273,6 @@ func (s *Server) publishDiagnostics(uri string) {
 			var exists bool
 
 			if syms := s.visibleGlobalSymbolsFromEntries(doc, s.GlobalIndex.SymbolsByHash(key), 1); len(syms) > 0 {
-				exists = true
-			}
-
-			if !exists && s.ensureFiveMNativeSymbol(doc, identStr) {
 				exists = true
 			}
 

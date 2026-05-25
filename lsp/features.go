@@ -165,8 +165,6 @@ func (s *Server) handleHover(req Request) {
 		return
 	}
 
-	s.ensureFiveMNativeBundleLoaded(doc)
-
 	offset := doc.Tree.Offset(params.Position.Line, params.Position.Character)
 	// FiveM event hover: if cursor is on a first-argument event name string in AddEventHandler/RegisterNetEvent/TriggerEvent/TriggerServerEvent/TriggerClientEvent
 	if doc != nil {
@@ -2126,8 +2124,6 @@ func (s *Server) handleSemanticTokensFull(req Request) {
 
 		return
 	}
-
-	s.ensureFiveMNativeBundleLoaded(doc)
 
 	s.semTokensBuf = s.semTokensBuf[:0]
 

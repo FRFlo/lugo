@@ -195,9 +195,6 @@ func newFiveMFixtureHarnessWithoutIndex(t testing.TB, fixtureNames ...string) *f
 	s.DiagFiveMUnknownEvent = true
 	s.FeatureCodeLens = true
 	s.SuggestFunctionParams = true
-	attachTestFiveMNativeBundleLoader(t, s)
-	s.setLibraryPaths([]string{materializeTestFiveMNativeLibrary(t, s)})
-
 	rootURI := s.pathToURI(root)
 	rootPath := strings.ToLower(filepath.Clean(root))
 	s.RootURI = rootURI
