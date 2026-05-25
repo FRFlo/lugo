@@ -16,7 +16,10 @@ jobs:
       with:
         go-version-file: 'go.mod'
 
-    - name: Generate native bundles
+    - name: Generate Lua native stubs
+      run: go run ./cmd/rage-lua-natives -out ./lsp/stdlib
+
+    - name: Generate Go native bundles
       run: go generate ./lsp
 
     - name: Run Tests

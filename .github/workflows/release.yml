@@ -94,6 +94,7 @@ jobs:
           LDFLAGS=""
         fi
 
+        go run ./cmd/rage-lua-natives -out ./lsp/stdlib
         go generate ./lsp
 
         go build \
