@@ -54,7 +54,7 @@ Lugo implements a comprehensive suite of modern Language Server Protocol feature
 * **File Watching:** Automatically synchronizes with workspace file creations, deletions and external changes in real-time.
 * **Built-in Formatter:** A blazingly fast, AST-aware Lua formatter. Elegantly fixes whitespace, enforces indentation rules, strips trailing semicolons, expands minified code and optionally applies opinionated stylistic tweaks (like separating unrelated statements with blank lines).
 * **Folding Ranges:** Accurately fold functions, tables, control flow blocks and multi-line strings/comments.
-* **Virtual Standard Library:** Click on any standard library function to open a syntax-highlighted, read-only virtual tab streaming directly from the Go server's embedded filesystem (`std:///`).
+* **Embedded Standard Library:** Indexes Lua 5.4 standard library stubs from the embedded filesystem so runtime globals, functions and types are available for hover, completion and diagnostics without requiring workspace files.
 * **Fast-Path Smart Ignores:** Automatically inherits VS Code's native `files.exclude` and `search.exclude` settings. Lugo pre-compiles these into high-speed prefix/suffix byte matchers, instantly skipping ignored directories without the overhead of regex.
 
 ### Advanced Diagnostics
