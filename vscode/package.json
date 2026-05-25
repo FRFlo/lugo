@@ -51,14 +51,36 @@
                 "title": "Lugo: Apply Safe Fixes (Current File)"
             },
             {
-              "command": "lugo.exportDebugData",
-              "title": "Lugo: Export Debug Data..."
+                "command": "lugo.exportDebugData",
+                "title": "Lugo: Export Debug Data..."
             },
-          {
+            {
                 "command": "lugo.ignoreDiagnostic",
                 "title": "Lugo: Ignore Diagnostic"
+            },
+            {
+                "command": "lugo.addToLibraryPaths",
+                "title": "Lugo: Add to Library Paths"
+            },
+            {
+                "command": "lugo.addToIgnoredGlobs",
+                "title": "Lugo: Add to Ignored Globs"
             }
         ],
+        "menus": {
+            "explorer/context": [
+                {
+                    "command": "lugo.addToLibraryPaths",
+                    "when": "explorerResourceIsFolder",
+                    "group": "1_lugo@1"
+                },
+                {
+                    "command": "lugo.addToIgnoredGlobs",
+                    "when": "explorerResourceIsFolder",
+                    "group": "1_lugo@2"
+                }
+            ]
+        },
         "configuration": [
             {
                 "type": "object",
@@ -72,7 +94,7 @@
                         },
                         "default": [],
                         "scope": "resource",
-                        "markdownDescription": "List of absolute paths to external Lua libraries to index.",
+                        "markdownDescription": "List of paths (absolute) or workspace-relative globs (e.g. `lib/**`) to external Lua libraries to index. Glob patterns are resolved against workspace root folders at startup.",
                         "order": 1
                     },
                     "lugo.workspace.ignoreGlobs": {

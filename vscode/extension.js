@@ -78,7 +78,7 @@ function buildInitializationOptions() {
 	ignoreGlobs = [...new Set(ignoreGlobs)];
 
 	return {
-		libraryPaths: lugoConfig.get("workspace.libraryPaths") || [],
+		libraryPaths: resolveLibraryPathsToAbsolute(lugoConfig.get("workspace.libraryPaths") || []),
 		ignoreGlobs: ignoreGlobs,
 		knownGlobals: lugoConfig.get("environment.knownGlobals") || [],
 		bannedSymbols: lugoConfig.get("diagnostics.bannedSymbols") || {},
@@ -148,6 +148,94 @@ function scheduleConfigUpdate() {
 	}, 1000);
 }
 
+/**
+ * Converts a folder URI to a workspace-relative glob pattern.
+ * E.g. "C:\project\lib" → "lib/**" when workspace root is "C:\project".
+ * Falls back to the absolute path when no workspace folder contains the URI.
+ */
+function folderUriToWorkspaceGlob(folderUri) {
+	const folderPath = folderUri.fsPath,
+		workspaceFolder = vscode.workspace.getWorkspaceFolder(folderUri);
+
+	if (workspaceFolder) {
+		const relative = path.relative(workspaceFolder.uri.fsPath, folderPath);
+
+		if (relative && !relative.startsWith("..")) {
+			return relative.replace(/\\/g, "/") + "/**";
+		}
+	}
+
+	// Fallback: absolute path with /** suffix
+	return folderPath.replace(/\\/g, "/") + "/**";
+}
+
+/**
+ * Resolves library path globs to absolute paths for the LSP.
+ * Workspace-relative globs (e.g. "lib/**") are resolved against each
+ * workspace folder root. Absolute paths are passed through as-is.
+ */
+function resolveLibraryPathsToAbsolute(globs) {
+	const workspaceFolders = vscode.workspace.workspaceFolders || [];
+	const resolved = [];
+
+	for (const glob of globs) {
+		if (path.isAbsolute(glob)) {
+			// Already absolute — use as-is (backward compat)
+			resolved.push(glob);
+			continue;
+		}
+
+		// Workspace-relative glob: resolve against each workspace folder
+		const pattern = glob.endsWith("/**") ? glob.slice(0, -3) : glob;
+
+		for (const folder of workspaceFolders) {
+			const absPath = path.join(folder.uri.fsPath, pattern);
+
+			try {
+				if (fs.existsSync(absPath) && fs.statSync(absPath).isDirectory()) {
+					resolved.push(absPath);
+				}
+			} catch {
+				// Skip inaccessible paths silently
+			}
+		}
+	}
+
+	return resolved;
+}
+
+/**
+ * Adds a folder to the library paths configuration as a workspace-relative glob.
+ */
+async function addToLibraryPaths(folderUri) {
+	const config = vscode.workspace.getConfiguration("lugo");
+	const paths = config.get("workspace.libraryPaths") || [];
+	const glob = folderUriToWorkspaceGlob(folderUri);
+
+	if (!paths.includes(glob)) {
+		await config.update("workspace.libraryPaths", [...paths, glob], vscode.ConfigurationTarget.Workspace);
+		vscode.window.showInformationMessage(`Added "${glob}" to library paths.`);
+	} else {
+		vscode.window.showInformationMessage(`"${glob}" is already in library paths.`);
+	}
+}
+
+/**
+ * Adds a folder to the ignored globs configuration as a workspace-relative glob.
+ */
+async function addToIgnoredGlobs(folderUri) {
+	const config = vscode.workspace.getConfiguration("lugo");
+	const globs = config.get("workspace.ignoreGlobs") || [];
+	const glob = folderUriToWorkspaceGlob(folderUri);
+
+	if (!globs.includes(glob)) {
+		await config.update("workspace.ignoreGlobs", [...globs, glob], vscode.ConfigurationTarget.Workspace);
+		vscode.window.showInformationMessage(`Added "${glob}" to ignored globs.`);
+	} else {
+		vscode.window.showInformationMessage(`"${glob}" is already in ignored globs.`);
+	}
+}
+
 async function activate(context) {
 	context.subscriptions.push(
 		vscode.workspace.onDidChangeConfiguration(async e => {
@@ -208,6 +296,28 @@ async function activate(context) {
 			}
 
 			await editor.insertSnippet(new vscode.SnippetString(snippetText), new vscode.Position(insertLine, 0));
+		})
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand("lugo.addToLibraryPaths", (clickedFile, selectedFiles) => {
+			// When triggered from context menu, VS Code passes the URI directly.
+			// When multiple files are selected, selectedFiles is an array.
+			const targets = selectedFiles && selectedFiles.length > 0 ? selectedFiles : [clickedFile];
+
+			for (const target of targets) {
+				addToLibraryPaths(target);
+			}
+		})
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand("lugo.addToIgnoredGlobs", (clickedFile, selectedFiles) => {
+			const targets = selectedFiles && selectedFiles.length > 0 ? selectedFiles : [clickedFile];
+
+			for (const target of targets) {
+				addToIgnoredGlobs(target);
+			}
 		})
 	);
 
