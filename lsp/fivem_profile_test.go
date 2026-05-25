@@ -150,6 +150,15 @@ func TestFiveMStdlibVisibility(t *testing.T) {
 		"msgpack.lua",
 		"os.lua",
 		"package.lua",
+		"natives_gtav_client.lua",
+		"natives_gtav_server.lua",
+		"natives_gtav_shared.lua",
+		"natives_rdr3_client.lua",
+		"natives_rdr3_server.lua",
+		"natives_rdr3_shared.lua",
+		"natives_cfx_client.lua",
+		"natives_cfx_server.lua",
+		"natives_cfx_shared.lua",
 	)
 
 	addFiveMTestDocument(t, s, filepath.Join(root, "resource", "fxmanifest.lua"), `
@@ -157,20 +166,10 @@ client_script 'client.lua'
 server_script 'server.lua'
 shared_script 'shared.lua'
 `)
-	plainDoc := addFiveMTestDocument(t, s, filepath.Join(root, "plain.lua"), "return io, os, package, json, msgpack, collectgarbage, Citizen, Wait")
-	clientDoc := addFiveMTestDocument(t, s, filepath.Join(root, "resource", "client.lua"), "return io, os, package, json, msgpack, collectgarbage, Citizen, Wait, TriggerServerEvent, TriggerClientEvent, LocalPlayer, GlobalState")
-	serverDoc := addFiveMTestDocument(t, s, filepath.Join(root, "resource", "server.lua"), "return io, os, package, json, msgpack, collectgarbage, Citizen, Wait, TriggerServerEvent, TriggerClientEvent, PerformHttpRequest, source, GlobalState")
-	sharedDoc := addFiveMTestDocument(t, s, filepath.Join(root, "resource", "shared.lua"), "return io, os, package, json, msgpack, collectgarbage, Citizen, Wait, TriggerServerEvent, TriggerClientEvent, GlobalState")
-
-	for _, doc := range []*Document{plainDoc, serverDoc} {
-		assertResolvedGlobal(t, s, doc, "io")
-		assertResolvedGlobal(t, s, doc, "os")
-	}
-
-	for _, doc := range []*Document{clientDoc, sharedDoc} {
-		assertUnresolvedGlobal(t, s, doc, "io")
-		assertUnresolvedGlobal(t, s, doc, "os")
-	}
+	plainDoc := addFiveMTestDocument(t, s, filepath.Join(root, "plain.lua"), "return package, collectgarbage, json, msgpack, AppGetFloat, GetPedFromCoverPoint, StateBagHasKey")
+	clientDoc := addFiveMTestDocument(t, s, filepath.Join(root, "resource", "client.lua"), "return package, collectgarbage, json, msgpack, AppGetFloat, GetPedFromCoverPoint, StateBagHasKey, TriggerServerEvent, TriggerClientEvent, LocalPlayer, GlobalState")
+	serverDoc := addFiveMTestDocument(t, s, filepath.Join(root, "resource", "server.lua"), "return package, collectgarbage, json, msgpack, AppGetFloat, GetPedFromCoverPoint, StateBagHasKey, TriggerServerEvent, TriggerClientEvent, PerformHttpRequest, source, GlobalState")
+	sharedDoc := addFiveMTestDocument(t, s, filepath.Join(root, "resource", "shared.lua"), "return package, collectgarbage, json, msgpack, AppGetFloat, GetPedFromCoverPoint, StateBagHasKey, TriggerServerEvent, TriggerClientEvent, GlobalState")
 
 	for _, doc := range []*Document{plainDoc, clientDoc, serverDoc, sharedDoc} {
 		assertResolvedGlobal(t, s, doc, "json")
@@ -179,24 +178,26 @@ shared_script 'shared.lua'
 		assertUnresolvedGlobal(t, s, doc, "collectgarbage")
 	}
 
-	assertUnresolvedGlobal(t, s, plainDoc, "Citizen")
-	assertUnresolvedGlobal(t, s, plainDoc, "Wait")
+	assertResolvedGlobal(t, s, plainDoc, "StateBagHasKey")
+	assertUnresolvedGlobal(t, s, plainDoc, "AppGetFloat")
+	assertUnresolvedGlobal(t, s, plainDoc, "GetPedFromCoverPoint")
 
 	for _, doc := range []*Document{clientDoc, serverDoc, sharedDoc} {
-		assertResolvedGlobal(t, s, doc, "Citizen")
-		assertResolvedGlobal(t, s, doc, "Wait")
 		assertResolvedGlobal(t, s, doc, "GlobalState")
 	}
 
+	assertResolvedGlobal(t, s, clientDoc, "AppGetFloat")
 	assertResolvedGlobal(t, s, clientDoc, "TriggerServerEvent")
 	assertResolvedGlobal(t, s, clientDoc, "LocalPlayer")
 	assertUnresolvedGlobal(t, s, clientDoc, "TriggerClientEvent")
 
+	assertResolvedGlobal(t, s, serverDoc, "GetPedFromCoverPoint")
 	assertResolvedGlobal(t, s, serverDoc, "TriggerClientEvent")
 	assertResolvedGlobal(t, s, serverDoc, "PerformHttpRequest")
 	assertResolvedGlobal(t, s, serverDoc, "source")
 	assertUnresolvedGlobal(t, s, serverDoc, "TriggerServerEvent")
 
+	assertResolvedGlobal(t, s, sharedDoc, "StateBagHasKey")
 	assertUnresolvedGlobal(t, s, sharedDoc, "TriggerServerEvent")
 	assertUnresolvedGlobal(t, s, sharedDoc, "TriggerClientEvent")
 }

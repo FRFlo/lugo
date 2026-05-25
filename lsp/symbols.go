@@ -1771,9 +1771,23 @@ func (s *Server) canSeeLibrarySymbol(srcDoc, tgtDoc *Document) bool {
 	}
 
 	name := strings.TrimPrefix(tgtDoc.URI, embeddedStdlibURIPrefix)
+	if strings.HasPrefix(name, "natives_") {
+		profile := s.getDocumentFiveMProfile(srcDoc)
+		switch {
+		case strings.HasSuffix(name, "_shared.lua"):
+			return true
+		case strings.HasSuffix(name, "_client.lua"):
+			return profile.Kind == FiveMProfileClient || profile.Kind == FiveMProfileShared
+		case strings.HasSuffix(name, "_server.lua"):
+			return profile.Kind == FiveMProfileServer || profile.Kind == FiveMProfileShared
+		default:
+			return false
+		}
+	}
+
 	profile := s.getDocumentFiveMProfile(srcDoc)
 	if !profile.IsResourceProfile() {
-		return name != "fivem_shared.lua" && name != "fivem_client.lua" && name != "fivem_server.lua"
+		return name != "fivem_shared.lua" && name != "fivem_client.lua" && name != "fivem_server.lua" && name != "io.lua" && name != "os.lua"
 	}
 
 	switch name {

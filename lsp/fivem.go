@@ -276,12 +276,12 @@ func (family FiveMNativeFamily) String() string {
 
 type FiveMNativeSelection struct {
 	Family             FiveMNativeFamily
-	Build              string
+	Builds             []string
 	UseExperimentalOAL bool
 }
 
 func (selection FiveMNativeSelection) Active() bool {
-	return selection.Build != ""
+	return len(selection.Builds) != 0
 }
 
 func normalizeFiveMGameName(name string) string {
@@ -312,24 +312,56 @@ func (res *FiveMResource) clientNativeFamily() FiveMNativeFamily {
 	return FiveMNativeFamilyGTA5
 }
 
-func (res *FiveMResource) clientNativeBuild() string {
-	switch res.clientNativeFamily() {
-	case FiveMNativeFamilyGTA5:
-		if res.IsCfxV2 && isFiveMManifestVersionAtLeastAdamant(res.FXVersion) {
-			return "natives_universal.lua"
-		}
-
-		switch strings.ToLower(strings.TrimSpace(res.ManifestVersion)) {
-		case "44febabe-d386-4d18-afbe-5e627f4af937":
-			return "natives_universal.lua"
-		case "f15e72ec-3972-4fe4-9c7d-afc5394ae207":
-			return "natives_0193d0af.lua"
-		default:
-			return "natives_21e43a33.lua"
-		}
-	default:
-		return ""
+func (res *FiveMResource) clientNativeBuilds() []string {
+	if res == nil {
+		return nil
 	}
+
+	builds := []string{"natives_cfx_client.lua"}
+	gameSet := make(map[string]struct{}, len(res.Games))
+	for _, game := range res.Games {
+		gameSet[strings.ToLower(strings.TrimSpace(game))] = struct{}{}
+	}
+
+	if len(gameSet) == 0 || hasFiveMGame(gameSet, "gta5") || hasFiveMGame(gameSet, "ny") {
+		builds = append(builds, "natives_gtav_client.lua")
+	}
+	if hasFiveMGame(gameSet, "rdr3") {
+		builds = append(builds, "natives_rdr3_client.lua")
+	}
+
+	return uniqueStrings(builds)
+}
+
+func (res *FiveMResource) clientNativeFamilyBuilds() []string {
+	if res == nil {
+		return nil
+	}
+
+	return res.clientNativeBuilds()
+}
+
+func hasFiveMGame(gameSet map[string]struct{}, name string) bool {
+	_, ok := gameSet[name]
+	return ok
+}
+
+func uniqueStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+
+	return out
 }
 
 func (res *FiveMResource) NativeSelection(profile FiveMExecutionProfile) FiveMNativeSelection {
@@ -341,13 +373,13 @@ func (res *FiveMResource) NativeSelection(profile FiveMExecutionProfile) FiveMNa
 	case FiveMProfileClient:
 		return FiveMNativeSelection{
 			Family:             res.clientNativeFamily(),
-			Build:              res.clientNativeBuild(),
+			Builds:             res.clientNativeFamilyBuilds(),
 			UseExperimentalOAL: res.UseExperimentalOAL,
 		}
 	case FiveMProfileServer:
 		return FiveMNativeSelection{
 			Family:             FiveMNativeFamilyServer,
-			Build:              "natives_server.lua",
+			Builds:             []string{"natives_cfx_server.lua"},
 			UseExperimentalOAL: false,
 		}
 	default:
