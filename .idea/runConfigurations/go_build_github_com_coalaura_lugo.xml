@@ -1,0 +1,12 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="go build github.com/coalaura/lugo" type="GoApplicationRunConfiguration" factoryName="Go Application" nameIsGenerated="true">
+    <module name="lugo" />
+    <working_directory value="$PROJECT_DIR$" />
+    <go_parameters value="-o .\vscode\bin\lugo-win32-x64.exe" />
+    <kind value="PACKAGE" />
+    <package value="github.com/coalaura/lugo" />
+    <directory value="$PROJECT_DIR$" />
+    <filePath value="$PROJECT_DIR$" />
+    <method v="2" />
+  </configuration>
+</component>
