@@ -15,7 +15,7 @@ import (
 
 func main() {
 	outputDir := flag.String("out", filepath.Join("lsp", "stdlib"), "output directory")
-	games := flag.String("games", "", "comma-separated games: gta,rdr3,cfx")
+	games := flag.String("games", "", "comma-separated sources: gta,cfx")
 	flag.Parse()
 
 	if err := os.MkdirAll(*outputDir, 0o755); err != nil {
@@ -28,15 +28,20 @@ func main() {
 	}
 
 	selected := parseGameTypes(*games)
+	merged := newMergedNativeSet()
 	for _, game := range selected {
-		if err := generateGame(*outputDir, game); err != nil {
+		if err := addGameNatives(merged, game); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 	}
+	if err := writeMergedNatives(*outputDir, merged); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 }
 
-func generateGame(outputDir string, game GameType) error {
+func addGameNatives(merged map[string][]nativeRecord, game GameType) error {
 	resp, err := http.Get(game.JSONURL())
 	if err != nil {
 		return err
@@ -56,49 +61,57 @@ func generateGame(outputDir string, game GameType) error {
 		return err
 	}
 
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
-		return err
-	}
-
-	writer := newLuaWriter(outputDir, game.DocsURL())
-	return writer.write(game, raw)
-}
-
-type luaWriter struct {
-	outputDir string
-	docsURL   string
-}
-
-func newLuaWriter(outputDir, docsURL string) *luaWriter {
-	return &luaWriter{outputDir: outputDir, docsURL: docsURL}
-}
-
-func (w *luaWriter) write(game GameType, raw map[string]map[string]NativeDefinition) error {
-	grouped := make(map[string][]nativeRecord)
 	for namespace, natives := range raw {
 		for hash, native := range natives {
 			apiSet := normalizeApiSet(native.Apiset)
-			grouped[apiSet] = append(grouped[apiSet], nativeRecord{
+			merged[apiSet] = append(merged[apiSet], nativeRecord{
 				Hash:      hash,
 				Namespace: namespace,
 				Native:    native,
+				DocsURL:   game.DocsURL(),
 			})
-		}
-	}
-
-	for _, apiSet := range []string{"client", "server", "shared"} {
-		if err := w.writeApiSet(game.String(), apiSet, grouped[apiSet]); err != nil {
-			return err
 		}
 	}
 
 	return nil
 }
 
+type luaWriter struct {
+	outputDir string
+}
+
+func newLuaWriter(outputDir string) *luaWriter {
+	return &luaWriter{outputDir: outputDir}
+}
+
 type nativeRecord struct {
 	Hash      string
 	Namespace string
 	Native    NativeDefinition
+	DocsURL   string
+}
+
+func newMergedNativeSet() map[string][]nativeRecord {
+	return map[string][]nativeRecord{
+		"client": nil,
+		"server": nil,
+		"shared": nil,
+	}
+}
+
+func writeMergedNatives(outputDir string, grouped map[string][]nativeRecord) error {
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		return err
+	}
+
+	writer := newLuaWriter(outputDir)
+	for _, apiSet := range []string{"client", "server", "shared"} {
+		if err := writer.writeApiSet(apiSet, grouped[apiSet]); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func normalizeApiSet(value string) string {
@@ -120,15 +133,9 @@ func cleanupNativeFiles(outputDir string) error {
 	}
 
 	keep := map[string]struct{}{
-		"natives_gtav_client.lua": {},
-		"natives_gtav_server.lua": {},
-		"natives_gtav_shared.lua": {},
-		"natives_rdr3_client.lua": {},
-		"natives_rdr3_server.lua": {},
-		"natives_rdr3_shared.lua": {},
-		"natives_cfx_client.lua":  {},
-		"natives_cfx_server.lua":  {},
-		"natives_cfx_shared.lua":  {},
+		"natives_client.lua": {},
+		"natives_server.lua": {},
+		"natives_shared.lua": {},
 	}
 
 	for _, entry := range entries {
@@ -147,15 +154,8 @@ func cleanupNativeFiles(outputDir string) error {
 	return nil
 }
 
-func (w *luaWriter) writeApiSet(game, apiSet string, natives []nativeRecord) error {
-	return w.writeApiSetWithGame(game, apiSet, natives)
-}
-
-func (w *luaWriter) writeApiSetWithGame(game, apiSet string, natives []nativeRecord) error {
+func (w *luaWriter) writeApiSet(apiSet string, natives []nativeRecord) error {
 	fileName := "natives_" + apiSet + ".lua"
-	if game != "" {
-		fileName = "natives_" + game + "_" + apiSet + ".lua"
-	}
 
 	if len(natives) == 0 {
 		path := filepath.Join(w.outputDir, fileName)
@@ -173,7 +173,7 @@ func (w *luaWriter) writeApiSetWithGame(game, apiSet string, natives []nativeRec
 	buf.WriteString("---@meta\n\n")
 	for _, item := range natives {
 		fnName := nativeName(item.Native, item.Hash)
-		buf.WriteString(nativeDescription(item.Native.Description, item.Hash, item.Namespace, item.Native.Apiset, w.docsURL))
+		buf.WriteString(nativeDescription(item.Native.Description, item.Hash, item.Namespace, item.Native.Apiset, item.DocsURL))
 		buf.WriteByte('\n')
 
 		params, docParams := nativeParams(item.Native)

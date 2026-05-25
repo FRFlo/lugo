@@ -9,7 +9,6 @@ type GameType int
 
 const (
 	GameGTA GameType = iota
-	GameRDR3
 	GameCFX
 )
 
@@ -39,8 +38,6 @@ var nativeNameWord = regexp.MustCompile(`_([a-z])`)
 
 func (g GameType) String() string {
 	switch g {
-	case GameRDR3:
-		return "rdr3"
 	case GameCFX:
 		return "cfx"
 	default:
@@ -50,8 +47,6 @@ func (g GameType) String() string {
 
 func (g GameType) JSONURL() string {
 	switch g {
-	case GameRDR3:
-		return "https://raw.githubusercontent.com/VORPCORE/RDR3natives/main/rdr3natives.json"
 	case GameCFX:
 		return "https://static.cfx.re/natives/natives_cfx.json"
 	default:
@@ -60,20 +55,12 @@ func (g GameType) JSONURL() string {
 }
 
 func (g GameType) DocsURL() string {
-	if g == GameRDR3 {
-		return "https://rdr3natives.com/?_"
-	}
-
 	return "https://docs.fivem.net/natives/?_"
-}
-
-func (g GameType) OutputPrefix() string {
-	return "natives_" + g.String() + "_"
 }
 
 func parseGameTypes(raw string) []GameType {
 	if strings.TrimSpace(raw) == "" {
-		return []GameType{GameGTA, GameRDR3, GameCFX}
+		return []GameType{GameGTA, GameCFX}
 	}
 
 	parts := strings.Split(raw, ",")
@@ -82,8 +69,6 @@ func parseGameTypes(raw string) []GameType {
 		switch strings.ToLower(strings.TrimSpace(part)) {
 		case "gta", "gtav", "gtav5", "gta5":
 			games = append(games, GameGTA)
-		case "rdr3", "redm":
-			games = append(games, GameRDR3)
 		case "cfx", "cfx-native", "cfxnative":
 			games = append(games, GameCFX)
 		}
