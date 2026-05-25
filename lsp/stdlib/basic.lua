@@ -8,25 +8,11 @@ _VERSION = "Lua 5.4"
 ---@class _G
 _G = {}
 
----@type table
-arg = {}
-
 ---Issues an error when the value of its argument v is false (i.e., nil or false).
 ---@param v any
 ---@param message? any
 ---@return any
 function assert(v, message) end
-
----Performs a full garbage-collection cycle or other GC operations.
----@param opt? "collect"|"stop"|"restart"|"count"|"step"|"setpause"|"setstepmul"|"isrunning"
----@param arg? integer
----@return any
-function collectgarbage(opt, arg) end
-
----Opens the named file and executes its contents as a Lua chunk.
----@param filename? string
----@return any
-function dofile(filename) end
 
 ---Terminates the last protected function called and returns message as the error object.
 ---@param message any
@@ -51,13 +37,6 @@ function ipairs(t) end
 ---@return function|nil, string?
 function load(chunk, chunkname, mode, env) end
 
----Similar to load, but gets the chunk from file filename.
----@param filename? string
----@param mode? "b"|"t"|"bt"
----@param env? table
----@return function|nil, string?
-function loadfile(filename, mode, env) end
-
 ---Allows a program to traverse all fields of a table.
 ---@param table table
 ---@param index? any
@@ -79,12 +58,6 @@ function pcall(f, ...) end
 ---@param ... any
 function print(...) end
 
----Checks whether v1 is equal to v2, without invoking the __eq metamethod.
----@param v1 any
----@param v2 any
----@return boolean
-function rawequal(v1, v2) end
-
 ---Gets the real value of table[index], without invoking the __index metamethod.
 ---@param table table
 ---@param index any
@@ -103,7 +76,7 @@ function rawlen(v) end
 ---@return table
 function rawset(table, index, value) end
 
----Loads the given module.
+---Loads a FiveM-provided module. The runtime only recognizes selected built-ins such as "glm" and "lmprof".
 ---@param modname string
 ---@return any
 function require(modname) end
