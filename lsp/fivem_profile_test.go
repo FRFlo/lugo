@@ -150,15 +150,9 @@ func TestFiveMStdlibVisibility(t *testing.T) {
 		"msgpack.lua",
 		"os.lua",
 		"package.lua",
-		"natives_gtav_client.lua",
-		"natives_gtav_server.lua",
-		"natives_gtav_shared.lua",
-		"natives_rdr3_client.lua",
-		"natives_rdr3_server.lua",
-		"natives_rdr3_shared.lua",
-		"natives_cfx_client.lua",
-		"natives_cfx_server.lua",
-		"natives_cfx_shared.lua",
+		"natives_client.lua",
+		"natives_server.lua",
+		"natives_shared.lua",
 	)
 
 	addFiveMTestDocument(t, s, filepath.Join(root, "resource", "fxmanifest.lua"), `

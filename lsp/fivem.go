@@ -292,8 +292,6 @@ func normalizeFiveMGameName(name string) string {
 		}
 
 		return "gta5"
-	case "rdr3", "redm", "reddeadredemption2", "red dead redemption 2":
-		return "rdr3"
 	default:
 		return strings.ToLower(strings.TrimSpace(name))
 	}
@@ -312,56 +310,12 @@ func (res *FiveMResource) clientNativeFamily() FiveMNativeFamily {
 	return FiveMNativeFamilyGTA5
 }
 
-func (res *FiveMResource) clientNativeBuilds() []string {
-	if res == nil {
-		return nil
-	}
-
-	builds := []string{"natives_cfx_client.lua"}
-	gameSet := make(map[string]struct{}, len(res.Games))
-	for _, game := range res.Games {
-		gameSet[strings.ToLower(strings.TrimSpace(game))] = struct{}{}
-	}
-
-	if len(gameSet) == 0 || hasFiveMGame(gameSet, "gta5") || hasFiveMGame(gameSet, "ny") {
-		builds = append(builds, "natives_gtav_client.lua")
-	}
-	if hasFiveMGame(gameSet, "rdr3") {
-		builds = append(builds, "natives_rdr3_client.lua")
-	}
-
-	return uniqueStrings(builds)
-}
-
 func (res *FiveMResource) clientNativeFamilyBuilds() []string {
 	if res == nil {
 		return nil
 	}
 
-	return res.clientNativeBuilds()
-}
-
-func hasFiveMGame(gameSet map[string]struct{}, name string) bool {
-	_, ok := gameSet[name]
-	return ok
-}
-
-func uniqueStrings(values []string) []string {
-	if len(values) == 0 {
-		return nil
-	}
-
-	seen := make(map[string]struct{}, len(values))
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		out = append(out, value)
-	}
-
-	return out
+	return []string{"natives_client.lua"}
 }
 
 func (res *FiveMResource) NativeSelection(profile FiveMExecutionProfile) FiveMNativeSelection {
@@ -379,7 +333,7 @@ func (res *FiveMResource) NativeSelection(profile FiveMExecutionProfile) FiveMNa
 	case FiveMProfileServer:
 		return FiveMNativeSelection{
 			Family:             FiveMNativeFamilyServer,
-			Builds:             []string{"natives_cfx_server.lua"},
+			Builds:             []string{"natives_server.lua"},
 			UseExperimentalOAL: false,
 		}
 	default:
