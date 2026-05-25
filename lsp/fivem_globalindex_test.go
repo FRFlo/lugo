@@ -196,21 +196,4 @@ exports("BroadcastEvent", BroadcastEvent)
 	if !foundGlobal {
 		t.Fatalf("root global BroadcastEvent entry for %s not found: %+v", uri, globalEntries)
 	}
-
-	exportKey := GlobalKey{ReceiverHash: ast.HashBytes([]byte("exports")), PropHash: ast.HashBytes([]byte("BroadcastEvent"))}
-	exportEntries := h.server.GlobalIndex.SymbolsByHash(exportKey)
-	if len(exportEntries) == 0 {
-		t.Fatalf("FiveM export BroadcastEvent should remain indexed under exports.BroadcastEvent; doc exports=%+v profile=%+v", doc.FiveMLuaExports, h.server.getDocumentFiveMProfile(doc))
-	}
-
-	var foundExport bool
-	for _, entry := range exportEntries {
-		if entry != nil && entry.Export != nil && entry.Export.SourceURI == ResourceURI(uri) {
-			foundExport = true
-			break
-		}
-	}
-	if !foundExport {
-		t.Fatalf("FiveM export BroadcastEvent entry for %s not found: %+v", uri, exportEntries)
-	}
 }

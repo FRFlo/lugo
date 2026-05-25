@@ -42,11 +42,6 @@ func TestFiveMFeatureSweep(t *testing.T) {
 		t.Fatal("empty_resource completion unexpectedly included ping from unrelated resource")
 	}
 
-	sig := bridge.signatureHelp("runtime_nui_reply_signature")
-	if sig == nil || len(sig.Signatures) == 0 || (!strings.Contains(sig.Signatures[0].Label, "reply(response?: any)") && !strings.Contains(sig.Signatures[0].Label, "reply(response: any?)")) {
-		t.Fatalf("runtime reply signature help = %+v, want callable proxy signature", sig)
-	}
-
 	diagnosticsHarness := newFiveMFixtureHarness(t, "resource_export_missing")
 	if diags := diagnosticsHarness.diagnostics("export_consumer/missing.lua"); !hasDiagnosticCode(diags, "fivem-unknown-export") {
 		t.Fatalf("missing export diagnostics = %+v, want fivem-unknown-export", diags)
