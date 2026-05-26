@@ -824,7 +824,10 @@ func (s *Server) handleCompletion(req Request) {
 				continue
 			}
 
-			pName := ast.String(dDoc.Source()[pNode.Start:pNode.End])
+			pName := ast.String(dDoc.nodeSource(pID))
+			if pName == "" {
+				continue
+			}
 
 			if isMethod && i == 0 && pName == "self" {
 				continue
@@ -1217,7 +1220,7 @@ func (s *Server) handleCompletion(req Request) {
 		}
 
 		addFieldsFromTable := func(tDoc *Document, tableID ast.NodeID, detail string) {
-			if tableID == ast.InvalidNode || int(tableID) >= len(tDoc.Tree.Nodes) {
+			if tDoc == nil || tDoc.Tree == nil || len(tDoc.Source()) == 0 || tableID == ast.InvalidNode || int(tableID) >= len(tDoc.Tree.Nodes) {
 				return
 			}
 
@@ -1241,7 +1244,10 @@ func (s *Server) handleCompletion(req Request) {
 				if field.Kind == ast.KindRecordField {
 					key := tDoc.Tree.Nodes[field.Left]
 					if key.Kind == ast.KindIdent {
-						label := ast.String(tDoc.Source()[key.Start:key.End])
+						label := ast.String(tDoc.nodeSource(field.Left))
+						if label == "" {
+							continue
+						}
 
 						kind := FieldCompletion
 						insertText := label
@@ -1263,13 +1269,19 @@ func (s *Server) handleCompletion(req Request) {
 			// 2. Fields assigned to this table later (via its local definition)
 			recDef := tDoc.getDefForValue(tableID)
 			if recDef != ast.InvalidNode {
-				recDefNode := tDoc.Tree.Nodes[recDef]
-				recHash := ast.HashBytes(tDoc.Source()[recDefNode.Start:recDefNode.End])
+				recName := tDoc.nodeSource(recDef)
+				if len(recName) == 0 {
+					return
+				}
+
+				recHash := ast.HashBytes(recName)
 
 				for _, fd := range tDoc.Resolver.FieldDefs {
 					if fd.ReceiverDef == recDef && fd.ReceiverHash == recHash {
-						node := tDoc.Tree.Nodes[fd.NodeID]
-						label := ast.String(tDoc.Source()[node.Start:node.End])
+						label := ast.String(tDoc.nodeSource(fd.NodeID))
+						if label == "" {
+							continue
+						}
 
 						kind := FieldCompletion
 						insertText := label
@@ -1316,10 +1328,11 @@ func (s *Server) handleCompletion(req Request) {
 
 		addGlobalFieldCompletion := func(sym GlobalSymbol) bool {
 			if symDoc, ok := s.Documents[sym.URI]; ok {
-				node := symDoc.Tree.Nodes[sym.NodeID]
-
 				kind := FieldCompletion
-				label := ast.String(symDoc.Source()[node.Start:node.End])
+				label := ast.String(symDoc.nodeSource(sym.NodeID))
+				if label == "" {
+					return false
+				}
 				insertText := label
 				insertFormat := PlainTextTextFormat
 
@@ -1394,7 +1407,10 @@ func (s *Server) handleCompletion(req Request) {
 
 				if node.Kind == ast.KindIdent || node.Kind == ast.KindMethodName {
 					kind := VariableCompletion
-					label := ast.String(symDoc.Source()[node.Start:node.End])
+					label := ast.String(symDoc.nodeSource(sym.NodeID))
+					if label == "" {
+						return false
+					}
 					insertText := label
 					insertFormat := PlainTextTextFormat
 

@@ -57,7 +57,7 @@ func TestFiveMEviction(t *testing.T) {
 		if doc.TypeCache != nil {
 			t.Fatal("TypeCache should be nil after eviction")
 		}
-		if doc.Inferring != nil && len(doc.Inferring) > 0 {
+		if len(doc.Inferring) > 0 {
 			t.Fatal("Inferring should be nil/empty after eviction")
 		}
 		if doc.LuaDocCache != nil {
@@ -110,7 +110,7 @@ func TestFiveMEviction(t *testing.T) {
 		if doc.TypeCache == nil {
 			t.Fatal("Open document should retain TypeCache after eviction")
 		}
-		if doc.Inferring == nil || len(doc.Inferring) == 0 {
+		if len(doc.Inferring) == 0 {
 			t.Fatal("Open document should retain Inferring after eviction")
 		}
 		if doc.LuaDocCache == nil {
@@ -331,6 +331,64 @@ func TestFiveMEviction(t *testing.T) {
 		}
 
 		_ = h.hover("bridge_ping_call")
+	})
+
+	t.Run("ClosedCrossResourceCompletionNoPanic", func(t *testing.T) {
+		h := newFiveMFixtureHarness(t, "resource_bridges")
+
+		consumerURI := h.server.pathToURI(h.root + "/bridge_consumer/consumer.lua")
+		providerURI := h.server.pathToURI(h.root + "/bridge_provider/exports.lua")
+
+		providerDoc := h.server.Documents[providerURI]
+		if providerDoc == nil {
+			t.Fatal("bridge provider should be indexed")
+		}
+
+		h.server.OpenFiles[consumerURI] = true
+		delete(h.server.OpenFiles, providerURI)
+
+		evictClosedDocumentCaches(h.server)
+
+		if providerDoc.Tree == nil || providerDoc.Tree.Source != nil {
+			t.Fatal("bridge provider should keep its tree but drop source after eviction")
+		}
+
+		_ = h.completion("bridge_proxy_completion")
+	})
+
+	t.Run("ClosedGlobalMemberCompletionNoPanic", func(t *testing.T) {
+		h := newFiveMFixtureHarnessWithoutIndex(t)
+		h.writeWorkspaceFile("provider.lua", `Skinchanger = {}
+Skinchanger.Config = {}
+Skinchanger.Config.Body = true
+`)
+		h.writeWorkspaceFile("consumer.lua", `Skinchanger.Config.--[[@skinchanger_config_member]]
+`)
+		h.reindex()
+
+		consumerURI := h.server.pathToURI(h.root + "/consumer.lua")
+		providerURI := h.server.pathToURI(h.root + "/provider.lua")
+
+		providerDoc := h.server.Documents[providerURI]
+		if providerDoc == nil {
+			t.Fatal("provider.lua should be indexed")
+		}
+
+		beforeEviction := h.completion("skinchanger_config_member")
+		if !completionHasLabel(beforeEviction, "Body") {
+			t.Fatalf("expected Body completion before provider source eviction, got %v", beforeEviction.Items)
+		}
+
+		h.server.OpenFiles[consumerURI] = true
+		delete(h.server.OpenFiles, providerURI)
+
+		evictClosedDocumentCaches(h.server)
+
+		if providerDoc.Tree == nil || providerDoc.Tree.Source != nil {
+			t.Fatal("provider.lua should keep its tree but drop source after eviction")
+		}
+
+		_ = h.completion("skinchanger_config_member")
 	})
 
 }
