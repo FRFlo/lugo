@@ -394,7 +394,7 @@ func (doc *Document) inferIdent(id ast.NodeID) TypeSet {
 		if doc.Server != nil {
 			switch ast.String(identName) {
 			case "source":
-				if doc.Server.isFiveMGlobalAvailable(doc, "source") {
+				if doc.Server.isFiveMServerEventSourceReference(doc, id) {
 					return TypeSet{Basics: TypeNumber}
 				}
 			case "exports":

@@ -2216,7 +2216,7 @@ func (s *Server) handleSemanticTokensFull(req Request) {
 
 			if defID == ast.InvalidNode {
 
-				if s.isKnownGlobal(doc, identBytes) {
+				if s.isKnownGlobal(doc, identBytes) || (bytes.Equal(identBytes, []byte("source")) && s.isFiveMServerEventSourceReference(doc, ast.NodeID(i))) {
 					modifiers |= 1 << 3 // defaultLibrary
 				}
 			} else {
