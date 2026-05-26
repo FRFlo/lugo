@@ -1875,22 +1875,16 @@ func (s *Server) getRootDef(doc *Document, exprID ast.NodeID) ast.NodeID {
 }
 
 // diagFiveMUnregisteredNetEvent detects TriggerServerEvent/TriggerClientEvent calls
-// that do not have a corresponding RegisterNetEvent within the same FiveM resource.
-// MVP: operates within the same resource only.
+// that do not have a corresponding RegisterNetEvent anywhere in the indexed workspace.
 func (s *Server) diagFiveMUnregisteredNetEvent(doc *Document) {
 	if !s.DiagFiveMUnregisteredNetEvent {
 		return
 	}
 
-	// Determine the resource this document belongs to
 	profile := s.getDocumentFiveMProfile(doc)
 	if !profile.HasResource() {
 		return
 	}
-
-	// Determine the resource root to compare against across documents
-	resourceRoot := profile.ResourceRoot
-	// If we cannot determine a root, fall back to cross-document scan to avoid missing diagnostics in MVP.
 
 	// Iterate events in this document
 	for _, ev := range doc.FiveMEvents {
@@ -1898,16 +1892,10 @@ func (s *Server) diagFiveMUnregisteredNetEvent(doc *Document) {
 			continue
 		}
 
-		// Check across all documents for a matching RegisterNetEvent (MVP: cross-resource allowed to ensure MVP coverage)
+		// Check across all indexed documents for a matching RegisterNetEvent.
 		found := false
 		for _, d := range s.Documents {
 			if d == nil {
-				continue
-			}
-			// If available, still attempt to restrict by resource root if present; otherwise, fall back to global search
-			prof := s.getDocumentFiveMProfile(d)
-			if resourceRoot != "" && prof.ResourceRoot != resourceRoot {
-				// skip non-matching resource roots when a root is known
 				continue
 			}
 			for _, ev2 := range d.FiveMEvents {
@@ -1931,7 +1919,7 @@ func (s *Server) diagFiveMUnregisteredNetEvent(doc *Document) {
 				Range:    diagRange,
 				Severity: SeverityWarning,
 				Code:     "fivem-unregistered-net-event",
-				Message:  fmt.Sprintf("Network event '%s' triggered but no RegisterNetEvent found in this resource", ev.Name),
+				Message:  fmt.Sprintf("Network event '%s' triggered but no RegisterNetEvent found in the indexed workspace", ev.Name),
 			})
 		}
 	}

@@ -27,12 +27,27 @@ func TestFiveMEventFixtureLoading(t *testing.T) {
 
 func TestFiveMUnregisteredNetEvent(t *testing.T) {
 	// Use a fixture where a TriggerServerEvent/TriggerClientEvent is called
-	// for an event that has no corresponding RegisterNetEvent in the same resource.
+	// for an event that has no corresponding RegisterNetEvent in the indexed workspace.
 	h := newFiveMFixtureHarness(t, "resource_events_unregistered")
 
 	diags := h.diagnostics("server.lua")
 	if !hasDiagnosticCode(diags, "fivem-unregistered-net-event") {
 		t.Fatalf("expected fivem-unregistered-net-event diagnostic, got: %#v", diags)
+	}
+}
+
+func TestFiveMUnregisteredNetEventAllowsCrossResourceRegistration(t *testing.T) {
+	h := newFiveMFixtureHarnessWithoutIndex(t)
+
+	h.writeWorkspaceFile("consumer/fxmanifest.lua", "fx_version 'cerulean'\ngame 'gta5'\nserver_script 'server.lua'\n")
+	h.writeWorkspaceFile("consumer/server.lua", "TriggerClientEvent('core:character:appearanceUpdate', -1)\n")
+	h.writeWorkspaceFile("core/fxmanifest.lua", "fx_version 'cerulean'\ngame 'gta5'\nserver_script 'server.lua'\n")
+	h.writeWorkspaceFile("core/server.lua", "RegisterNetEvent('core:character:appearanceUpdate', function() end)\n")
+	h.reindex()
+
+	diags := h.diagnostics("consumer/server.lua")
+	if hasDiagnosticCode(diags, "fivem-unregistered-net-event") {
+		t.Fatalf("expected cross-resource RegisterNetEvent to suppress fivem-unregistered-net-event, got: %#v", diags)
 	}
 }
 
