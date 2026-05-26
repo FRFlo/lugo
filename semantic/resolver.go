@@ -53,6 +53,7 @@ type Resolver struct {
 
 	scopeStack  []ast.NodeID
 	scopeStarts []int
+	selfStack   []ast.NodeID
 
 	DuplicateLocals []ast.NodeID
 	LocalDefs       []ast.NodeID
@@ -75,6 +76,7 @@ func New(tree *ast.Tree) *Resolver {
 		GlobalRefs:      make([]ast.NodeID, 0, 512),
 		scopeStack:      make([]ast.NodeID, 0, 256),
 		scopeStarts:     make([]int, 0, 64),
+		selfStack:       make([]ast.NodeID, 0, 16),
 		DuplicateLocals: make([]ast.NodeID, 0, 16),
 		Reassignments:   make([]Reassignment, 0, 128),
 		nameArena:       make([]byte, 0, 2048),
@@ -116,6 +118,12 @@ func (r *Resolver) Reset() {
 		r.scopeStarts = r.scopeStarts[:0]
 	}
 
+	if r.selfStack == nil {
+		r.selfStack = make([]ast.NodeID, 0, 16)
+	} else {
+		r.selfStack = r.selfStack[:0]
+	}
+
 	r.DuplicateLocals = r.DuplicateLocals[:0]
 	r.LocalDefs = r.LocalDefs[:0]
 	r.ShadowedOuter = r.ShadowedOuter[:0]
@@ -132,6 +140,7 @@ func (r *Resolver) Cleanup() {
 	r.fieldMap = nil
 	r.scopeStack = nil
 	r.scopeStarts = nil
+	r.selfStack = nil
 
 	// intentionally not resetting nameArena, FieldDef.ReceiverName slices point to it
 }
@@ -278,6 +287,10 @@ func (r *Resolver) resolveReference(identID ast.NodeID, isDef bool) {
 	}
 
 	if bytes.Equal(targetSrc, []byte("self")) {
+		if len(r.selfStack) > 0 {
+			r.References[identID] = r.selfStack[len(r.selfStack)-1]
+		}
+
 		return
 	}
 
@@ -615,6 +628,7 @@ func (r *Resolver) visit(id ast.NodeID) {
 		}
 	case ast.KindFunctionExpr, ast.KindFunctionStmt:
 		startScope := r.pushScope()
+		selfStackStart := len(r.selfStack)
 
 		if node.Kind == ast.KindFunctionExpr {
 			for i := uint16(0); i < node.Count; i++ {
@@ -629,6 +643,10 @@ func (r *Resolver) visit(id ast.NodeID) {
 			case ast.KindMethodName, ast.KindMemberExpr:
 				r.visit(leftNode.Left)
 				r.defineField(node.Left)
+
+				if leftNode.Kind == ast.KindMethodName {
+					r.selfStack = append(r.selfStack, node.Left)
+				}
 			default:
 				r.visit(node.Left)
 			}
@@ -636,6 +654,7 @@ func (r *Resolver) visit(id ast.NodeID) {
 
 		r.visit(node.Right)
 
+		r.selfStack = r.selfStack[:selfStackStart]
 		r.popScope(startScope)
 	case ast.KindRepeat:
 		startScope := r.pushScope()

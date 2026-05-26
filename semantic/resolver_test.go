@@ -148,6 +148,25 @@ func TestResolver_TablesAndMethods(t *testing.T) {
 	if len(res.FieldDefs) != 1 {
 		t.Fatalf("Expected 1 field definition (method), got %d", len(res.FieldDefs))
 	}
+
+	selfNodes := findIdents(t, tree, "self")
+	if len(selfNodes) != 1 {
+		t.Fatalf("Expected 1 'self' identifier, found %d", len(selfNodes))
+	}
+
+	methodNodes := findIdents(t, tree, "method")
+	if len(methodNodes) != 1 {
+		t.Fatalf("Expected 1 'method' identifier, found %d", len(methodNodes))
+	}
+
+	methodNameID := tree.Nodes[methodNodes[0]].Parent
+	if methodNameID == ast.InvalidNode || tree.Nodes[methodNameID].Kind != ast.KindMethodName {
+		t.Fatalf("Expected method identifier parent to be KindMethodName")
+	}
+
+	if res.References[selfNodes[0]] != methodNameID {
+		t.Fatalf("self reference = %d, want implicit method self %d", res.References[selfNodes[0]], methodNameID)
+	}
 }
 
 func TestResolver_LoopScopeLeakage(t *testing.T) {
