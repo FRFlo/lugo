@@ -1030,11 +1030,36 @@ func (s *Server) handleCompletion(req Request) {
 		var recDef = ast.InvalidNode
 
 		if len(rootName) > 0 {
-			for name, defID := range doc.LocalsAt(offset) {
+			scopeOffset := offset
+			if endId > 0 {
+				scopeOffset = uint32(endId - 1)
+			}
+
+			for name, defID := range doc.LocalsAt(scopeOffset) {
 				if bytes.Equal(name, rootName) {
 					recDef = defID
 
 					break
+				}
+			}
+
+			if recDef == ast.InvalidNode {
+				var latestEnd uint32
+
+				for _, defID := range doc.Resolver.LocalDefs {
+					if defID == ast.InvalidNode || int(defID) >= len(doc.Tree.Nodes) {
+						continue
+					}
+
+					defNode := doc.Tree.Nodes[defID]
+					if defNode.End > scopeOffset || defNode.Start > defNode.End || defNode.End > uint32(len(doc.Source())) {
+						continue
+					}
+
+					if defNode.End >= latestEnd && bytes.Equal(doc.Source()[defNode.Start:defNode.End], rootName) {
+						recDef = defID
+						latestEnd = defNode.End
+					}
 				}
 			}
 		}
@@ -1131,6 +1156,10 @@ func (s *Server) handleCompletion(req Request) {
 			recType = doc.InferType(recNodeID)
 		}
 
+		if recType.CustomName == "" && recType.Basics == TypeUnknown && recDef != ast.InvalidNode {
+			recType = doc.InferType(recDef)
+		}
+
 		if recType.CustomName != "" {
 			currClassName := recType.CustomName
 
@@ -1142,6 +1171,16 @@ func (s *Server) handleCompletion(req Request) {
 				classHash := ast.HashBytes([]byte(currClassName))
 
 				validRecs[classHash] = true
+
+				// Follow table aliases: when a @type annotation maps a class name
+				// to a table path (e.g. @type Account → Core.Account), add the
+				// table path's hash so colon methods indexed under that path are
+				// included in completion results.
+				if s.TableAliases != nil {
+					if tableHash, ok := s.TableAliases[classHash]; ok {
+						validRecs[tableHash] = true
+					}
+				}
 
 				classKey := GlobalKey{ReceiverHash: 0, PropHash: classHash}
 				if s.GlobalIndex != nil {

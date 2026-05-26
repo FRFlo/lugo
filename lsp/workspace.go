@@ -1023,6 +1023,14 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 					globalRecHash = ast.HashBytes(globalRecName)
 				}
 			}
+
+			// Fallback: when getGlobalPath cannot resolve the path (e.g. the receiver's
+			// assigned value is a table literal or call expression), use the pre-computed
+			// receiver name and hash from the resolver's receiver context.
+			if globalRecName == nil && len(fd.ReceiverName) > 0 {
+				globalRecName = fd.ReceiverName
+				globalRecHash = fd.ReceiverHash
+			}
 		}
 
 		if globalRecName != nil {
@@ -1049,6 +1057,20 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 			isDep, depMsg := doc.HasDeprecatedTag(fd.NodeID)
 
 			s.setGlobalSymbol(GlobalKey{ReceiverHash: globalRecHash, PropHash: fd.PropHash}, uri, fd.NodeID, sb.String(), "", isRoot, isDep, depMsg)
+
+			// Register class-to-table alias: when a table field has a @type annotation
+			// pointing to a class (e.g. ---@type Account on Core.Account = {}),
+			// map the class hash to the FULL table path hash so that completion on
+			// typed variables can find colon methods indexed under that path.
+			if luadoc := doc.GetLuaDoc(fd.NodeID); luadoc != nil && luadoc.Type != nil && luadoc.Type.Type != "" {
+				typeHash := ast.HashBytes([]byte(luadoc.Type.Type))
+
+				// Use the full table path (rec.prop) as the alias target, not just rec.
+				// e.g. for Core.Account = {}, the full path is "Core.Account"
+				tablePathHash := ast.HashBytes([]byte(sb.String()))
+
+				s.setTableAlias(uri, typeHash, tablePathHash)
+			}
 		}
 	}
 
