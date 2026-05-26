@@ -353,6 +353,8 @@ func (doc *Document) InferType(id ast.NodeID) TypeSet {
 		typeSet = doc.inferIdent(id)
 	case ast.KindMemberExpr:
 		typeSet = doc.inferMemberExpr(node)
+	case ast.KindMethodName:
+		typeSet = doc.inferMethodSelfType(id)
 	case ast.KindCallExpr, ast.KindMethodCall:
 		typeSet = doc.inferCallExpr(node)
 	}
@@ -372,12 +374,20 @@ func (doc *Document) inferIdent(id ast.NodeID) TypeSet {
 	identName := doc.nodeSource(id)
 	identHash := ast.HashBytes(identName)
 
+	if bytes.Equal(identName, []byte("self")) && targetDef != ast.InvalidNode && int(targetDef) < len(doc.Tree.Nodes) && doc.Tree.Nodes[targetDef].Kind == ast.KindMethodName {
+		return doc.inferMethodSelfType(targetDef)
+	}
+
 	if doc.Server != nil {
 		ctx := doc.Server.resolveSymbolNode(doc.URI, doc, id)
 		if ctx != nil && ctx.TargetDoc != nil && ctx.TargetDefID != ast.InvalidNode {
 			targetDoc = ctx.TargetDoc
 			targetDef = ctx.TargetDefID
 		}
+	}
+
+	if bytes.Equal(identName, []byte("self")) && targetDef != ast.InvalidNode && int(targetDef) < len(targetDoc.Tree.Nodes) && targetDoc.Tree.Nodes[targetDef].Kind == ast.KindMethodName {
+		return targetDoc.inferMethodSelfType(targetDef)
 	}
 
 	if targetDef == ast.InvalidNode {
@@ -473,6 +483,33 @@ func (doc *Document) inferIdent(id ast.NodeID) TypeSet {
 	}
 
 	return t
+}
+
+func (doc *Document) inferMethodSelfType(methodNameID ast.NodeID) TypeSet {
+	if doc == nil || doc.Tree == nil || methodNameID == ast.InvalidNode || int(methodNameID) >= len(doc.Tree.Nodes) {
+		return TypeSet{}
+	}
+
+	methodName := doc.Tree.Nodes[methodNameID]
+	if methodName.Kind != ast.KindMethodName {
+		return TypeSet{}
+	}
+
+	if doc.Server != nil {
+		if luadoc := doc.GetLuaDoc(methodNameID); luadoc != nil {
+			for _, param := range luadoc.Params {
+				if param.Name == "self" && param.Type != "" {
+					return ParseTypeString(param.Type)
+				}
+			}
+		}
+	}
+
+	if methodName.Left == ast.InvalidNode {
+		return TypeSet{}
+	}
+
+	return doc.InferType(methodName.Left)
 }
 
 func (doc *Document) inferFunctionParameter(defID, funcExprID ast.NodeID) TypeSet {

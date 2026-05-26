@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/coalaura/lugo/ast"
+	"github.com/coalaura/lugo/semantic"
 )
 
 func TestInferColonMethodBindsSelf(t *testing.T) {
@@ -69,6 +70,56 @@ local x = obj.method()
 	}
 	if method.Structural.Function.SelfType != nil {
 		t.Fatalf("dot call self = %#v, want nil", method.Structural.Function.SelfType)
+	}
+}
+
+func TestInferImplicitSelfUsesMethodReceiver(t *testing.T) {
+	src := []byte(`local MyClass = {}
+function MyClass:method()
+  return self
+end
+`)
+	tree := parseResolverLua(t, src)
+	resolver := semantic.New(tree)
+	resolver.Resolve(tree.Root)
+	doc := &Document{Tree: tree, Resolver: resolver}
+
+	selfID := findIdentByOccurrence(t, tree, "self", 0)
+	methodID := findIdentByOccurrence(t, tree, "method", 0)
+	methodNameID := tree.Nodes[methodID].Parent
+
+	if resolver.References[selfID] != methodNameID {
+		t.Fatalf("self reference = %d, want method name %d", resolver.References[selfID], methodNameID)
+	}
+
+	got := doc.InferType(selfID)
+	if got.Basics&TypeTable == 0 || got.DeclNode == ast.InvalidNode {
+		t.Fatalf("InferType(self) = %#v, want receiver table type", got)
+	}
+
+	methodType := doc.InferType(methodNameID)
+	if methodType.Basics&TypeTable == 0 || methodType.DeclNode != got.DeclNode {
+		t.Fatalf("InferType(method name) = %#v, want same receiver table as self %#v", methodType, got)
+	}
+}
+
+func TestInferImplicitSelfPrefersLuaDocParam(t *testing.T) {
+	src := []byte(`local MyClass = {}
+---@param self CustomThing
+function MyClass:method()
+  return self
+end
+`)
+	tree := parseResolverLua(t, src)
+	resolver := semantic.New(tree)
+	resolver.Resolve(tree.Root)
+	doc := &Document{Tree: tree, Resolver: resolver, Server: &Server{}}
+
+	selfID := findIdentByOccurrence(t, tree, "self", 0)
+
+	got := doc.InferType(selfID)
+	if got.CustomName != "CustomThing" {
+		t.Fatalf("InferType(self) = %#v, want CustomThing from @param self", got)
 	}
 }
 
