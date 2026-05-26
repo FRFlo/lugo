@@ -262,6 +262,10 @@ func (s *Server) publishDiagnostics(uri string) {
 				continue
 			}
 
+			if bytes.Equal(identBytes, []byte("source")) && s.isFiveMServerEventSourceReference(doc, refID) {
+				continue
+			}
+
 			if s.isGlobalGuarded(doc, refID, identBytes) {
 				continue
 			}
