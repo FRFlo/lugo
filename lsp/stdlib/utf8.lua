@@ -38,3 +38,18 @@ function utf8.len(s, i, j, lax) end
 ---@param i? integer
 ---@return integer|nil
 function utf8.offset(s, n, i) end
+
+---Alias for utf8.len. Returns the number of UTF-8 characters in the string.
+---@param s string
+---@param i? integer
+---@param j? integer
+---@param lax? boolean
+---@return integer|false, integer?
+function utf8.strlenutf8(s, i, j, lax) end
+
+---Case-insensitive UTF-8-aware string comparison.
+---Returns 0 if equal, negative if a < b, positive if a > b.
+---@param a string
+---@param b string
+---@return integer
+function utf8.strcmputf8i(a, b) end

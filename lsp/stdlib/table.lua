@@ -50,3 +50,33 @@ function table.sort(list, comp) end
 ---@param j? integer
 ---@return any ...
 function table.unpack(list, i, j) end
+
+---Creates a new table pre-sized for narr array elements and nrec hash entries.
+---Alias: table.new
+---@param narr? integer
+---@param nrec? integer
+---@return table
+function table.create(narr, nrec) end
+
+---Alias for table.create.
+---@param narr? integer
+---@param nrec? integer
+---@return table
+function table.new(narr, nrec) end
+
+---Wipes all entries from the table and attempts to shrink its storage.
+---More aggressive than table.clear which only removes entries.
+---@param t table
+function table.wipe(t) end
+
+---Returns a shallow copy of the table.
+---Metatables are preserved in the copy.
+---@param t table
+---@return table
+function table.clone(t) end
+
+---Returns the structural type of the table: "empty", "array", or "hash".
+---An array has consecutive integer keys starting at 1; a hash has non-integer keys.
+---@param t table
+---@return "empty"|"array"|"hash"
+function table.type(t) end

@@ -143,3 +143,10 @@ function math.type(x) end
 ---@param n integer
 ---@return boolean
 function math.ult(m, n) end
+
+---Clamps val to the inclusive range [min, max].
+---@param val number
+---@param min number
+---@param max number
+---@return number
+function math.clamp(val, min, max) end

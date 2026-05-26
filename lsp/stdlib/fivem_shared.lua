@@ -154,3 +154,37 @@ local player_handle = {}
 ---@param handle integer|string
 ---@return PlayerHandle
 function Player(handle) end
+
+---Computes a Jenkins one-at-a-time hash for the given string.
+---Commonly used to derive native hashes and event name hashes.
+---@param str string
+---@return integer
+function joaat(str) end
+
+---Creates a to-be-closed variable from a function, for use with
+---the `<close>` annotation: `local x <close> = func2close(fn)`.
+---@param fn function
+---@return function
+function func2close(fn) end
+
+---Alias for func2close. Creates a to-be-closed variable.
+---@param fn function
+---@return function
+function defer(fn) end
+
+---Generic iterator over table elements. Calls fn(key, value) for each entry.
+---Also supports the `each` syntactic form: `each(tbl, fn)`.
+---@param tbl table
+---@param fn fun(key: any, value: any)
+function each(tbl, fn) end
+
+---Sanitizes a string by removing/replacing characters unsafe for
+---logging or network transmission. Returns the scrubbed string.
+---@param str string
+---@return string
+function scrub(str) end
+
+---Contracts a table to remove nil-valued entries from the array part.
+---Shifts down remaining values, similar to table.pack without hole retention.
+---@param tbl table
+function contract(tbl) end

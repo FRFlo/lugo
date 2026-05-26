@@ -88,3 +88,73 @@ function string.sub(s, i, j) end
 ---@param s string
 ---@return string
 function string.upper(s) end
+
+---Returns a binary string containing the values packed according to format.
+---@param fmt string
+---@param ... any
+---@return string
+function string.pack(fmt, ...) end
+
+---Returns the values packed in string s according to format, plus the read position.
+---@param fmt string
+---@param s string
+---@param pos? integer
+---@return any ..., integer
+function string.unpack(fmt, s, pos) end
+
+---Returns the size of a string resulting from string.pack with the given format.
+---@param fmt string
+---@return integer
+function string.packsize(fmt) end
+
+---Trims leading and trailing whitespace from the string.
+---@param s string
+---@return string
+function string.strtrim(s) end
+
+---Splits a string by the given separator and returns a table of substrings.
+---@param s string
+---@param sep string
+---@return string[]
+function string.strsplit(s, sep) end
+
+---Joins the elements of table t into a single string separated by sep.
+---@param t table
+---@param sep string
+---@return string
+function string.strjoin(t, sep) end
+
+---Concatenates all arguments into a single string.
+---@param ... any
+---@return string
+function string.strconcat(...) end
+
+---Converts all arguments to strings and returns them.
+---@param ... any
+---@return string ...
+function string.tostringall(...) end
+
+---Wraps a string as a blob (binary data). Blobs support concatenation
+---and length operations without interpreting content as text.
+---@param data string
+---@return userdata
+function string.blob(data) end
+
+---Returns true if the value is a blob.
+---@param v any
+---@return boolean
+function string.isblob(v) end
+
+---Packs values into a blob using the given format string.
+---Similar to string.pack but returns a blob instead of a string.
+---@param fmt string
+---@param ... any
+---@return userdata
+function string.blob_pack(fmt, ...) end
+
+---Unpacks a blob according to the format string.
+---@param fmt string
+---@param blob userdata
+---@param pos? integer
+---@return any ..., integer
+function string.blob_unpack(fmt, blob, pos) end
