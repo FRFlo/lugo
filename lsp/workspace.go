@@ -716,7 +716,7 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 				switch {
 				case bytes.Equal(ident, []byte("AddEventHandler")):
 					kind = FiveMEventAddHandler
-				case bytes.Equal(ident, []byte("RegisterNetEvent")):
+				case bytes.Equal(ident, []byte("RegisterNetEvent")), bytes.Equal(ident, []byte("RegisterServerEvent")):
 					kind = FiveMEventRegisterNet
 				case bytes.Equal(ident, []byte("TriggerEvent")):
 					kind = FiveMEventTriggerLocal
