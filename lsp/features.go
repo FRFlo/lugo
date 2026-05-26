@@ -242,8 +242,15 @@ func (s *Server) handleHover(req Request) {
 
 		if ctx.TargetDoc != nil && ctx.TargetDefID != ast.InvalidNode {
 			luadoc := *ctx.TargetDoc.GetLuaDoc(ctx.TargetDefID)
+			targetIsImplicitSelf := ctx.IdentName == "self" && int(ctx.TargetDefID) < len(ctx.TargetDoc.Tree.Nodes) && ctx.TargetDoc.Tree.Nodes[ctx.TargetDefID].Kind == ast.KindMethodName
+			if targetIsImplicitSelf {
+				luadoc = LuaDoc{}
+			}
 
-			valID := ctx.TargetDoc.getAssignedValue(ctx.TargetDefID)
+			valID := ast.InvalidNode
+			if !targetIsImplicitSelf {
+				valID = ctx.TargetDoc.getAssignedValue(ctx.TargetDefID)
+			}
 			isFunc := valID != ast.InvalidNode && ctx.TargetDoc.Tree.Nodes[valID].Kind == ast.KindFunctionExpr
 
 			var valStr string
@@ -1359,11 +1366,7 @@ func (s *Server) handleCompletion(req Request) {
 
 		for _, key := range fieldKeys {
 			if s.GlobalIndex != nil {
-				for _, sym := range s.visibleGlobalSymbolsFromEntries(doc, s.GlobalIndex.SymbolsByHash(key), 1) {
-					if addGlobalFieldCompletion(sym) {
-						break
-					}
-				}
+				_ = slices.ContainsFunc(s.visibleGlobalSymbolsFromEntries(doc, s.GlobalIndex.SymbolsByHash(key), 1), addGlobalFieldCompletion)
 			}
 		}
 	} else {
