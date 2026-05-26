@@ -247,6 +247,13 @@ func (r *Resolver) declareLocal(scope *resolverScope, identID ast.NodeID) {
 	if name == "" {
 		return
 	}
+	r.declareLocalName(scope, name, identID)
+}
+
+func (r *Resolver) declareLocalName(scope *resolverScope, name string, identID ast.NodeID) {
+	if scope == nil || identID == ast.InvalidNode || !r.validNode(identID) || name == "" {
+		return
+	}
 
 	decl := resolverDecl{Name: name, NodeID: identID, Scope: scope}
 	scope.decls[name] = append(scope.decls[name], decl)
@@ -254,6 +261,17 @@ func (r *Resolver) declareLocal(scope *resolverScope, identID ast.NodeID) {
 	r.LocalDefs = append(r.LocalDefs, identID)
 	r.References[identID] = identID
 	r.mergeSemantic(identID, SemanticData{Scope: scope.data, Bindings: []Binding{{Name: name, NodeID: NodeID(identID)}}})
+}
+
+func (r *Resolver) declareSyntheticLocalName(scope *resolverScope, name string, nodeID ast.NodeID) {
+	if scope == nil || nodeID == ast.InvalidNode || !r.validNode(nodeID) || name == "" {
+		return
+	}
+
+	decl := resolverDecl{Name: name, NodeID: nodeID, Scope: scope}
+	scope.decls[name] = append(scope.decls[name], decl)
+	scope.data.Symbols[name] = NodeID(nodeID)
+	r.mergeSemantic(nodeID, SemanticData{Scope: scope.data, Bindings: []Binding{{Name: name, NodeID: NodeID(nodeID)}}})
 }
 
 func (r *Resolver) declareGlobal(identID ast.NodeID) {
@@ -369,6 +387,14 @@ func (r *Resolver) collectFunctionDeclarations(funcID ast.NodeID, parent *resolv
 	}
 
 	fnScope := r.newScope(funcID, parent)
+
+	if parentID := r.Tree.Nodes[funcID].Parent; parentID != ast.InvalidNode && r.validNode(parentID) {
+		parentNode := r.Tree.Nodes[parentID]
+		if parentNode.Kind == ast.KindFunctionStmt && parentNode.Left != ast.InvalidNode && r.validNode(parentNode.Left) && r.Tree.Nodes[parentNode.Left].Kind == ast.KindMethodName {
+			r.declareSyntheticLocalName(fnScope, "self", parentNode.Left)
+		}
+	}
+
 	for i := uint16(0); i < node.Count; i++ {
 		r.declareLocal(fnScope, r.Tree.ExtraList[node.Extra+uint32(i)])
 	}
@@ -554,13 +580,16 @@ func (r *Resolver) referencesIdent(id ast.NodeID, scope *resolverScope, isDef bo
 		return
 	}
 	name := string(r.source(id))
-	if name == "" || name == "self" {
+	if name == "" {
 		return
 	}
 
 	if defID := r.lookupLocalByPosition(scope, name, id); defID != ast.InvalidNode {
 		r.References[id] = defID
 		r.mergeSemantic(id, SemanticData{Bindings: []Binding{{Name: name, NodeID: NodeID(defID)}}})
+		return
+	}
+	if name == "self" {
 		return
 	}
 	if isDef {
