@@ -9,7 +9,29 @@ permissions:
   contents: write
 
 jobs:
+  generate-natives:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+
+    - name: Set up Go
+      uses: actions/setup-go@v6
+      with:
+        go-version-file: 'go.mod'
+        cache: false
+
+    - name: Generate FiveM native stubs
+      run: go run ./cmd/rage-lua-natives -out ./lsp/stdlib
+
+    - name: Upload generated stubs
+      uses: actions/upload-artifact@v6
+      with:
+        name: natives-stdlib
+        path: lsp/stdlib/
+
   build:
+    needs: generate-natives
     runs-on: ubuntu-latest
 
     strategy:
@@ -50,6 +72,12 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v6
+
+    - name: Download generated natives
+      uses: actions/download-artifact@v8
+      with:
+        name: natives-stdlib
+        path: lsp/stdlib
 
     - name: Set up Zig
       uses: goto-bus-stop/setup-zig@v2
@@ -93,9 +121,6 @@ jobs:
         else
           LDFLAGS=""
         fi
-
-        GOOS=linux GOARCH=amd64 go run ./cmd/rage-lua-natives -out ./lsp/stdlib
-        go generate ./lsp
 
         go build \
           -trimpath \
