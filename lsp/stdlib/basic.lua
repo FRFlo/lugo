@@ -119,3 +119,29 @@ function warn(...) end
 ---@param ... any
 ---@return boolean, any ...
 function xpcall(f, msgh, ...) end
+
+---Performs a full garbage-collection cycle.
+---@param opt? "collect"|"stop"|"restart"|"count"|"step"|"setpause"|"setstepmul"|"isrunning"|"generational"|"incremental"
+---@param arg? any
+---@return any
+function collectgarbage(opt, arg) end
+
+---Opens the named file and executes its contents as a Lua chunk.
+---When called without arguments, executes the contents of standard input.
+---@param filename? string
+---@return any ...
+function dofile(filename) end
+
+---Loads a file as a Lua chunk without executing it.
+---@param filename string
+---@param mode? "b"|"t"|"bt"
+---@param env? table
+---@return function|nil, string?
+function loadfile(filename, mode, env) end
+
+---Checks whether v1 is equal to v2, without invoking the __eq metamethod.
+---Returns a boolean.
+---@param v1 any
+---@param v2 any
+---@return boolean
+function rawequal(v1, v2) end

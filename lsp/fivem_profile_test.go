@@ -168,8 +168,8 @@ shared_script 'shared.lua'
 	for _, doc := range []*Document{plainDoc, clientDoc, serverDoc, sharedDoc} {
 		assertResolvedGlobal(t, s, doc, "json")
 		assertResolvedGlobal(t, s, doc, "msgpack")
+		assertResolvedGlobal(t, s, doc, "collectgarbage")
 		assertUnresolvedGlobal(t, s, doc, "package")
-		assertUnresolvedGlobal(t, s, doc, "collectgarbage")
 	}
 
 	assertResolvedGlobal(t, s, plainDoc, "GlobalState")
