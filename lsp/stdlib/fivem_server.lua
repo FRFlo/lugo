@@ -1,9 +1,5 @@
 ---@meta
 
----The source player for the currently executing server event.
----@type integer|string
-source = nil
-
 ---Registers a server event and optionally installs a handler.
 ---@param eventName string
 ---@param handler? fun(...: any)

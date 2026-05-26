@@ -186,7 +186,7 @@ shared_script 'shared.lua'
 
 	assertResolvedGlobal(t, s, serverDoc, "TriggerClientEvent")
 	assertResolvedGlobal(t, s, serverDoc, "PerformHttpRequest")
-	assertResolvedGlobal(t, s, serverDoc, "source")
+	assertUnresolvedGlobal(t, s, serverDoc, "source")
 	assertUnresolvedGlobal(t, s, serverDoc, "TriggerServerEvent")
 
 	assertResolvedGlobal(t, s, sharedDoc, "GlobalState")

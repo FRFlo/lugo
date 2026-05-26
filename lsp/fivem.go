@@ -198,8 +198,6 @@ func (profile FiveMExecutionProfile) AllowsFiveMGlobal(name string) bool {
 	switch name {
 	case "exports":
 		return profile.AllowsExportBridge()
-	case "source":
-		return profile.Kind == FiveMProfileServer
 	default:
 		return false
 	}
@@ -1525,6 +1523,53 @@ func (s *Server) getFiveMExportBridgeProfile(doc *Document) FiveMExecutionProfil
 
 func (s *Server) isFiveMGlobalAvailable(doc *Document, name string) bool {
 	return s.getDocumentFiveMProfile(doc).AllowsFiveMGlobal(name)
+}
+
+func (s *Server) isFiveMServerEventSourceReference(doc *Document, refID ast.NodeID) bool {
+	if doc == nil || refID == ast.InvalidNode || int(refID) >= len(doc.Tree.Nodes) {
+		return false
+	}
+
+	profile := s.getDocumentFiveMProfile(doc)
+	if profile.Env() != EnvServer {
+		return false
+	}
+
+	refNode := doc.Tree.Nodes[refID]
+	if refNode.Kind != ast.KindIdent || refNode.Start >= refNode.End || refNode.End > uint32(len(doc.Source())) {
+		return false
+	}
+
+	if string(doc.Source()[refNode.Start:refNode.End]) != "source" {
+		return false
+	}
+
+	for _, event := range doc.FiveMEvents {
+		if event.Kind != FiveMEventAddHandler && event.Kind != FiveMEventRegisterNet {
+			continue
+		}
+
+		if event.HandlerID == ast.InvalidNode || int(event.HandlerID) >= len(doc.Tree.Nodes) {
+			continue
+		}
+
+		handler := doc.Tree.Nodes[event.HandlerID]
+		if handler.Kind != ast.KindFunctionExpr {
+			continue
+		}
+
+		for parentID := refNode.Parent; parentID != ast.InvalidNode; parentID = doc.Tree.Nodes[parentID].Parent {
+			if parentID == event.HandlerID {
+				return true
+			}
+		}
+
+		if refID == event.HandlerID {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (s *Server) hasFiveMExportBridge(doc *Document) bool {
