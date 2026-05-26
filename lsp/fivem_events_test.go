@@ -108,6 +108,24 @@ func TestFiveMEventDirection(t *testing.T) {
 	}
 }
 
+func TestFiveMServerEventSourceScope(t *testing.T) {
+	h := newFiveMFixtureHarness(t, "resource_events")
+	h.server.DiagFiveMEventDirection = false
+	h.server.DiagFiveMUnknownEvent = false
+	h.server.DiagFiveMUnregisteredNetEvent = false
+	h.server.DiagUndefinedGlobals = true
+
+	serverDiags := h.diagnostics("server.lua")
+	if got := countUndefinedSourceDiagnostics(serverDiags); got != 1 {
+		t.Fatalf("server.lua undefined source diagnostics = %d, want only top-level source diagnostic: %#v", got, serverDiags)
+	}
+
+	clientDiags := h.diagnostics("client.lua")
+	if got := countUndefinedSourceDiagnostics(clientDiags); got != 1 {
+		t.Fatalf("client.lua undefined source diagnostics = %d, want client handler source diagnostic: %#v", got, clientDiags)
+	}
+}
+
 func TestFiveMSharedFileEvents(t *testing.T) {
 	h := newFiveMFixtureHarness(t, "resource_events")
 
@@ -441,4 +459,15 @@ func hasLocationAtPosition(locations []Location, uri string, position Position) 
 	}
 
 	return false
+}
+
+func countUndefinedSourceDiagnostics(diags []Diagnostic) int {
+	var count int
+	for _, diag := range diags {
+		if diag.Code == "undefined-global" && strings.Contains(diag.Message, "'source'") {
+			count++
+		}
+	}
+
+	return count
 }

@@ -9,3 +9,7 @@ TriggerServerEvent("--[[@client_hover]]shared:requestSync")
 end)
 
 TriggerServerEvent("--[[@client_shared_hover]]shared:bidirectionalNet")
+
+AddEventHandler("client:implicitSource", function()
+	print(source)
+end)

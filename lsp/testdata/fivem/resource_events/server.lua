@@ -9,3 +9,13 @@ TriggerClientEvent("--[[@server_hover]]shared:syncData", -1, {ready = true})
 --[[@server_direction_error]]TriggerServerEvent("shared:requestSync")
 
 TriggerClientEvent("--[[@server_shared_hover]]shared:bidirectionalNet", -1)
+
+AddEventHandler("server:implicitSource", function()
+	print(source)
+end)
+
+RegisterServerEvent("server:registeredImplicitSource", function()
+	print(source)
+end)
+
+print(source)
