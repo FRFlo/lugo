@@ -960,6 +960,16 @@ func (s *Server) resolveSymbolAt(uri string, offset uint32) *SymbolContext {
 	return s.resolveSymbolNode(uri, doc, nodeID)
 }
 
+func appendUniqueHash(hashes []uint64, hash uint64) []uint64 {
+	for _, existing := range hashes {
+		if existing == hash {
+			return hashes
+		}
+	}
+
+	return append(hashes, hash)
+}
+
 func (s *Server) resolveSymbolNode(uri string, doc *Document, nodeID ast.NodeID) *SymbolContext {
 	if nodeID == ast.InvalidNode || int(nodeID) >= len(doc.Tree.Nodes) {
 		return nil
@@ -1188,17 +1198,50 @@ func (s *Server) resolveSymbolNode(uri string, doc *Document, nodeID ast.NodeID)
 		}
 
 		if !resolved {
-			if gSyms, ok := s.getGlobalSymbols(doc, gKey.ReceiverHash, gKey.PropHash); ok {
-				bestDefs := s.getBestDefsForContext(ctx, doc, nodeID, gSyms)
+			recHashes := []uint64{gKey.ReceiverHash}
 
-				ctx.GlobalDefs = bestDefs
-
-				if len(bestDefs) > 0 {
-					if gDoc, docOk := s.Documents[bestDefs[0].URI]; docOk {
-						ctx.TargetDoc = gDoc
-						ctx.TargetDefID = bestDefs[0].NodeID
-						ctx.TargetURI = bestDefs[0].URI
+			if isProp && parentID != ast.InvalidNode && int(parentID) < len(doc.Tree.Nodes) {
+				var recType TypeSet
+				if recDef != ast.InvalidNode {
+					recType = doc.InferType(recDef)
+				} else {
+					recID := doc.Tree.Nodes[parentID].Left
+					if recID != ast.InvalidNode {
+						recType = doc.InferType(recID)
 					}
+				}
+
+				if recType.CustomName != "" {
+					classHash := ast.HashBytes([]byte(recType.CustomName))
+					recHashes = appendUniqueHash(recHashes, classHash)
+
+					if s.TableAliases != nil {
+						if tableHash := s.TableAliases[classHash]; tableHash != 0 {
+							recHashes = appendUniqueHash(recHashes, tableHash)
+						}
+					}
+				}
+			}
+
+			for _, recHash := range recHashes {
+				if recHash == 0 && gKey.ReceiverHash != 0 {
+					continue
+				}
+
+				if gSyms, ok := s.getGlobalSymbols(doc, recHash, gKey.PropHash); ok {
+					bestDefs := s.getBestDefsForContext(ctx, doc, nodeID, gSyms)
+
+					ctx.GlobalDefs = bestDefs
+
+					if len(bestDefs) > 0 {
+						if gDoc, docOk := s.Documents[bestDefs[0].URI]; docOk {
+							ctx.TargetDoc = gDoc
+							ctx.TargetDefID = bestDefs[0].NodeID
+							ctx.TargetURI = bestDefs[0].URI
+						}
+					}
+
+					break
 				}
 			}
 		}
@@ -1846,6 +1889,52 @@ func (s *Server) setGlobalSymbol(key GlobalKey, uri string, nodeID ast.NodeID, n
 
 func (s *Server) removeDocumentGlobals(uri string) {
 	s.removeGlobalIndexDocumentSymbols(uri)
+	s.removeTableAliasesForDocument(uri)
+}
+
+func (s *Server) setTableAlias(uri string, typeHash, tablePathHash uint64) {
+	if s == nil || uri == "" || typeHash == 0 || tablePathHash == 0 {
+		return
+	}
+
+	if s.TableAliases == nil {
+		s.TableAliases = make(map[uint64]uint64)
+	}
+	if s.TableAliasSources == nil {
+		s.TableAliasSources = make(map[uint64]map[string]uint64)
+	}
+
+	sources := s.TableAliasSources[typeHash]
+	if sources == nil {
+		sources = make(map[string]uint64)
+		s.TableAliasSources[typeHash] = sources
+	}
+
+	sources[uri] = tablePathHash
+	s.TableAliases[typeHash] = tablePathHash
+}
+
+func (s *Server) removeTableAliasesForDocument(uri string) {
+	if s == nil || uri == "" || len(s.TableAliasSources) == 0 {
+		return
+	}
+
+	for typeHash, sources := range s.TableAliasSources {
+		delete(sources, uri)
+
+		if len(sources) == 0 {
+			delete(s.TableAliasSources, typeHash)
+			delete(s.TableAliases, typeHash)
+
+			continue
+		}
+
+		for _, tablePathHash := range sources {
+			s.TableAliases[typeHash] = tablePathHash
+
+			break
+		}
+	}
 }
 
 func (s *Server) removeGlobalIndexDocumentSymbols(uri string) {

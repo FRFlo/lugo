@@ -57,9 +57,11 @@ type Server struct {
 	symlinkCache       map[string]string
 
 	// Global Index
-	GlobalIndex      *GlobalIndex
-	KnownGlobals     map[string]bool
-	KnownGlobalGlobs []string
+	GlobalIndex       *GlobalIndex
+	TableAliases      map[uint64]uint64            // class hash → table receiver hash (from @type annotations)
+	TableAliasSources map[uint64]map[string]uint64 // class hash → source URI → table receiver hash
+	KnownGlobals      map[string]bool
+	KnownGlobalGlobs  []string
 
 	// Feature Toggles
 	IsIndexing               bool
@@ -188,7 +190,9 @@ func NewServer(version string) *Server {
 		uriCache:           make(map[string]string, 1024),
 
 		// Global Index
-		GlobalIndex: NewGlobalIndex(),
+		GlobalIndex:       NewGlobalIndex(),
+		TableAliases:      make(map[uint64]uint64),
+		TableAliasSources: make(map[uint64]map[string]uint64),
 
 		// Shared Buffers
 		sharedParser:     parser.New(nil, ast.NewTree(nil), 50),
