@@ -76,3 +76,13 @@ func WriteMessage(w io.Writer, msg any) error {
 
 	return nil
 }
+
+// WriteNotification sends a JSON-RPC notification (no ID) to an io.Writer.
+// Notifications do not expect a response from the client.
+func WriteNotification(w io.Writer, method string, params any) error {
+	return WriteMessage(w, OutgoingNotification{
+		RPC:    "2.0",
+		Method: method,
+		Params: params,
+	})
+}
