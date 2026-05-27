@@ -757,6 +757,11 @@ func (s *Server) handleCompletion(req Request) {
 
 		addFiveMEventCompletions()
 
+		// Attach Data to enable completionItem/resolve.
+		for i := range items {
+			items[i].Data = map[string]any{"uri": uri}
+		}
+
 		WriteMessage(s.Writer, Response{
 			RPC: "2.0",
 			ID:  req.ID,
@@ -856,20 +861,25 @@ func (s *Server) handleCompletion(req Request) {
 					if doc.Tree.Nodes[pNode.Left].Kind == ast.KindIdent {
 						identName := doc.Source()[doc.Tree.Nodes[pNode.Left].Start:doc.Tree.Nodes[pNode.Left].End]
 						if bytes.Equal(identName, []byte("exports")) && doc.referenceAt(pNode.Left) == ast.InvalidNode {
-							for _, name := range s.getFiveMResourceNames() {
-								addCompletion(name, FieldCompletion, "resource", false, "1", name, PlainTextTextFormat)
-							}
+						for _, name := range s.getFiveMResourceNames() {
+							addCompletion(name, FieldCompletion, "resource", false, "1", name, PlainTextTextFormat)
+						}
 
-							WriteMessage(s.Writer, Response{
-								RPC: "2.0",
-								ID:  req.ID,
-								Result: CompletionList{
-									IsIncomplete: false,
-									Items:        items,
-								},
-							})
+						// Attach Data to enable completionItem/resolve.
+						for i := range items {
+							items[i].Data = map[string]any{"uri": uri}
+						}
 
-							return
+						WriteMessage(s.Writer, Response{
+							RPC: "2.0",
+							ID:  req.ID,
+							Result: CompletionList{
+								IsIncomplete: false,
+								Items:        items,
+							},
+						})
+
+						return
 						}
 					}
 				}
@@ -1478,6 +1488,11 @@ func (s *Server) handleCompletion(req Request) {
 		}
 	}
 
+	// Attach Data to enable completionItem/resolve.
+	for i := range items {
+		items[i].Data = map[string]any{"uri": uri}
+	}
+
 	WriteMessage(s.Writer, Response{
 		RPC: "2.0",
 		ID:  req.ID,
@@ -1486,6 +1501,69 @@ func (s *Server) handleCompletion(req Request) {
 			Items:        items,
 		},
 	})
+}
+
+// handleCompletionResolve resolves additional information for a completion item
+// that was not populated during the initial completion request.
+func (s *Server) handleCompletionResolve(req Request) {
+	var item CompletionItem
+
+	if err := json.Unmarshal(req.Params, &item); err != nil {
+		return
+	}
+
+	// If item carries Data with uri, look up the symbol and resolve documentation.
+	if data, ok := item.Data.(map[string]any); ok {
+		uri, _ := data["uri"].(string)
+
+		if uri != "" && item.Documentation == nil {
+			doc, ok := s.Documents[uri]
+			if !ok {
+				WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: item})
+
+				return
+			}
+
+			// Find the definition matching this label in the document.
+			defID := findDefinitionByLabel(doc, item.Label)
+			if defID != ast.InvalidNode {
+				luadoc := doc.GetLuaDoc(defID)
+				if luadoc != nil && luadoc.Description != "" {
+					item.Documentation = &MarkupContent{
+						Kind:  "markdown",
+						Value: luadoc.Description,
+					}
+				}
+			}
+		}
+	}
+
+	WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: item})
+}
+
+// findDefinitionByLabel scans the document for an identifier matching label that is
+// a definition (referenceAt returns itself). Used by completionItem/resolve.
+func findDefinitionByLabel(doc *Document, label string) ast.NodeID {
+	target := []byte(label)
+
+	for i := ast.NodeID(1); i < ast.NodeID(len(doc.Tree.Nodes)); i++ {
+		node := doc.Tree.Nodes[i]
+		if node.Kind != ast.KindIdent {
+			continue
+		}
+
+		idBytes := doc.Source()[node.Start:node.End]
+		if !bytes.Equal(idBytes, target) {
+			continue
+		}
+
+		// Check if this node is a definition (referenceAt returns itself).
+		if doc.referenceAt(i) == i {
+			return i
+		}
+	}
+
+	return ast.InvalidNode
 }
 
 func (s *Server) handleSignatureHelp(req Request) {
@@ -2096,6 +2174,20 @@ func (s *Server) handleInlayHint(req Request) {
 	})
 }
 
+// handleInlayHintResolve resolves additional information for an inlay hint
+// that was deferred during the initial request. Currently pass-through;
+// future: resolve tooltips lazily for expensive type computations.
+func (s *Server) handleInlayHintResolve(req Request) {
+	var hint InlayHint
+
+	if err := json.Unmarshal(req.Params, &hint); err != nil {
+		return
+	}
+
+	// Future: if hint.Data contains context info, resolve tooltip from type info.
+	WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: hint})
+}
+
 func (s *Server) handleDocumentHighlight(req Request) {
 	var params DocumentHighlightParams
 
@@ -2187,6 +2279,233 @@ func (s *Server) handleSemanticTokensFull(req Request) {
 
 	for i := 1; i < len(doc.Tree.Nodes); i++ {
 		node := doc.Tree.Nodes[i]
+
+		var (
+			tokenType uint32 = 0xFFFFFFFF
+			modifiers uint32 = 0
+		)
+
+		switch node.Kind {
+		case ast.KindNumber:
+			tokenType = 6
+		case ast.KindString:
+			tokenType = 7
+		case ast.KindHashedString:
+			tokenType = 9
+		case ast.KindTrue, ast.KindFalse, ast.KindNil:
+			tokenType = 8
+		case ast.KindIdent:
+			tokenType = 0
+
+			identBytes := doc.Source()[node.Start:node.End]
+
+			defID := doc.referenceAt(ast.NodeID(i))
+			isDecl := ast.NodeID(i) == defID
+
+			if isDecl {
+				modifiers |= 1 << 0 // declaration
+			}
+
+			if defID == ast.InvalidNode {
+
+				if s.isKnownGlobal(doc, identBytes) || (bytes.Equal(identBytes, []byte("source")) && s.isFiveMServerEventSourceReference(doc, ast.NodeID(i))) {
+					modifiers |= 1 << 3 // defaultLibrary
+				}
+			} else {
+				pNode := doc.Tree.Nodes[defID]
+				if pNode.Parent != ast.InvalidNode {
+					parentOfDef := doc.Tree.Nodes[pNode.Parent]
+					if parentOfDef.Kind == ast.KindFunctionExpr || parentOfDef.Kind == ast.KindFunctionStmt {
+						if parentOfDef.Left != defID && parentOfDef.Right != defID {
+							tokenType = 2 // parameter
+						}
+					}
+				}
+
+				if ast.Attr(doc.Tree.Nodes[defID].Extra) != ast.AttrNone {
+					parentOfDef := doc.Tree.Nodes[doc.Tree.Nodes[defID].Parent]
+					if parentOfDef.Kind == ast.KindNameList {
+						modifiers |= 1 << 1 // readonly
+					}
+				}
+			}
+
+			parentID := node.Parent
+			if parentID != ast.InvalidNode {
+				pNode := doc.Tree.Nodes[parentID]
+
+				if pNode.Kind == ast.KindMemberExpr && pNode.Right == ast.NodeID(i) {
+					tokenType = 1 // property
+				} else if pNode.Kind == ast.KindMethodCall && pNode.Right == ast.NodeID(i) {
+					tokenType = 4 // method
+				} else if pNode.Kind == ast.KindMethodName && pNode.Right == ast.NodeID(i) {
+					tokenType = 4 // method
+				} else if pNode.Kind == ast.KindRecordField && pNode.Left == ast.NodeID(i) {
+					tokenType = 1 // property
+				}
+			}
+
+			if tokenType == 0 || tokenType == 1 {
+				targetDoc := doc
+				targetDef := defID
+
+				if defID == ast.InvalidNode {
+					hash := ast.HashBytes(identBytes)
+					recHash := uint64(0)
+					identName := ast.String(identBytes)
+
+					if tokenType == 1 && parentID != ast.InvalidNode {
+						pNode := doc.Tree.Nodes[parentID]
+						recID := pNode.Left
+						recBytes := doc.Source()[doc.Tree.Nodes[recID].Start:doc.Tree.Nodes[recID].End]
+						recHash = ast.HashBytes(recBytes)
+					}
+
+					if syms, ok := s.getGlobalSymbols(doc, recHash, hash); ok && len(syms) > 0 {
+						sym := syms[0]
+						if gDoc, ok := s.Documents[sym.URI]; ok {
+							targetDoc = gDoc
+							targetDef = sym.NodeID
+						}
+					} else if tokenType == 1 && parentID != ast.InvalidNode {
+						if resObj, _ := s.resolveFiveMExportResource(doc, doc.Tree.Nodes[parentID].Left); resObj != nil {
+							defs, isExported := s.getFiveMResourceExportDefinitions(resObj, identName)
+							if isExported && len(defs) > 0 {
+								if gDoc, ok := s.Documents[defs[0].URI]; ok {
+									targetDoc = gDoc
+									targetDef = defs[0].NodeID
+								}
+							}
+						}
+					}
+				}
+
+				if targetDef != ast.InvalidNode {
+					valID := targetDoc.getAssignedValue(targetDef)
+					if valID != ast.InvalidNode {
+						vNode := targetDoc.Tree.Nodes[valID]
+						switch vNode.Kind {
+						case ast.KindFunctionExpr:
+							if tokenType == 1 {
+								tokenType = 4 // method
+							} else {
+								tokenType = 3 // function
+							}
+						case ast.KindTableExpr:
+							tokenType = 5 // class
+						}
+					} else {
+						parentID := targetDoc.Tree.Nodes[targetDef].Parent
+						if parentID != ast.InvalidNode {
+							parentNode := targetDoc.Tree.Nodes[parentID]
+							if parentNode.Kind == ast.KindFunctionStmt || parentNode.Kind == ast.KindLocalFunction {
+								if tokenType == 1 {
+									tokenType = 4 // method
+								} else {
+									tokenType = 3 // function
+								}
+							}
+						}
+					}
+				}
+			}
+
+			if defID != ast.InvalidNode {
+				isDep, _ := doc.HasDeprecatedTag(defID)
+				if isDep {
+					modifiers |= 1 << 2 // deprecated
+				}
+			}
+		}
+
+		if tokenType == 0xFFFFFFFF {
+			continue
+		}
+
+		s.semTokensBuf = append(s.semTokensBuf, SemanticToken{
+			Start:     node.Start,
+			End:       node.End,
+			TokenType: tokenType,
+			Modifiers: modifiers,
+		})
+	}
+
+	slices.SortFunc(s.semTokensBuf, func(a, b SemanticToken) int {
+		return cmp.Compare(a.Start, b.Start)
+	})
+
+	s.semDataBuf = s.semDataBuf[:0]
+
+	var (
+		prevLine uint32
+		prevCol  uint32
+		lineIdx  uint32
+	)
+
+	lineOffsets := doc.Tree.LineOffsets
+	numLines := uint32(len(lineOffsets))
+
+	for _, t := range s.semTokensBuf {
+		for lineIdx+1 < numLines && lineOffsets[lineIdx+1] <= t.Start {
+			lineIdx++
+		}
+
+		line := lineIdx
+		col := t.Start - lineOffsets[lineIdx]
+
+		length := t.End - t.Start
+
+		deltaLine := line - prevLine
+		deltaCol := col
+
+		if deltaLine == 0 {
+			deltaCol = col - prevCol
+		}
+
+		s.semDataBuf = append(s.semDataBuf, deltaLine, deltaCol, length, t.TokenType, t.Modifiers)
+
+		prevLine = line
+		prevCol = col
+	}
+
+	WriteMessage(s.Writer, Response{
+		RPC: "2.0",
+		ID:  req.ID,
+		Result: SemanticTokens{
+			Data: s.semDataBuf,
+		},
+	})
+}
+
+// handleSemanticTokensRange provides semantic tokens scoped to a range.
+func (s *Server) handleSemanticTokensRange(req Request) {
+	var params SemanticTokensRangeParams
+
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		return
+	}
+
+	uri := s.normalizeURI(params.TextDocument.URI)
+
+	doc, ok := s.Documents[uri]
+	if !ok {
+		WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: nil})
+
+		return
+	}
+
+	rangeStart := doc.Tree.Offset(params.Range.Start.Line, params.Range.Start.Character)
+	rangeEnd := doc.Tree.Offset(params.Range.End.Line, params.Range.End.Character)
+
+	s.semTokensBuf = s.semTokensBuf[:0]
+
+	for i := 1; i < len(doc.Tree.Nodes); i++ {
+		node := doc.Tree.Nodes[i]
+
+		// Skip nodes entirely outside the requested range.
+		if node.End <= rangeStart || node.Start >= rangeEnd {
+			continue
+		}
 
 		var (
 			tokenType uint32 = 0xFFFFFFFF
@@ -2596,11 +2915,6 @@ func (s *Server) handleCodeLens(req Request) {
 		}
 		lens := CodeLens{
 			Range: eventRange,
-			Command: &Command{
-				Title:     fmt.Sprintf("%d references", count),
-				Command:   "lugo.showReferences",
-				Arguments: []any{uri, eventRange.Start, locations},
-			},
 			Data: map[string]any{
 				"uri":    uri,
 				"nodeId": float64(ev.NodeID),
@@ -2649,7 +2963,7 @@ func (s *Server) handleCodeLensResolve(req Request) {
 	if len(locations) == 0 {
 		ctx := s.resolveSymbolAt(uri, identNode.Start)
 		if ctx == nil {
-			codeLens.Command = new(Command{Title: "0 references", Command: ""})
+			codeLens.Command = nil
 
 			WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: codeLens})
 
@@ -2668,24 +2982,111 @@ func (s *Server) handleCodeLensResolve(req Request) {
 	} else {
 		title = fmt.Sprintf("%d references", count)
 	}
+	_ = title
 
-	var (
-		cmd  string
-		args []any
-	)
-
-	if count > 0 {
-		cmd = "lugo.showReferences"
-		args = []any{uri, codeLens.Range.Start, locations}
-	}
-
-	codeLens.Command = new(Command{
-		Title:     title,
-		Command:   cmd,
-		Arguments: args,
-	})
+	// CodeLens shows reference count as informational only.
+	// Clients use standard textDocument/references for navigation.
+	codeLens.Command = nil
 
 	WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: codeLens})
+}
+
+// handleDocumentLink returns links for require(), dofile(), and loadfile() calls.
+func (s *Server) handleDocumentLink(req Request) {
+	var params DocumentLinkParams
+
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		return
+	}
+
+	uri := s.normalizeURI(params.TextDocument.URI)
+
+	doc, ok := s.Documents[uri]
+	if !ok {
+		WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: nil})
+
+		return
+	}
+
+	if doc.Tree == nil {
+		WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: nil})
+
+		return
+	}
+
+	var links []DocumentLink
+
+	for id := range doc.Tree.Nodes {
+		node := &doc.Tree.Nodes[id]
+		if node.Kind != ast.KindCallExpr {
+			continue
+		}
+
+		funcNode := &doc.Tree.Nodes[node.Left]
+		if funcNode.Kind != ast.KindIdent {
+			continue
+		}
+
+		funcName := doc.Source()[funcNode.Start:funcNode.End]
+		if !bytes.Equal(funcName, []byte("require")) &&
+			!bytes.Equal(funcName, []byte("dofile")) &&
+			!bytes.Equal(funcName, []byte("loadfile")) {
+			continue
+		}
+
+		if node.Extra == 0 || int(node.Extra) >= len(doc.Tree.ExtraList) {
+			continue
+		}
+
+		argID := doc.Tree.ExtraList[node.Extra]
+		res, ok := doc.evalNode(argID, 0)
+		if !ok || res.kind != ast.KindString {
+			continue
+		}
+
+		startLine, startCol := doc.Tree.Position(funcNode.Start)
+		endLine, endCol := doc.Tree.Position(funcNode.End)
+
+		// Resolve the module path relative to the document's directory,
+		// falling back to workspace root.
+		basePath := s.uriToPath(uri)
+		if basePath == "" {
+			basePath = s.lowerRootPath
+		}
+
+		documentDir := filepath.Dir(basePath)
+
+		// Try .lua extension if not already present.
+		resolvedPath := filepath.Join(documentDir, res.str)
+		if filepath.Ext(resolvedPath) == "" {
+			resolvedPath += ".lua"
+		}
+
+		targetURI := s.pathToURI(resolvedPath)
+
+		links = append(links, DocumentLink{
+			Range: Range{
+				Start: Position{Line: startLine, Character: startCol},
+				End:   Position{Line: endLine, Character: endCol},
+			},
+			Target:  targetURI,
+			Tooltip: string(funcName) + "(\"" + res.str + "\")",
+		})
+	}
+
+	WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: links})
+}
+
+// handleDocumentLinkResolve resolves additional information for a document link.
+// Since paths are already resolved eagerly in handleDocumentLink, this is a pass-through.
+func (s *Server) handleDocumentLinkResolve(req Request) {
+	var link DocumentLink
+
+	if err := json.Unmarshal(req.Params, &link); err != nil {
+		return
+	}
+
+	WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: link})
 }
 
 func (s *Server) handlePrepareCallHierarchy(req Request) {

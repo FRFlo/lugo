@@ -354,7 +354,7 @@ func TestFiveMEventCodeLens(t *testing.T) {
 	_ = newFiveMFixtureHarness(t, "resource_events")
 }
 
-func TestFiveMEventCodeLensReferencesCommand(t *testing.T) {
+func TestFiveMEventCodeLensReferenceCount(t *testing.T) {
 	h := newFiveMFixtureHarness(t, "resource_events")
 
 	assertEventLens := func(relPath, markerName string) {
@@ -363,7 +363,7 @@ func TestFiveMEventCodeLensReferencesCommand(t *testing.T) {
 		marker := h.requireMarker(markerName)
 		var lens *CodeLens
 		for _, candidate := range h.codeLenses(relPath) {
-			if candidate.Command != nil && candidate.Command.Command == "lugo.showReferences" && rangeContainsPosition(candidate.Range, marker.Position) {
+			if rangeContainsPosition(candidate.Range, marker.Position) && candidate.Data != nil {
 				candidate := candidate
 				lens = &candidate
 				break
@@ -373,48 +373,26 @@ func TestFiveMEventCodeLensReferencesCommand(t *testing.T) {
 			t.Fatalf("code lens for %s not found in %s", markerName, relPath)
 		}
 
-		if lens.Command == nil || lens.Command.Command != "lugo.showReferences" {
-			t.Fatalf("code lens for %s = %+v, want showReferences command", markerName, lens)
+		// CodeLens is informational-only (no command) for cross-client compatibility.
+		// Clients use standard textDocument/references for navigation.
+		if lens.Command != nil {
+			t.Fatalf("code lens for %s has unexpected command: %+v", markerName, lens.Command)
 		}
-		if len(lens.Command.Arguments) != 3 {
-			t.Fatalf("code lens arguments for %s = %#v, want uri + position + locations", markerName, lens.Command.Arguments)
+		data, ok := lens.Data.(map[string]any)
+		if !ok {
+			t.Fatalf("code lens data for %s = %+v, want map", markerName, lens.Data)
+		}
+		if _, ok := data["uri"]; !ok {
+			t.Fatalf("code lens data for %s missing uri", markerName)
+		}
+		if _, ok := data["nodeId"]; !ok {
+			t.Fatalf("code lens data for %s missing nodeId", markerName)
 		}
 
 		resolved := h.resolveCodeLens(*lens)
-		if resolved.Command == nil || resolved.Command.Command != "lugo.showReferences" {
-			t.Fatalf("resolved code lens for %s = %+v, want showReferences command", markerName, resolved)
-		}
-		if len(resolved.Command.Arguments) != 3 {
-			t.Fatalf("resolved code lens arguments for %s = %#v, want uri + position + locations", markerName, resolved.Command.Arguments)
-		}
-
-		positionArg, ok := resolved.Command.Arguments[1].(map[string]any)
-		if !ok {
-			t.Fatalf("resolved code lens position argument for %s = %#v, want object", markerName, resolved.Command.Arguments[1])
-		}
-		if _, ok := positionArg["line"].(float64); !ok {
-			t.Fatalf("resolved code lens position for %s missing line: %#v", markerName, positionArg)
-		}
-
-		locationsArg, ok := resolved.Command.Arguments[2].([]any)
-		if !ok || len(locationsArg) == 0 {
-			t.Fatalf("resolved code lens locations for %s = %#v, want non-empty array", markerName, resolved.Command.Arguments[2])
-		}
-
-		firstLoc, ok := locationsArg[0].(map[string]any)
-		if !ok {
-			t.Fatalf("resolved first location for %s = %#v, want object", markerName, locationsArg[0])
-		}
-		rangeArg, ok := firstLoc["range"].(map[string]any)
-		if !ok {
-			t.Fatalf("resolved location range for %s = %#v, want object", markerName, firstLoc)
-		}
-		startArg, ok := rangeArg["start"].(map[string]any)
-		if !ok {
-			t.Fatalf("resolved location start for %s = %#v, want object", markerName, rangeArg)
-		}
-		if _, ok := startArg["line"].(float64); !ok {
-			t.Fatalf("resolved location start for %s missing line: %#v", markerName, startArg)
+		// Resolved CodeLens is also informational-only
+		if resolved.Command != nil {
+			t.Fatalf("resolved code lens for %s has unexpected command: %+v", markerName, resolved.Command)
 		}
 	}
 

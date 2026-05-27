@@ -34,13 +34,16 @@ type Server struct {
 	lowerWorkspaceFolders []string
 
 	// Config
-	LibraryPaths      []string
-	lowerLibraryPaths []string
-	IgnoreGlobs       []string
-	compiledIgnores   []IgnorePattern
-	BannedSymbols     map[string]string
-	MaxParseErrors    int
-	MaxFileSize       int64
+	LibraryPaths           []string
+	lowerLibraryPaths      []string
+	IgnoreGlobs            []string
+	compiledIgnores        []IgnorePattern
+	BannedSymbols          map[string]string
+	MaxParseErrors         int
+	MaxFileSize            int64
+	positionEncoding       string
+	snippetSupport         bool
+	workspaceFolderSupport bool
 
 	// Transport & Logging
 	Reader *bufio.Reader
@@ -204,8 +207,10 @@ func NewServer(version string) *Server {
 		sharedDepBuf:     make([]byte, 0, 128),
 
 		// Configuration Defaults
-		MaxParseErrors: DefaultMaxParserErrors,
-		MaxFileSize:    DefaultMaxFileSize,
+		MaxParseErrors:   DefaultMaxParserErrors,
+		MaxFileSize:      DefaultMaxFileSize,
+		positionEncoding: "utf-16",
+		snippetSupport:   true,
 	}
 }
 
@@ -422,6 +427,8 @@ func (s *Server) handleMessage(req Request) {
 	// Lifecycle
 	case "initialize":
 		s.handleInitialize(req)
+	case "initialized":
+		s.handleInitialized(req)
 	case "shutdown":
 		s.handleShutdown(req)
 	case "exit":
@@ -432,6 +439,13 @@ func (s *Server) handleMessage(req Request) {
 		s.handleDidChangeConfiguration(req)
 	case "workspace/didChangeWatchedFiles":
 		s.handleDidChangeWatchedFiles(req)
+	case "workspace/didChangeWorkspaceFolders":
+		s.handleDidChangeWorkspaceFolders(req)
+	case "workspace/willRenameFiles":
+		s.handleWillRenameFiles(req)
+	case "$/cancelRequest":
+		// Cancel is a no-op for single-threaded servers;
+		// the client may still send it per LSP spec.
 	case "textDocument/didOpen":
 		s.handleDidOpen(req)
 	case "textDocument/didChange":
@@ -446,6 +460,10 @@ func (s *Server) handleMessage(req Request) {
 	// Symbols & Navigation
 	case "textDocument/definition":
 		s.handleDefinition(req)
+	case "textDocument/typeDefinition":
+		s.handleTypeDefinition(req)
+	case "textDocument/implementation":
+		s.handleImplementation(req)
 	case "textDocument/references":
 		s.handleReferences(req)
 	case "textDocument/documentSymbol":
@@ -492,6 +510,16 @@ func (s *Server) handleMessage(req Request) {
 		s.handleCodeLens(req)
 	case "codeLens/resolve":
 		s.handleCodeLensResolve(req)
+	case "completionItem/resolve":
+		s.handleCompletionResolve(req)
+	case "inlayHint/resolve":
+		s.handleInlayHintResolve(req)
+	case "textDocument/semanticTokens/range":
+		s.handleSemanticTokensRange(req)
+	case "textDocument/documentLink":
+		s.handleDocumentLink(req)
+	case "documentLink/resolve":
+		s.handleDocumentLinkResolve(req)
 	case "textDocument/prepareCallHierarchy":
 		s.handlePrepareCallHierarchy(req)
 	case "callHierarchy/incomingCalls":
@@ -506,6 +534,8 @@ func (s *Server) handleInitialize(req Request) {
 
 	err := json.Unmarshal(req.Params, &params)
 	if err == nil {
+		s.applyClientCapabilities(params.Capabilities)
+
 		if len(params.WorkspaceFolders) > 0 {
 			for _, folder := range params.WorkspaceFolders {
 				uri := s.normalizeURI(folder.URI)
@@ -525,6 +555,9 @@ func (s *Server) handleInitialize(req Request) {
 		}
 
 		s.applyInitializationOptions(params.InitializationOptions)
+		if !s.snippetSupport {
+			s.SuggestFunctionParams = false
+		}
 	}
 
 	result := InitializeResult{
@@ -538,13 +571,19 @@ func (s *Server) handleInitialize(req Request) {
 			ReferencesProvider:              true,
 			DocumentSymbolProvider:          true,
 			WorkspaceSymbolProvider:         true,
-			InlayHintProvider:               true,
+			InlayHintProvider: &InlayHintOptions{
+				ResolveProvider: true,
+			},
 			FoldingRangeProvider:            true,
 			SelectionRangeProvider:          true,
 			CallHierarchyProvider:           true,
 			DocumentHighlightProvider:       true,
 			DocumentFormattingProvider:      true,
 			DocumentRangeFormattingProvider: true,
+			TypeDefinitionProvider:          true,
+			ImplementationProvider:          true,
+			PositionEncoding:                s.positionEncoding,
+			OffsetEncoding:                  []string{s.positionEncoding},
 			CodeActionProvider: map[string]any{
 				"codeActionKinds": []string{"quickfix", "refactor.rewrite"},
 				"resolveProvider": true,
@@ -557,17 +596,40 @@ func (s *Server) handleInitialize(req Request) {
 			},
 			CompletionProvider: &CompletionOptions{
 				TriggerCharacters: []string{".", ":"},
+				ResolveProvider:   true,
 			},
 			SemanticTokensProvider: &SemanticTokensOptions{
 				Legend: SemanticTokensLegend{
 					TokenTypes:     []string{"variable", "property", "parameter", "function", "method", "class", "number", "string", "keyword", "regexp"},
 					TokenModifiers: []string{"declaration", "readonly", "deprecated", "defaultLibrary"},
 				},
-				Full: true,
+				Full:  true,
+				Range: true,
+			},
+			DocumentLinkProvider: &DocumentLinkOptions{
+				ResolveProvider: true,
 			},
 			ExecuteCommandProvider: &ExecuteCommandOptions{
 				Commands: []string{"lugo.applySafeFixes"},
 			},
+			Workspace: &WorkspaceServerCapabilities{
+				FileOperations: &WorkspaceFileOperationsServerCapabilities{
+					WillRename: &FileOperationRegistrationOptions{
+						Filters: []FileOperationFilter{
+							{
+								Scheme: "file",
+								Pattern: FileOperationPattern{
+									Glob: "**/*.lua",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		ServerInfo: &ServerInfo{
+			Name:    "lugo",
+			Version: s.Version,
 		},
 	}
 
@@ -575,6 +637,270 @@ func (s *Server) handleInitialize(req Request) {
 	if err != nil {
 		s.Log.Errorf("WriteMessage error: %v\n", err)
 	}
+}
+
+func (s *Server) applyClientCapabilities(caps *ClientCapabilities) {
+	s.positionEncoding = "utf-16"
+	s.snippetSupport = true
+	s.workspaceFolderSupport = false
+
+	if caps == nil {
+		return
+	}
+
+	if caps.General != nil {
+		for _, enc := range caps.General.PositionEncodings {
+			if enc == "utf-8" {
+				s.positionEncoding = "utf-8"
+				break
+			}
+
+			if enc == "utf-16" {
+				s.positionEncoding = "utf-16"
+			}
+		}
+	}
+
+	s.snippetSupport = false
+	if caps.TextDocument != nil && caps.TextDocument.Completion != nil && caps.TextDocument.Completion.CompletionItem != nil {
+		s.snippetSupport = caps.TextDocument.Completion.CompletionItem.SnippetSupport
+	}
+
+	if caps.Workspace != nil {
+		s.workspaceFolderSupport = caps.Workspace.WorkspaceFolders
+	}
+}
+
+func (s *Server) handleInitialized(req Request) {
+	_ = req
+
+	s.IsIndexing = false
+	s.refreshWorkspace()
+	s.sendShowMessage(3, "Lugo LSP "+s.Version+" ready.")
+}
+
+func (s *Server) handleDidChangeWorkspaceFolders(req Request) {
+	var params DidChangeWorkspaceFoldersParams
+
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		s.Log.Errorf("Failed to unmarshal workspace/didChangeWorkspaceFolders params: %v\n", err)
+
+		return
+	}
+
+	if len(params.Event.Removed) > 0 {
+		removed := make(map[string]bool, len(params.Event.Removed))
+		for _, folder := range params.Event.Removed {
+			removed[s.normalizeURI(folder.URI)] = true
+		}
+
+		workspaceFolders := s.WorkspaceFolders[:0]
+		lowerWorkspaceFolders := s.lowerWorkspaceFolders[:0]
+		for i, uri := range s.WorkspaceFolders {
+			if removed[uri] {
+				continue
+			}
+
+			workspaceFolders = append(workspaceFolders, uri)
+			lowerWorkspaceFolders = append(lowerWorkspaceFolders, s.lowerWorkspaceFolders[i])
+		}
+
+		s.WorkspaceFolders = workspaceFolders
+		s.lowerWorkspaceFolders = lowerWorkspaceFolders
+	}
+
+	for _, folder := range params.Event.Added {
+		uri := s.normalizeURI(folder.URI)
+		if uri == "" {
+			continue
+		}
+
+		if slices.Contains(s.WorkspaceFolders, uri) {
+			continue
+		}
+
+		s.WorkspaceFolders = append(s.WorkspaceFolders, uri)
+		s.lowerWorkspaceFolders = append(s.lowerWorkspaceFolders, strings.ToLower(s.uriToPath(uri)))
+	}
+
+	if len(s.WorkspaceFolders) > 0 {
+		s.RootURI = s.WorkspaceFolders[0]
+		s.lowerRootPath = s.lowerWorkspaceFolders[0]
+	} else {
+		s.RootURI = ""
+		s.lowerRootPath = ""
+	}
+
+	s.refreshWorkspace()
+}
+
+func (s *Server) handleWillRenameFiles(req Request) {
+	var params WillRenameFilesParams
+
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		s.Log.Errorf("Failed to unmarshal workspace/willRenameFiles params: %v\n", err)
+
+		return
+	}
+
+	edit := s.computeRequirePathUpdates(params.Files)
+
+	WriteMessage(s.Writer, Response{
+		RPC:    "2.0",
+		ID:     req.ID,
+		Result: edit,
+	})
+}
+
+// computeRequirePathUpdates scans all open documents for require()/dofile()/loadfile()
+// calls referencing old paths and returns a WorkspaceEdit to update them.
+func (s *Server) computeRequirePathUpdates(renames []FileRename) WorkspaceEdit {
+	changes := make(map[string][]TextEdit)
+
+	// Build a map from old base name to new relative path for quick lookup.
+	type renameMapping struct {
+		oldURI string
+		newURI string
+	}
+
+	mappings := make([]renameMapping, 0, len(renames))
+	for _, r := range renames {
+		if r.OldURI == r.NewURI {
+			continue
+		}
+
+		r.OldURI = s.normalizeURI(r.OldURI)
+		r.NewURI = s.normalizeURI(r.NewURI)
+
+		mappings = append(mappings, renameMapping{oldURI: r.OldURI, newURI: r.NewURI})
+	}
+
+	if len(mappings) == 0 {
+		return WorkspaceEdit{Changes: changes}
+	}
+
+	// Compute old/new paths to build string replacements.
+	type pathMapping struct {
+		oldPath string
+		newPath string
+	}
+
+	pathMappings := make([]pathMapping, 0, len(mappings))
+	for _, m := range mappings {
+		oldPath := s.uriToPath(m.oldURI)
+		newPath := s.uriToPath(m.newURI)
+		if oldPath == "" || newPath == "" {
+			continue
+		}
+
+		pathMappings = append(pathMappings, pathMapping{oldPath: oldPath, newPath: newPath})
+	}
+
+	if len(pathMappings) == 0 {
+		return WorkspaceEdit{Changes: changes}
+	}
+
+	for uri, doc := range s.Documents {
+		if doc.Tree == nil {
+			continue
+		}
+
+		var edits []TextEdit
+
+		for id := ast.NodeID(1); id < ast.NodeID(len(doc.Tree.Nodes)); id++ {
+			node := &doc.Tree.Nodes[id]
+			if node.Kind != ast.KindCallExpr {
+				continue
+			}
+
+			funcNode := &doc.Tree.Nodes[node.Left]
+			if funcNode.Kind != ast.KindIdent {
+				continue
+			}
+
+			funcName := doc.Source()[funcNode.Start:funcNode.End]
+			if !bytes.Equal(funcName, []byte("require")) &&
+				!bytes.Equal(funcName, []byte("dofile")) &&
+				!bytes.Equal(funcName, []byte("loadfile")) {
+				continue
+			}
+
+			if node.Extra == 0 || int(node.Extra) >= len(doc.Tree.ExtraList) {
+				continue
+			}
+
+			argID := doc.Tree.ExtraList[node.Extra]
+			res, ok := doc.evalNode(argID, 0)
+			if !ok || res.kind != ast.KindString {
+				continue
+			}
+
+			currentPath := res.str
+
+			// Resolve the current path relative to document's directory.
+			basePath := s.uriToPath(uri)
+			documentDir := filepath.Dir(basePath)
+
+			resolvedPath := filepath.Join(documentDir, currentPath)
+			if filepath.Ext(resolvedPath) == "" {
+				resolvedPath += ".lua"
+			}
+
+			// Check if this resolved path matches any renamed file.
+			var matchedNewPath string
+			for _, pm := range pathMappings {
+				if resolvedPath == pm.oldPath {
+					// Compute the new relative path from the document's directory.
+					rel, err := filepath.Rel(documentDir, pm.newPath)
+					if err != nil {
+						continue
+					}
+
+					// Strip .lua extension if the original didn't have it.
+					if filepath.Ext(currentPath) == "" {
+						rel = rel[:len(rel)-len(".lua")]
+					}
+
+					// Normalize to forward slashes for Lua.
+					rel = filepath.ToSlash(rel)
+
+					matchedNewPath = rel
+
+					break
+				}
+			}
+
+			if matchedNewPath == "" {
+				continue
+			}
+
+			argNode := doc.Tree.Nodes[argID]
+			startLine, startChar := doc.Tree.Position(argNode.Start)
+			endLine, endChar := doc.Tree.Position(argNode.End)
+
+			edits = append(edits, TextEdit{
+				Range: Range{
+					Start: Position{Line: startLine, Character: startChar},
+					End:   Position{Line: endLine, Character: endChar},
+				},
+				NewText: `"` + matchedNewPath + `"`,
+			})
+		}
+
+		if len(edits) > 0 {
+			changes[uri] = edits
+		}
+	}
+
+	return WorkspaceEdit{Changes: changes}
+}
+
+func (s *Server) sendShowMessage(msgType int, message string) {
+	WriteMessage(s.Writer, OutgoingNotification{
+		RPC:    "2.0",
+		Method: "window/showMessage",
+		Params: ShowMessageParams{Type: msgType, Message: message},
+	})
 }
 
 func (s *Server) handleShutdown(req Request) {
