@@ -57,11 +57,7 @@ func (s *Server) handleCodeAction(req Request) {
 				actions = append(actions, CodeAction{
 					Title: "Disable diagnostic '" + diag.Code + "' on this line",
 					Kind:  "quickfix",
-					Command: &Command{
-						Title:     "Ignore Diagnostic",
-						Command:   "lugo.ignoreDiagnostic",
-						Arguments: []any{uri, diag.Range.Start.Line, diag.Code, false},
-					},
+					Edit:  s.buildIgnoreDiagnosticEdit(uri, doc, diag.Range.Start.Line, diag.Code, false),
 				})
 			}
 
@@ -72,11 +68,7 @@ func (s *Server) handleCodeAction(req Request) {
 				actions = append(actions, CodeAction{
 					Title: "Disable diagnostic '" + diag.Code + "' for this file",
 					Kind:  "quickfix",
-					Command: &Command{
-						Title:     "Ignore Diagnostic",
-						Command:   "lugo.ignoreDiagnostic",
-						Arguments: []any{uri, diag.Range.Start.Line, diag.Code, true},
-					},
+					Edit:  s.buildIgnoreDiagnosticEdit(uri, doc, diag.Range.Start.Line, diag.Code, true),
 				})
 			}
 		}
@@ -1287,11 +1279,92 @@ func (s *Server) resolveMemberToIndex(doc *Document, nodeID ast.NodeID, uri stri
 	return nil
 }
 
+func (s *Server) buildIgnoreDiagnosticEdit(uri string, doc *Document, line uint32, code string, isFile bool) *WorkspaceEdit {
+	var (
+		insertLine uint32
+		pragmaLine string
+	)
+
+	if isFile {
+		insertLine = 0
+		pragmaLine = fmt.Sprintf("---@diagnostic disable-file %s\n", code)
+	} else {
+		insertLine = line
+		targetLineText := s.getLineText(doc, line)
+		indent := getIndent(targetLineText)
+		pragmaLine = fmt.Sprintf("%s---@diagnostic disable-next-line %s\n", indent, code)
+	}
+
+	return &WorkspaceEdit{
+		Changes: map[string][]TextEdit{
+			uri: {{
+				Range: Range{
+					Start: Position{Line: insertLine, Character: 0},
+					End:   Position{Line: insertLine, Character: 0},
+				},
+				NewText: pragmaLine,
+			}},
+		},
+	}
+}
+
+func (s *Server) getLineText(doc *Document, line uint32) string {
+	src := doc.Source()
+	offset := doc.Tree.Offset(line, 0)
+	if offset >= uint32(len(src)) {
+		return ""
+	}
+
+	end := offset
+	for end < uint32(len(src)) && src[end] != '\n' {
+		end++
+	}
+
+	return ast.String(src[offset:end])
+}
+
+func getIndent(line string) string {
+	for i, char := range line {
+		if char != ' ' && char != '\t' {
+			return line[:i]
+		}
+	}
+
+	return line
+}
+
 func (s *Server) handleExecuteCommand(req Request) {
 	var params ExecuteCommandParams
 
 	err := json.Unmarshal(req.Params, &params)
 	if err != nil {
+		return
+	}
+
+	if params.Command == "lugo.ignoreDiagnostic" {
+		if len(params.Arguments) >= 4 {
+			uriStr, _ := params.Arguments[0].(string)
+			lineFloat, _ := params.Arguments[1].(float64)
+			rule, _ := params.Arguments[2].(string)
+			isFile, _ := params.Arguments[3].(bool)
+
+			uri := s.normalizeURI(uriStr)
+			doc, ok := s.Documents[uri]
+			if ok {
+				edit := s.buildIgnoreDiagnosticEdit(uri, doc, uint32(lineFloat), rule, isFile)
+				WriteMessage(s.Writer, OutgoingRequest{
+					RPC:    "2.0",
+					ID:     99998,
+					Method: "workspace/applyEdit",
+					Params: ApplyWorkspaceEditParams{
+						Label: "Ignore diagnostic",
+						Edit:  *edit,
+					},
+				})
+			}
+		}
+
+		WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: nil})
 		return
 	}
 

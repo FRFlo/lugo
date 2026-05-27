@@ -134,6 +134,271 @@ func (s *Server) handleDefinition(req Request) {
 	WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: nil})
 }
 
+func (s *Server) handleTypeDefinition(req Request) {
+	var params TypeDefinitionParams
+
+	err := json.Unmarshal(req.Params, &params)
+	if err != nil {
+		return
+	}
+
+	uri := s.normalizeURI(params.TextDocument.URI)
+
+	doc, ok := s.Documents[uri]
+	if !ok {
+		WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: nil})
+
+		return
+	}
+
+	offset := doc.Tree.Offset(params.Position.Line, params.Position.Character)
+	ctx := s.resolveSymbolAt(uri, offset)
+	if ctx == nil {
+		WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: nil})
+
+		return
+	}
+
+	locs := s.typeDefinitionLocations(doc, ctx)
+	if len(locs) > 0 {
+		WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: locs})
+
+		return
+	}
+
+	WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: nil})
+}
+
+func (s *Server) handleImplementation(req Request) {
+	var params ImplementationParams
+
+	err := json.Unmarshal(req.Params, &params)
+	if err != nil {
+		return
+	}
+
+	uri := s.normalizeURI(params.TextDocument.URI)
+
+	doc, ok := s.Documents[uri]
+	if !ok {
+		WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: nil})
+
+		return
+	}
+
+	offset := doc.Tree.Offset(params.Position.Line, params.Position.Character)
+	ctx := s.resolveSymbolAt(uri, offset)
+	if ctx == nil {
+		WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: nil})
+
+		return
+	}
+
+	locs := s.implementationLocations(doc, ctx)
+	if len(locs) > 0 {
+		WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: locs})
+
+		return
+	}
+
+	WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: nil})
+}
+
+func (s *Server) typeDefinitionLocations(srcDoc *Document, ctx *SymbolContext) []Location {
+	if s == nil || ctx == nil || srcDoc == nil {
+		return nil
+	}
+
+	var locs []Location
+	seen := make(map[TargetKey]struct{})
+
+	addNodeLocation := func(uri string, nodeID ast.NodeID) {
+		if uri == "" || nodeID == ast.InvalidNode || strings.HasPrefix(uri, embeddedStdlibURIPrefix) {
+			return
+		}
+
+		tDoc, ok := s.Documents[uri]
+		if !ok || !s.canSeeSymbol(srcDoc, tDoc) || int(nodeID) >= len(tDoc.Tree.Nodes) {
+			return
+		}
+
+		key := TargetKey{URI: uri, Def: nodeID}
+		if _, ok := seen[key]; ok {
+			return
+		}
+
+		seen[key] = struct{}{}
+		locs = append(locs, Location{URI: uri, Range: getNodeRange(tDoc.Tree, nodeID)})
+	}
+
+	addTypeName := func(typeName string) {
+		if typeName == "" || s.GlobalIndex == nil {
+			return
+		}
+
+		var recHash uint64
+		propName := typeName
+		if lastDot := strings.LastIndexByte(typeName, '.'); lastDot != -1 {
+			recHash = ast.HashBytes([]byte(typeName[:lastDot]))
+			propName = typeName[lastDot+1:]
+		}
+
+		if syms, ok := s.getGlobalSymbols(srcDoc, recHash, ast.HashBytes([]byte(propName))); ok {
+			for _, sym := range syms {
+				addNodeLocation(sym.URI, sym.NodeID)
+			}
+		}
+
+		typeHash := ast.HashBytes([]byte(typeName))
+		if s.TableAliases != nil {
+			if tableHash := s.TableAliases[typeHash]; tableHash != 0 {
+				for _, entry := range s.GlobalIndex.AllSymbols() {
+					if entry == nil || ast.HashBytes([]byte(entry.Name)) != tableHash {
+						continue
+					}
+
+					addNodeLocation(entry.URI, entry.NodeID)
+				}
+			}
+		}
+	}
+
+	addTypeSet := func(t TypeSet) {
+		if t.CustomName != "" {
+			addTypeName(t.CustomName)
+		}
+
+		if t.DeclNode != ast.InvalidNode && t.DeclURI != "" {
+			addNodeLocation(t.DeclURI, t.DeclNode)
+		}
+	}
+
+	if ctx.TargetDefID != ast.InvalidNode && ctx.TargetDoc != nil {
+		if luadoc := ctx.TargetDoc.GetLuaDoc(ctx.TargetDefID); luadoc != nil {
+			if luadoc.Type != nil {
+				addTypeSet(ParseTypeString(luadoc.Type.Type))
+			}
+
+			if luadoc.Class != nil {
+				addTypeName(luadoc.Class.Name)
+			}
+		}
+
+		addTypeSet(ctx.TargetDoc.InferType(ctx.TargetDefID))
+	} else if ctx.IdentNodeID != ast.InvalidNode && ctx.TargetDoc != nil {
+		addTypeSet(ctx.TargetDoc.InferType(ctx.IdentNodeID))
+	}
+
+	return locs
+}
+
+func (s *Server) implementationLocations(srcDoc *Document, ctx *SymbolContext) []Location {
+	if s == nil || ctx == nil || srcDoc == nil || s.GlobalIndex == nil {
+		return nil
+	}
+
+	propHash := ctx.GKey.PropHash
+	if propHash == 0 && ctx.IdentName != "" {
+		propHash = ast.HashBytes([]byte(ctx.IdentName))
+	}
+	if propHash == 0 {
+		return nil
+	}
+
+	recHashes := s.implementationReceiverHashes(srcDoc, ctx)
+	if len(recHashes) == 0 {
+		return nil
+	}
+
+	var locs []Location
+	seen := make(map[TargetKey]struct{})
+
+	addSymbol := func(sym GlobalSymbol) {
+		if sym.URI == "" || sym.NodeID == ast.InvalidNode || strings.HasPrefix(sym.URI, embeddedStdlibURIPrefix) {
+			return
+		}
+
+		tDoc, ok := s.Documents[sym.URI]
+		if !ok || !s.canSeeSymbol(srcDoc, tDoc) || int(sym.NodeID) >= len(tDoc.Tree.Nodes) {
+			return
+		}
+
+		key := TargetKey{URI: sym.URI, Def: sym.NodeID}
+		if _, ok := seen[key]; ok {
+			return
+		}
+
+		seen[key] = struct{}{}
+		locs = append(locs, Location{URI: sym.URI, Range: getNodeRange(tDoc.Tree, sym.NodeID)})
+	}
+
+	for _, recHash := range recHashes {
+		if syms, ok := s.getGlobalSymbols(srcDoc, recHash, propHash); ok {
+			for _, sym := range syms {
+				addSymbol(sym)
+			}
+		}
+	}
+
+	return locs
+}
+
+func (s *Server) implementationReceiverHashes(doc *Document, ctx *SymbolContext) []uint64 {
+	var recHashes []uint64
+
+	addHash := func(hash uint64) {
+		if hash != 0 {
+			recHashes = appendUniqueHash(recHashes, hash)
+		}
+	}
+
+	addClassType := func(t TypeSet) {
+		if t.CustomName == "" {
+			return
+		}
+
+		classHash := ast.HashBytes([]byte(t.CustomName))
+		addHash(classHash)
+
+		if s.TableAliases != nil {
+			addHash(s.TableAliases[classHash])
+		}
+	}
+
+	addHash(ctx.GKey.ReceiverHash)
+
+	if ctx.RecDefID != ast.InvalidNode {
+		addClassType(doc.InferType(ctx.RecDefID))
+	}
+
+	if ctx.IsProp && ctx.IdentNodeID != ast.InvalidNode && int(ctx.IdentNodeID) < len(doc.Tree.Nodes) {
+		pID := doc.Tree.Nodes[ctx.IdentNodeID].Parent
+		if pID != ast.InvalidNode && int(pID) < len(doc.Tree.Nodes) {
+			recID := doc.Tree.Nodes[pID].Left
+			if recID != ast.InvalidNode {
+				addClassType(doc.InferType(recID))
+			}
+		}
+	}
+
+	if ctx.TargetDefID != ast.InvalidNode && ctx.TargetDoc != nil {
+		addClassType(ctx.TargetDoc.InferType(ctx.TargetDefID))
+	}
+
+	if s.TableAliases != nil {
+		for classHash, tableHash := range s.TableAliases {
+			for _, recHash := range recHashes {
+				if recHash == classHash || recHash == tableHash {
+					addHash(classHash)
+					addHash(tableHash)
+				}
+			}
+		}
+	}
+
+	return recHashes
+}
+
 func (s *Server) getFiveMEventDefinitionLocations(doc *Document, offset uint32) []Location {
 	if s == nil || doc == nil || doc.Tree == nil {
 		return nil

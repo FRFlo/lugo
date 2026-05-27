@@ -3,6 +3,7 @@ package lsp
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net/url"
 	"os"
@@ -248,6 +249,21 @@ func (s *Server) refreshWorkspace() {
 
 	s.IsIndexing = true
 
+	// Request client to create a work done progress token
+	WriteMessage(s.Writer, OutgoingRequest{
+		RPC:    "2.0",
+		ID:     10001,
+		Method: "window/workDoneProgress/create",
+		Params: map[string]string{"token": "indexing"},
+	})
+
+	// Notify client that indexing has started
+	s.sendProgressNotification("indexing", WorkDoneProgressBegin{
+		Kind:        "begin",
+		Title:       "Lugo: Indexing workspace",
+		Cancellable: false,
+	})
+
 	start := time.Now()
 
 	if s.activeURIs == nil {
@@ -283,6 +299,11 @@ func (s *Server) refreshWorkspace() {
 
 		s.indexWorkspace(wf, &pendingJobs, &unchanged, &failed)
 	}
+
+	s.sendProgressNotification("indexing", WorkDoneProgressReport{
+		Kind:    "report",
+		Message: fmt.Sprintf("Found %d files to process...", len(pendingJobs)),
+	})
 
 	jobs := make(chan *IndexJob, 2048)
 	results := make(chan *IndexResult, 2048)
@@ -387,6 +408,14 @@ func (s *Server) refreshWorkspace() {
 
 		s.finalizeDocumentUpdate(uri, res.Source, res.Tree, res.Errors, res.Job.Doc)
 
+		if indexed%50 == 0 {
+			s.sendProgressNotification("indexing", WorkDoneProgressReport{
+				Kind:       "report",
+				Message:    fmt.Sprintf("Indexed %d files...", indexed),
+				Percentage: 0,
+			})
+		}
+
 		if !res.Job.ModTime.IsZero() && s.Documents[uri] != nil {
 			s.Documents[uri].ModTime = res.Job.ModTime
 		}
@@ -417,6 +446,11 @@ func (s *Server) refreshWorkspace() {
 	s.IsIndexing = false
 
 	took := time.Since(start)
+
+	s.sendProgressNotification("indexing", WorkDoneProgressEnd{
+		Kind:    "end",
+		Message: fmt.Sprintf("Indexed %d files in %s", indexed, took.Round(time.Millisecond)),
+	})
 
 	s.Log.Printf("Re-indexed workspace in %s (indexed=%d, unchanged=%d, failed=%d)\n", took, indexed, unchanged, failed)
 
@@ -1651,4 +1685,18 @@ func (s *Server) resolveModule(currentURI string, modName string) *Document {
 	}
 
 	return bestMatch
+}
+
+// sendProgressNotification sends a $/progress notification to the client.
+func (s *Server) sendProgressNotification(token string, value any) {
+	params := ProgressParams{
+		Token: token,
+		Value: value,
+	}
+
+	WriteMessage(s.Writer, OutgoingNotification{
+		RPC:    "2.0",
+		Method: "$/progress",
+		Params: params,
+	})
 }
