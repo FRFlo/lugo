@@ -99,11 +99,51 @@ type InitializeParams struct {
 	RootURI               string                `json:"rootUri"`
 	WorkspaceFolders      []WorkspaceFolder     `json:"workspaceFolders,omitempty"`
 	InitializationOptions InitializationOptions `json:"initializationOptions"`
+	Capabilities          *ClientCapabilities   `json:"capabilities,omitempty"`
 }
 
 // InitializeResult represents the result of the initialize request.
 type InitializeResult struct {
 	Capabilities ServerCapabilities `json:"capabilities"`
+	ServerInfo   *ServerInfo        `json:"serverInfo,omitempty"`
+}
+
+// ServerInfo represents identifying information about the language server.
+type ServerInfo struct {
+	Name    string `json:"name"`
+	Version string `json:"version,omitempty"`
+}
+
+// ClientCapabilities represents the capabilities provided by the client.
+type ClientCapabilities struct {
+	General      *GeneralClientCapabilities      `json:"general,omitempty"`
+	TextDocument *TextDocumentClientCapabilities `json:"textDocument,omitempty"`
+	Workspace    *WorkspaceClientCapabilities    `json:"workspace,omitempty"`
+}
+
+// GeneralClientCapabilities represents general client capabilities.
+type GeneralClientCapabilities struct {
+	PositionEncodings []string `json:"positionEncodings,omitempty"`
+}
+
+// TextDocumentClientCapabilities represents text document specific client capabilities.
+type TextDocumentClientCapabilities struct {
+	Completion *CompletionClientCapabilities `json:"completion,omitempty"`
+}
+
+// CompletionClientCapabilities represents completion specific client capabilities.
+type CompletionClientCapabilities struct {
+	CompletionItem *CompletionItemClientCapabilities `json:"completionItem,omitempty"`
+}
+
+// CompletionItemClientCapabilities represents completion item specific client capabilities.
+type CompletionItemClientCapabilities struct {
+	SnippetSupport bool `json:"snippetSupport,omitempty"`
+}
+
+// WorkspaceClientCapabilities represents workspace specific client capabilities.
+type WorkspaceClientCapabilities struct {
+	WorkspaceFolders bool `json:"workspaceFolders,omitempty"`
 }
 
 // ExecuteCommandOptions represents options for the execute command provider.
@@ -178,6 +218,7 @@ type InitializationOptions struct {
 }
 
 // ServerCapabilities represents the capabilities provided by the language server.
+// Work done progress support is delivered through $/progress notifications.
 type ServerCapabilities struct {
 	CodeLensProvider       *CodeLensOptions       `json:"codeLensProvider,omitempty"`
 	SignatureHelpProvider  *SignatureHelpOptions  `json:"signatureHelpProvider,omitempty"`
@@ -187,20 +228,36 @@ type ServerCapabilities struct {
 	RenameProvider         any                    `json:"renameProvider"`
 	CodeActionProvider     any                    `json:"codeActionProvider"`
 	// TextDocumentSync defines how text documents are synced with the server.
-	TextDocumentSync                int  `json:"textDocumentSync"`
-	DefinitionProvider              bool `json:"definitionProvider"`
-	HoverProvider                   bool `json:"hoverProvider"`
-	ReferencesProvider              bool `json:"referencesProvider"`
-	DocumentSymbolProvider          bool `json:"documentSymbolProvider"`
-	WorkspaceSymbolProvider         bool `json:"workspaceSymbolProvider"`
-	InlayHintProvider               bool `json:"inlayHintProvider"`
-	FoldingRangeProvider            bool `json:"foldingRangeProvider"`
-	SelectionRangeProvider          bool `json:"selectionRangeProvider,omitempty"`
-	LinkedEditingRangeProvider      bool `json:"linkedEditingRangeProvider"`
-	CallHierarchyProvider           bool `json:"callHierarchyProvider"`
-	DocumentHighlightProvider       bool `json:"documentHighlightProvider,omitempty"`
-	DocumentFormattingProvider      bool `json:"documentFormattingProvider,omitempty"`
-	DocumentRangeFormattingProvider bool `json:"documentRangeFormattingProvider,omitempty"`
+	TextDocumentSync                int      `json:"textDocumentSync"`
+	DefinitionProvider              bool     `json:"definitionProvider"`
+	HoverProvider                   bool     `json:"hoverProvider"`
+	ReferencesProvider              bool     `json:"referencesProvider"`
+	DocumentSymbolProvider          bool     `json:"documentSymbolProvider"`
+	WorkspaceSymbolProvider         bool     `json:"workspaceSymbolProvider"`
+	InlayHintProvider               any     `json:"inlayHintProvider"`
+	FoldingRangeProvider            bool     `json:"foldingRangeProvider"`
+	SelectionRangeProvider          bool     `json:"selectionRangeProvider,omitempty"`
+	LinkedEditingRangeProvider      bool     `json:"linkedEditingRangeProvider"`
+	CallHierarchyProvider           bool     `json:"callHierarchyProvider"`
+	DocumentHighlightProvider       bool     `json:"documentHighlightProvider,omitempty"`
+	DocumentFormattingProvider      bool     `json:"documentFormattingProvider,omitempty"`
+	DocumentRangeFormattingProvider bool     `json:"documentRangeFormattingProvider,omitempty"`
+	TypeDefinitionProvider          bool     `json:"typeDefinitionProvider,omitempty"`
+	ImplementationProvider          bool     `json:"implementationProvider,omitempty"`
+	DocumentLinkProvider            any      `json:"documentLinkProvider,omitempty"`
+	PositionEncoding                string   `json:"positionEncoding,omitempty"`
+	OffsetEncoding                  []string `json:"offsetEncoding,omitempty"`
+	Workspace                       *WorkspaceServerCapabilities `json:"workspace,omitempty"`
+}
+
+// WorkspaceServerCapabilities represents workspace-specific server capabilities.
+type WorkspaceServerCapabilities struct {
+	FileOperations *WorkspaceFileOperationsServerCapabilities `json:"fileOperations,omitempty"`
+}
+
+// WorkspaceFileOperationsServerCapabilities represents workspace file operation capabilities.
+type WorkspaceFileOperationsServerCapabilities struct {
+	WillRename *FileOperationRegistrationOptions `json:"willRename,omitempty"`
 }
 
 // TextDocumentItem represents a text document that was opened on the client.
@@ -332,6 +389,12 @@ type Hover struct {
 // CompletionOptions represents options for the completion provider.
 type CompletionOptions struct {
 	TriggerCharacters []string `json:"triggerCharacters,omitempty"`
+	ResolveProvider   bool     `json:"resolveProvider,omitempty"`
+}
+
+// InlayHintOptions represents options for the inlayHint provider.
+type InlayHintOptions struct {
+	ResolveProvider bool `json:"resolveProvider,omitempty"`
 }
 
 // CompletionParams represents parameters for the completion request.
@@ -388,6 +451,7 @@ type CompletionItem struct {
 	Kind             CompletionItemKind  `json:"kind"`
 	InsertText       string              `json:"insertText,omitempty"`
 	InsertTextFormat InsertTextFormat    `json:"insertTextFormat,omitempty"`
+	Data             any                 `json:"data,omitempty"`
 }
 
 // SignatureHelpOptions represents options for the signature help provider.
@@ -445,6 +509,7 @@ type InlayHint struct {
 	Kind         InlayHintKind `json:"kind,omitempty"`
 	PaddingLeft  bool          `json:"paddingLeft,omitempty"`
 	PaddingRight bool          `json:"paddingRight,omitempty"`
+	Data         any           `json:"data,omitempty"`
 }
 
 // CodeActionParams represents parameters for the codeAction request.
@@ -603,6 +668,7 @@ type DocumentHighlight struct {
 type SemanticTokensOptions struct {
 	Legend SemanticTokensLegend `json:"legend"`
 	Full   bool                 `json:"full"`
+	Range  any                  `json:"range,omitempty"`
 }
 
 // SemanticTokensLegend represents the legend for semantic tokens.
@@ -614,6 +680,12 @@ type SemanticTokensLegend struct {
 // SemanticTokensParams represents parameters for the semantic tokens request.
 type SemanticTokensParams struct {
 	TextDocument TextDocumentIdentifier `json:"textDocument"`
+}
+
+// SemanticTokensRangeParams represents parameters for the semanticTokens/range request.
+type SemanticTokensRangeParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+	Range        Range                  `json:"range"`
 }
 
 // SemanticTokens represents the semantic tokens information.
@@ -726,4 +798,112 @@ type DebugExportParams struct {
 // DebugExportResult represents the result of the custom debugExport request.
 type DebugExportResult struct {
 	Content string `json:"content"`
+}
+
+// ShowMessageParams represents parameters for the window/showMessage notification.
+type ShowMessageParams struct {
+	Type    int    `json:"type"`
+	Message string `json:"message"`
+}
+
+// WorkDoneProgressBegin represents the begin notification for work done progress.
+type WorkDoneProgressBegin struct {
+	Kind        string `json:"kind"`
+	Title       string `json:"title"`
+	Cancellable bool   `json:"cancellable,omitempty"`
+	Message     string `json:"message,omitempty"`
+	Percentage  int    `json:"percentage,omitempty"`
+}
+
+// WorkDoneProgressReport represents the report notification for work done progress.
+type WorkDoneProgressReport struct {
+	Kind        string `json:"kind"`
+	Cancellable bool   `json:"cancellable,omitempty"`
+	Message     string `json:"message,omitempty"`
+	Percentage  int    `json:"percentage,omitempty"`
+}
+
+// WorkDoneProgressEnd represents the end notification for work done progress.
+type WorkDoneProgressEnd struct {
+	Kind    string `json:"kind"`
+	Message string `json:"message,omitempty"`
+}
+
+// ProgressParams represents parameters for the $/progress notification.
+type ProgressParams struct {
+	Token string `json:"token"`
+	Value any    `json:"value"`
+}
+
+// TypeDefinitionParams represents parameters for the textDocument/typeDefinition request.
+type TypeDefinitionParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+	Position     Position               `json:"position"`
+}
+
+// ImplementationParams represents parameters for the textDocument/implementation request.
+type ImplementationParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+	Position     Position               `json:"position"`
+}
+
+// DidChangeWorkspaceFoldersParams represents parameters for the workspace/didChangeWorkspaceFolders notification.
+type DidChangeWorkspaceFoldersParams struct {
+	Event WorkspaceFoldersChangeEvent `json:"event"`
+}
+
+// WorkspaceFoldersChangeEvent represents a workspace folders change event.
+type WorkspaceFoldersChangeEvent struct {
+	Added   []WorkspaceFolder `json:"added"`
+	Removed []WorkspaceFolder `json:"removed"`
+}
+
+// DocumentLinkOptions represents options for the documentLink provider.
+type DocumentLinkOptions struct {
+	ResolveProvider bool `json:"resolveProvider,omitempty"`
+}
+
+// DocumentLinkParams represents parameters for the textDocument/documentLink request.
+type DocumentLinkParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+}
+
+// DocumentLink represents a link in a document.
+type DocumentLink struct {
+	Range  Range   `json:"range"`
+	Target string  `json:"target,omitempty"`
+	Tooltip string `json:"tooltip,omitempty"`
+	Data   any     `json:"data,omitempty"`
+}
+
+// FileRename represents a single file rename in workspace/willRenameFiles.
+type FileRename struct {
+	OldURI string `json:"oldUri"`
+	NewURI string `json:"newUri"`
+}
+
+// WillRenameFilesParams represents parameters for the workspace/willRenameFiles request.
+type WillRenameFilesParams struct {
+	Files []FileRename `json:"files"`
+}
+
+// DidRenameFilesParams represents parameters for the workspace/didRenameFiles notification.
+type DidRenameFilesParams struct {
+	Files []FileRename `json:"files"`
+}
+
+// FileOperationRegistrationOptions represents registration options for file operations.
+type FileOperationRegistrationOptions struct {
+	Filters []FileOperationFilter `json:"filters"`
+}
+
+// FileOperationFilter represents a filter for file operations.
+type FileOperationFilter struct {
+	Scheme  string                `json:"scheme,omitempty"`
+	Pattern FileOperationPattern  `json:"pattern"`
+}
+
+// FileOperationPattern represents a file operation pattern.
+type FileOperationPattern struct {
+	Glob string `json:"glob"`
 }
