@@ -35,7 +35,13 @@ func (s *Server) publishWorkspaceDiagnostics() {
 }
 
 func (s *Server) publishDiagnostics(uri string) {
-	if s.IsIndexing {
+	// During workspace indexing, suppress diagnostics for background-indexed files
+	// but allow explicitly opened documents to receive diagnostics immediately.
+	// This prevents the "first-touch diagnostics gap" where opencode's 5s timeout
+	// expires before indexing completes. Cross-file diagnostics (undefined globals,
+	// FiveM checks) may be incomplete during indexing, but will be corrected by
+	// publishWorkspaceDiagnostics() when indexing finishes.
+	if s.IsIndexing && !s.OpenFiles[uri] {
 		return
 	}
 

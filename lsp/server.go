@@ -675,7 +675,7 @@ func (s *Server) handleInitialized(req Request) {
 	_ = req
 
 	s.IsIndexing = false
-	s.refreshWorkspace()
+	go s.refreshWorkspace()
 	s.sendShowMessage(3, "Lugo LSP "+s.Version+" ready.")
 }
 
