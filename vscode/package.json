@@ -124,6 +124,13 @@
                         "scope": "resource",
                         "markdownDescription": "Maximum file size in megabytes to index. Files larger than this are ignored to prevent out-of-memory crashes.",
                         "order": 4
+                    },
+                    "lugo.telemetry.enabled": {
+                        "type": "boolean",
+                        "default": true,
+                        "scope": "window",
+                        "markdownDescription": "Enable anonymous crash reporting and telemetry.",
+                        "order": 5
                     }
                 }
             },

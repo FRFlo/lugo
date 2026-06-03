@@ -312,6 +312,12 @@ func (s *Server) refreshWorkspace() {
 
 	for range runtime.GOMAXPROCS(0) {
 		wg.Go(func() {
+			defer func() {
+				if r := recover(); r != nil {
+					CapturePanic(r, "workspace.worker")
+				}
+			}()
+
 			p := parser.New(nil, ast.NewTree(nil), s.MaxParseErrors)
 
 			for job := range jobs {

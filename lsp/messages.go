@@ -159,6 +159,7 @@ type CIConfig struct {
 
 // InitializationOptions represents the custom configuration passed by the client during initialization.
 type InitializationOptions struct {
+	TelemetryEnabled bool              `json:"telemetryEnabled"`
 	LibraryPaths  []string          `json:"libraryPaths,omitempty"`
 	IgnoreGlobs   []string          `json:"ignoreGlobs,omitempty"`
 	KnownGlobals  []string          `json:"knownGlobals,omitempty"`

@@ -83,6 +83,7 @@ function buildInitializationOptions() {
 		knownGlobals: lugoConfig.get("environment.knownGlobals") || [],
 		bannedSymbols: lugoConfig.get("diagnostics.bannedSymbols") || {},
 		maxFileSizeMB: lugoConfig.get("workspace.maxFileSizeMB") ?? 4,
+		telemetryEnabled: lugoConfig.get("telemetry.enabled") !== false,
 
 		parserMaxErrors: lugoConfig.get("parser.maxErrors") ?? 50,
 
@@ -355,8 +356,8 @@ async function startClient(context) {
 	}
 
 	const serverOptions = {
-		run: {command: serverCommand},
-		debug: {command: serverCommand},
+		run: { command: serverCommand },
+		debug: { command: serverCommand },
 	};
 
 	const clientOptions = {

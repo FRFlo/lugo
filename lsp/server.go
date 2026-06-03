@@ -252,6 +252,8 @@ func (s *Server) Start() error {
 }
 
 func (s *Server) applyInitializationOptions(opts InitializationOptions) (needsReindex bool, needsRepublish bool) {
+	SetTelemetryEnabled(opts.TelemetryEnabled)
+
 	effectiveLibraryPaths := s.buildConfiguredLibraryPaths(opts.LibraryPaths)
 	if s.setLibraryPaths(effectiveLibraryPaths) {
 		needsReindex = true
@@ -403,6 +405,9 @@ func (s *Server) handleMessage(req Request) {
 			stack := debug.Stack()
 
 			s.Log.Errorf("CRITICAL PANIC in method %s: %v\n%s\n", req.Method, r, string(stack))
+
+			CapturePanic(r, "handleMessage:"+req.Method)
+			FlushTelemetry()
 
 			// Attempt to notify the client before we die
 			if req.ID != 0 {
