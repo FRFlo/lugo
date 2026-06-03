@@ -160,11 +160,11 @@ type CIConfig struct {
 // InitializationOptions represents the custom configuration passed by the client during initialization.
 type InitializationOptions struct {
 	TelemetryEnabled bool              `json:"telemetryEnabled"`
-	LibraryPaths  []string          `json:"libraryPaths,omitempty"`
-	IgnoreGlobs   []string          `json:"ignoreGlobs,omitempty"`
-	KnownGlobals  []string          `json:"knownGlobals,omitempty"`
-	BannedSymbols map[string]string `json:"bannedSymbols,omitempty"`
-	MaxFileSizeMB int               `json:"maxFileSizeMB"`
+	LibraryPaths     []string          `json:"libraryPaths,omitempty"`
+	IgnoreGlobs      []string          `json:"ignoreGlobs,omitempty"`
+	KnownGlobals     []string          `json:"knownGlobals,omitempty"`
+	BannedSymbols    map[string]string `json:"bannedSymbols,omitempty"`
+	MaxFileSizeMB    int               `json:"maxFileSizeMB"`
 
 	ParserMaxErrors int `json:"parserMaxErrors"`
 
@@ -229,25 +229,25 @@ type ServerCapabilities struct {
 	RenameProvider         any                    `json:"renameProvider"`
 	CodeActionProvider     any                    `json:"codeActionProvider"`
 	// TextDocumentSync defines how text documents are synced with the server.
-	TextDocumentSync                int      `json:"textDocumentSync"`
-	DefinitionProvider              bool     `json:"definitionProvider"`
-	HoverProvider                   bool     `json:"hoverProvider"`
-	ReferencesProvider              bool     `json:"referencesProvider"`
-	DocumentSymbolProvider          bool     `json:"documentSymbolProvider"`
-	WorkspaceSymbolProvider         bool     `json:"workspaceSymbolProvider"`
-	InlayHintProvider               any     `json:"inlayHintProvider"`
-	FoldingRangeProvider            bool     `json:"foldingRangeProvider"`
-	SelectionRangeProvider          bool     `json:"selectionRangeProvider,omitempty"`
-	LinkedEditingRangeProvider      bool     `json:"linkedEditingRangeProvider"`
-	CallHierarchyProvider           bool     `json:"callHierarchyProvider"`
-	DocumentHighlightProvider       bool     `json:"documentHighlightProvider,omitempty"`
-	DocumentFormattingProvider      bool     `json:"documentFormattingProvider,omitempty"`
-	DocumentRangeFormattingProvider bool     `json:"documentRangeFormattingProvider,omitempty"`
-	TypeDefinitionProvider          bool     `json:"typeDefinitionProvider,omitempty"`
-	ImplementationProvider          bool     `json:"implementationProvider,omitempty"`
-	DocumentLinkProvider            any      `json:"documentLinkProvider,omitempty"`
-	PositionEncoding                string   `json:"positionEncoding,omitempty"`
-	OffsetEncoding                  []string `json:"offsetEncoding,omitempty"`
+	TextDocumentSync                int                          `json:"textDocumentSync"`
+	DefinitionProvider              bool                         `json:"definitionProvider"`
+	HoverProvider                   bool                         `json:"hoverProvider"`
+	ReferencesProvider              bool                         `json:"referencesProvider"`
+	DocumentSymbolProvider          bool                         `json:"documentSymbolProvider"`
+	WorkspaceSymbolProvider         bool                         `json:"workspaceSymbolProvider"`
+	InlayHintProvider               any                          `json:"inlayHintProvider"`
+	FoldingRangeProvider            bool                         `json:"foldingRangeProvider"`
+	SelectionRangeProvider          bool                         `json:"selectionRangeProvider,omitempty"`
+	LinkedEditingRangeProvider      bool                         `json:"linkedEditingRangeProvider"`
+	CallHierarchyProvider           bool                         `json:"callHierarchyProvider"`
+	DocumentHighlightProvider       bool                         `json:"documentHighlightProvider,omitempty"`
+	DocumentFormattingProvider      bool                         `json:"documentFormattingProvider,omitempty"`
+	DocumentRangeFormattingProvider bool                         `json:"documentRangeFormattingProvider,omitempty"`
+	TypeDefinitionProvider          bool                         `json:"typeDefinitionProvider,omitempty"`
+	ImplementationProvider          bool                         `json:"implementationProvider,omitempty"`
+	DocumentLinkProvider            any                          `json:"documentLinkProvider,omitempty"`
+	PositionEncoding                string                       `json:"positionEncoding,omitempty"`
+	OffsetEncoding                  []string                     `json:"offsetEncoding,omitempty"`
 	Workspace                       *WorkspaceServerCapabilities `json:"workspace,omitempty"`
 }
 
@@ -871,10 +871,10 @@ type DocumentLinkParams struct {
 
 // DocumentLink represents a link in a document.
 type DocumentLink struct {
-	Range  Range   `json:"range"`
-	Target string  `json:"target,omitempty"`
+	Range   Range  `json:"range"`
+	Target  string `json:"target,omitempty"`
 	Tooltip string `json:"tooltip,omitempty"`
-	Data   any     `json:"data,omitempty"`
+	Data    any    `json:"data,omitempty"`
 }
 
 // FileRename represents a single file rename in workspace/willRenameFiles.
@@ -900,8 +900,8 @@ type FileOperationRegistrationOptions struct {
 
 // FileOperationFilter represents a filter for file operations.
 type FileOperationFilter struct {
-	Scheme  string                `json:"scheme,omitempty"`
-	Pattern FileOperationPattern  `json:"pattern"`
+	Scheme  string               `json:"scheme,omitempty"`
+	Pattern FileOperationPattern `json:"pattern"`
 }
 
 // FileOperationPattern represents a file operation pattern.

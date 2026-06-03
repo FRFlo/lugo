@@ -861,25 +861,25 @@ func (s *Server) handleCompletion(req Request) {
 					if doc.Tree.Nodes[pNode.Left].Kind == ast.KindIdent {
 						identName := doc.Source()[doc.Tree.Nodes[pNode.Left].Start:doc.Tree.Nodes[pNode.Left].End]
 						if bytes.Equal(identName, []byte("exports")) && doc.referenceAt(pNode.Left) == ast.InvalidNode {
-						for _, name := range s.getFiveMResourceNames() {
-							addCompletion(name, FieldCompletion, "resource", false, "1", name, PlainTextTextFormat)
-						}
+							for _, name := range s.getFiveMResourceNames() {
+								addCompletion(name, FieldCompletion, "resource", false, "1", name, PlainTextTextFormat)
+							}
 
-						// Attach Data to enable completionItem/resolve.
-						for i := range items {
-							items[i].Data = map[string]any{"uri": uri}
-						}
+							// Attach Data to enable completionItem/resolve.
+							for i := range items {
+								items[i].Data = map[string]any{"uri": uri}
+							}
 
-						WriteMessage(s.Writer, Response{
-							RPC: "2.0",
-							ID:  req.ID,
-							Result: CompletionList{
-								IsIncomplete: false,
-								Items:        items,
-							},
-						})
+							WriteMessage(s.Writer, Response{
+								RPC: "2.0",
+								ID:  req.ID,
+								Result: CompletionList{
+									IsIncomplete: false,
+									Items:        items,
+								},
+							})
 
-						return
+							return
 						}
 					}
 				}

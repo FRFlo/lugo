@@ -3,7 +3,6 @@ package lsp
 import (
 	"context"
 	"fmt"
-	"os"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -30,16 +29,8 @@ var globalTelemetry *Telemetry
 
 // InitTelemetry initializes the OTLP exporter and PostHog client.
 func InitTelemetry(version string) (*Telemetry, error) {
-	token := os.Getenv("POSTHOG_PROJECT_TOKEN")
-	if token == "" {
-		globalTelemetry = &Telemetry{Enabled: false}
-		return globalTelemetry, nil
-	}
-
-	host := os.Getenv("POSTHOG_HOST")
-	if host == "" {
-		host = "us.i.posthog.com" // default
-	}
+	token := "phc_AtCceYjFoZzdnFgfKNMGArJGbLMyFzzqvjBx7SQCou6k"
+	host := "eu.i.posthog.com"
 
 	ctx := context.Background()
 
@@ -102,13 +93,13 @@ func SetTelemetryEnabled(enabled bool) {
 	}
 	globalTelemetry.mu.Lock()
 	defer globalTelemetry.mu.Unlock()
-	
+
 	// If it was already false due to missing token, don't enable it
 	if globalTelemetry.PHClient == nil {
 		globalTelemetry.Enabled = false
 		return
 	}
-	
+
 	globalTelemetry.Enabled = enabled
 }
 
@@ -117,7 +108,7 @@ func (t *Telemetry) Close() {
 	t.mu.RLock()
 	enabled := t.Enabled
 	t.mu.RUnlock()
-	
+
 	if !enabled {
 		return
 	}
@@ -131,17 +122,17 @@ func CapturePanic(r any, source string) {
 	if globalTelemetry == nil {
 		return
 	}
-	
+
 	globalTelemetry.mu.RLock()
 	enabled := globalTelemetry.Enabled
 	globalTelemetry.mu.RUnlock()
-	
+
 	if !enabled {
 		return
 	}
 
 	errStr := fmt.Sprintf("panic: %v\n%s", r, debug.Stack())
-	
+
 	exception := posthog.NewDefaultException(
 		time.Now(),
 		"system", // we don't have user IDs in an LSP usually
@@ -160,11 +151,11 @@ func FlushTelemetry() {
 	if globalTelemetry == nil {
 		return
 	}
-	
+
 	globalTelemetry.mu.RLock()
 	enabled := globalTelemetry.Enabled
 	globalTelemetry.mu.RUnlock()
-	
+
 	if !enabled {
 		return
 	}

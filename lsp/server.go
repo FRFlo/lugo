@@ -573,9 +573,9 @@ func (s *Server) handleInitialize(req Request) {
 			RenameProvider: map[string]bool{
 				"prepareProvider": true,
 			},
-			ReferencesProvider:              true,
-			DocumentSymbolProvider:          true,
-			WorkspaceSymbolProvider:         true,
+			ReferencesProvider:      true,
+			DocumentSymbolProvider:  true,
+			WorkspaceSymbolProvider: true,
 			InlayHintProvider: &InlayHintOptions{
 				ResolveProvider: true,
 			},
