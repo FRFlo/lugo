@@ -2,7 +2,13 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const vscode = require("vscode");
-const { LanguageClient } = require("vscode-languageclient/node");
+const { LanguageClient, ErrorAction, CloseAction } = require("vscode-languageclient/node");
+const { PostHog } = require("posthog-node");
+
+const posthogClient = new PostHog(
+	"phc_AtCceYjFoZzdnFgfKNMGArJGbLMyFzzqvjBx7SQCou6k",
+	{ host: "https://eu.i.posthog.com" }
+);
 
 let client, restarting, indexing, debounce;
 
@@ -238,6 +244,18 @@ async function addToIgnoredGlobs(folderUri) {
 }
 
 async function activate(context) {
+	const telemetryEnabled = vscode.workspace.getConfiguration("lugo").get("telemetry.enabled") !== false;
+	if (telemetryEnabled) {
+		posthogClient.capture({
+			distinctId: vscode.env.machineId,
+			event: "extension_activated",
+			properties: {
+				os: os.platform(),
+				arch: os.arch()
+			}
+		});
+	}
+
 	context.subscriptions.push(
 		vscode.workspace.onDidChangeConfiguration(async e => {
 			if (e.affectsConfiguration("lugo") || e.affectsConfiguration("files.exclude") || e.affectsConfiguration("search.exclude")) {
@@ -248,6 +266,12 @@ async function activate(context) {
 
 	context.subscriptions.push(
 		vscode.commands.registerCommand("lugo.reindex", () => {
+			if (vscode.workspace.getConfiguration("lugo").get("telemetry.enabled") !== false) {
+				posthogClient.capture({
+					distinctId: vscode.env.machineId,
+					event: "command_reindex"
+				});
+			}
 			triggerReindex();
 		})
 	);
@@ -360,6 +384,8 @@ async function startClient(context) {
 		debug: { command: serverCommand },
 	};
 
+	let restartCount = 0;
+
 	const clientOptions = {
 		documentSelector: [
 			{ scheme: "file", language: "lua" },
@@ -369,6 +395,41 @@ async function startClient(context) {
 			fileEvents: vscode.workspace.createFileSystemWatcher("**/*.lua"),
 		},
 		initializationOptions: initializationOptions,
+		errorHandler: {
+			error: (error, message, count) => {
+				if (vscode.workspace.getConfiguration("lugo").get("telemetry.enabled") !== false) {
+					posthogClient.capture({
+						distinctId: vscode.env.machineId,
+						event: "lsp_error",
+						properties: {
+							error: error.message || String(error),
+							method: message?.method,
+							count: count,
+							os: os.platform(),
+							arch: os.arch()
+						}
+					});
+				}
+				return { action: count <= 3 ? ErrorAction.Continue : ErrorAction.Shutdown };
+			},
+			closed: () => {
+				if (vscode.workspace.getConfiguration("lugo").get("telemetry.enabled") !== false) {
+					posthogClient.capture({
+						distinctId: vscode.env.machineId,
+						event: "lsp_crash",
+						properties: {
+							os: os.platform(),
+							arch: os.arch()
+						}
+					});
+				}
+				restartCount++;
+				if (restartCount <= 5) {
+					return { action: CloseAction.Restart };
+				}
+				return { action: CloseAction.DoNotRestart };
+			}
+		}
 	};
 
 	client = new LanguageClient("lugo", "Lugo LSP", serverOptions, clientOptions);
@@ -464,6 +525,8 @@ function triggerReindex() {
 }
 
 function deactivate() {
+	posthogClient.shutdown();
+
 	if (debounce) {
 		clearTimeout(debounce);
 	}
