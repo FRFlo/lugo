@@ -53,7 +53,7 @@ func TestCIGitHubAnnotationEscapesControlAndDelimiterCharacters(t *testing.T) {
 		Message:  "100% failed,\nnext\rline",
 	}})
 
-	want := "::error file=a%2Cb%3Ac,line=1,col=1::100%25 failed, next"
+	want := "::error file=a%2Cb%3Ac,line=1,col=1::100%25 failed, next%0Dline"
 	if !strings.Contains(output.String(), want) || strings.Contains(output.String(), "\nnext") {
 		t.Fatalf("annotation was not safely escaped: %q", output.String())
 	}
