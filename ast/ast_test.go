@@ -50,6 +50,32 @@ func TestTree_PositionAndOffset(t *testing.T) {
 	}
 }
 
+func TestTree_PositionEncodings(t *testing.T) {
+	// The emoji occupies 4 UTF-8 bytes, one UTF-32 scalar, and two UTF-16
+	// code units.
+	for _, tt := range []struct {
+		encoding string
+		column   uint32
+	}{
+		{encoding: "utf-8", column: 5},
+		{encoding: "utf-16", column: 3},
+		{encoding: "utf-32", column: 2},
+	} {
+		t.Run(tt.encoding, func(t *testing.T) {
+			tree := ast.NewTree([]byte("a🙂b"))
+			tree.SetPositionEncoding(tt.encoding)
+
+			_, got := tree.Position(5)
+			if got != tt.column {
+				t.Fatalf("Position() column = %d, want %d", got, tt.column)
+			}
+			if gotOffset := tree.Offset(0, tt.column); gotOffset != 5 {
+				t.Fatalf("Offset() = %d, want 5", gotOffset)
+			}
+		})
+	}
+}
+
 func TestTree_NodeAt(t *testing.T) {
 	input := []byte("local a = 1\nprint(a)")
 	tree := ast.NewTree(input)

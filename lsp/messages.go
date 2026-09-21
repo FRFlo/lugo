@@ -7,7 +7,33 @@ type Request struct {
 	RPC    string          `json:"jsonrpc"`
 	Method string          `json:"method"`
 	Params json.RawMessage `json:"params,omitempty"`
-	ID     int             `json:"id"`
+	// ID is any because JSON-RPC permits either a number or a string.
+	// Keeping the decoded value also preserves notification requests, where ID
+	// is absent and therefore nil.
+	ID any `json:"id,omitempty"`
+}
+
+// UnmarshalJSON keeps the request ID as raw JSON. Decoding into any would
+// convert numeric IDs to float64 and silently lose precision above 2^53.
+func (r *Request) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		RPC    string          `json:"jsonrpc"`
+		Method string          `json:"method"`
+		Params json.RawMessage `json:"params,omitempty"`
+		ID     json.RawMessage `json:"id"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	r.RPC = wire.RPC
+	r.Method = wire.Method
+	r.Params = wire.Params
+	if len(wire.ID) > 0 && string(wire.ID) != "null" {
+		r.ID = json.RawMessage(append([]byte(nil), wire.ID...))
+	} else {
+		r.ID = nil
+	}
+	return nil
 }
 
 // Response represents a JSON-RPC response message from the server.
@@ -15,7 +41,7 @@ type Response struct {
 	RPC    string `json:"jsonrpc"`
 	Result any    `json:"result"`
 	Error  any    `json:"error,omitempty"`
-	ID     int    `json:"id"`
+	ID     any    `json:"id"`
 }
 
 // Notification represents a JSON-RPC notification message.
@@ -30,7 +56,7 @@ type OutgoingRequest struct {
 	RPC    string `json:"jsonrpc"`
 	Method string `json:"method"`
 	Params any    `json:"params,omitempty"`
-	ID     int    `json:"id"`
+	ID     any    `json:"id"`
 }
 
 // OutgoingNotification represents a JSON-RPC notification message sent from the server.
@@ -96,10 +122,10 @@ type WorkspaceFolder struct {
 
 // InitializeParams represents the parameters for the initialize request.
 type InitializeParams struct {
-	RootURI               string                `json:"rootUri"`
-	WorkspaceFolders      []WorkspaceFolder     `json:"workspaceFolders,omitempty"`
-	InitializationOptions InitializationOptions `json:"initializationOptions"`
-	Capabilities          *ClientCapabilities   `json:"capabilities,omitempty"`
+	RootURI               string                 `json:"rootUri"`
+	WorkspaceFolders      []WorkspaceFolder      `json:"workspaceFolders,omitempty"`
+	InitializationOptions *InitializationOptions `json:"initializationOptions,omitempty"`
+	Capabilities          *ClientCapabilities    `json:"capabilities,omitempty"`
 }
 
 // InitializeResult represents the result of the initialize request.
@@ -119,6 +145,7 @@ type ClientCapabilities struct {
 	General      *GeneralClientCapabilities      `json:"general,omitempty"`
 	TextDocument *TextDocumentClientCapabilities `json:"textDocument,omitempty"`
 	Workspace    *WorkspaceClientCapabilities    `json:"workspace,omitempty"`
+	Window       *WindowClientCapabilities       `json:"window,omitempty"`
 }
 
 // GeneralClientCapabilities represents general client capabilities.
@@ -128,7 +155,14 @@ type GeneralClientCapabilities struct {
 
 // TextDocumentClientCapabilities represents text document specific client capabilities.
 type TextDocumentClientCapabilities struct {
-	Completion *CompletionClientCapabilities `json:"completion,omitempty"`
+	Completion      *CompletionClientCapabilities      `json:"completion,omitempty"`
+	Synchronization *SynchronizationClientCapabilities `json:"synchronization,omitempty"`
+}
+
+type SynchronizationClientCapabilities struct {
+	DynamicRegistration bool `json:"dynamicRegistration,omitempty"`
+	WillSave            bool `json:"willSave,omitempty"`
+	WillSaveWaitUntil   bool `json:"willSaveWaitUntil,omitempty"`
 }
 
 // CompletionClientCapabilities represents completion specific client capabilities.
@@ -143,7 +177,14 @@ type CompletionItemClientCapabilities struct {
 
 // WorkspaceClientCapabilities represents workspace specific client capabilities.
 type WorkspaceClientCapabilities struct {
-	WorkspaceFolders bool `json:"workspaceFolders,omitempty"`
+	ApplyEdit              bool `json:"applyEdit,omitempty"`
+	WorkspaceFolders       bool `json:"workspaceFolders,omitempty"`
+	DidChangeConfiguration bool `json:"didChangeConfiguration,omitempty"`
+	DynamicRegistration    bool `json:"dynamicRegistration,omitempty"`
+}
+
+type WindowClientCapabilities struct {
+	WorkDoneProgress bool `json:"workDoneProgress,omitempty"`
 }
 
 // ExecuteCommandOptions represents options for the execute command provider.
@@ -218,6 +259,74 @@ type InitializationOptions struct {
 	DiagFiveMUnknownEvent         bool `json:"diagFiveMUnknownEvent"`
 }
 
+// defaultInitializationOptions mirrors the extension defaults. Standalone
+// clients are allowed to omit initializationOptions entirely, so an omitted
+// options object must not silently disable every diagnostic and feature.
+func defaultInitializationOptions() InitializationOptions {
+	return InitializationOptions{
+		TelemetryEnabled: true,
+		MaxFileSizeMB:    4,
+		ParserMaxErrors:  50,
+
+		DiagUndefinedGlobals:     true,
+		DiagImplicitGlobals:      true,
+		DiagUnusedLocal:          true,
+		DiagUnusedFunction:       true,
+		DiagUnusedParameter:      true,
+		DiagUnusedLoopVar:        true,
+		DiagShadowing:            true,
+		DiagUnreachableCode:      true,
+		DiagAmbiguousReturns:     true,
+		DiagDeprecated:           true,
+		DiagDuplicateField:       true,
+		DiagUnbalancedAssignment: true,
+		DiagDuplicateLocal:       true,
+		DiagSelfAssignment:       true,
+		DiagEmptyBlock:           true,
+		DiagFormatString:         true,
+		DiagRedundantParameter:   true,
+		DiagRedundantValue:       true,
+		DiagRedundantReturn:      true,
+		DiagLoopVarMutation:      true,
+		DiagIncorrectVararg:      true,
+		DiagShadowingLoopVar:     true,
+		DiagConstantCondition:    true,
+		DiagUnreachableElse:      true,
+		DiagUsedIgnoredVar:       true,
+
+		InlayParamHints:    true,
+		InlaySuppressMatch: true,
+		InlayImplicitSelf:  true,
+
+		FeatureDocHighlight:   true,
+		FeatureHoverEval:      true,
+		FeatureCodeLens:       true,
+		FeatureFormatting:     true,
+		FeatureFormatAlerts:   true,
+		SuggestFunctionParams: true,
+
+		DiagFiveMUnaccountedFile:      true,
+		DiagFiveMUnknownExport:        true,
+		DiagFiveMUnknownResource:      true,
+		DiagFiveMEventDirection:       true,
+		DiagFiveMUnregisteredNetEvent: true,
+		DiagFiveMUnknownEvent:         true,
+	}
+}
+
+// UnmarshalJSON applies defaults before overlaying client-provided values.
+// This keeps `{}` and partial settings useful for clients that only configure
+// one or two Lugo-specific options.
+func (o *InitializationOptions) UnmarshalJSON(data []byte) error {
+	defaults := defaultInitializationOptions()
+	type options InitializationOptions
+	if err := json.Unmarshal(data, (*options)(&defaults)); err != nil {
+		return err
+	}
+	*o = defaults
+	return nil
+}
+
 // ServerCapabilities represents the capabilities provided by the language server.
 // Work done progress support is delivered through $/progress notifications.
 type ServerCapabilities struct {
@@ -248,6 +357,7 @@ type ServerCapabilities struct {
 	DocumentLinkProvider            any                          `json:"documentLinkProvider,omitempty"`
 	PositionEncoding                string                       `json:"positionEncoding,omitempty"`
 	OffsetEncoding                  []string                     `json:"offsetEncoding,omitempty"`
+	WorkDoneProgress                bool                         `json:"workDoneProgress,omitempty"`
 	Workspace                       *WorkspaceServerCapabilities `json:"workspace,omitempty"`
 }
 
@@ -834,6 +944,10 @@ type WorkDoneProgressEnd struct {
 type ProgressParams struct {
 	Token string `json:"token"`
 	Value any    `json:"value"`
+}
+
+type CancelRequestParams struct {
+	ID any `json:"id"`
 }
 
 // TypeDefinitionParams represents parameters for the textDocument/typeDefinition request.

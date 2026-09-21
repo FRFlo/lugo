@@ -7,11 +7,26 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
 )
 
 var contentLengthPrefix = []byte("Content-Length: ")
 
 const maxMessageSize = 100 * 1024 * 1024
+
+// JSON-RPC messages must be written as complete frames. The server performs
+// workspace indexing asynchronously, so notifications can otherwise
+// interleave with request responses on stdout.
+var writeMu sync.Mutex
+var outgoingRequestID atomic.Uint64
+
+func nextOutgoingRequestID() uint64 {
+	// Keep server-originated request IDs monotonically increasing so
+	// overlapping indexing/reindex requests cannot reuse an ID.
+	return outgoingRequestID.Add(1)
+}
 
 // ReadMessage reads a JSON-RPC message from a buffered reader.
 // It parses the Content-Length header and returns the raw message body.
@@ -32,8 +47,11 @@ func ReadMessage(r *bufio.Reader) ([]byte, error) {
 			break
 		}
 
-		if bytes.HasPrefix(line, contentLengthPrefix) {
-			valBytes := bytes.TrimSpace(line[len(contentLengthPrefix):])
+		line = bytes.TrimSuffix(line, []byte("\n"))
+		line = bytes.TrimSuffix(line, []byte("\r"))
+		separator := bytes.IndexByte(line, ':')
+		if separator >= 0 && strings.EqualFold(string(bytes.TrimSpace(line[:separator])), "Content-Length") {
+			valBytes := bytes.TrimSpace(line[separator+1:])
 			if len(valBytes) == 0 {
 				return nil, fmt.Errorf("invalid content length")
 			}
@@ -79,15 +97,18 @@ func WriteMessage(w io.Writer, msg any) error {
 	}
 
 	header := fmt.Sprintf("Content-Length: %d\r\n\r\n", len(body))
+	frame := make([]byte, 0, len(header)+len(body))
+	frame = append(frame, header...)
+	frame = append(frame, body...)
 
-	_, err = w.Write([]byte(header))
+	writeMu.Lock()
+	defer writeMu.Unlock()
+	n, err := w.Write(frame)
 	if err != nil {
 		return err
 	}
-
-	_, err = w.Write(body)
-	if err != nil {
-		return err
+	if n != len(frame) {
+		return io.ErrShortWrite
 	}
 
 	return nil

@@ -92,6 +92,10 @@ type Tree struct {
 	Source []byte
 	Root   NodeID
 
+	// PositionEncoding is the LSP character encoding used by Position and
+	// Offset. It defaults to UTF-16, the LSP fallback encoding.
+	PositionEncoding string
+
 	Nodes     []Node
 	Comments  []token.Token // Store comment boundaries continuously
 	ExtraList []NodeID      // A flattened list of child nodes for N-ary structures
@@ -117,16 +121,28 @@ func NewTree(source []byte) *Tree {
 	lines = computeLineOffsets(source, lines)
 
 	t := &Tree{
-		Source:      source,
-		Nodes:       make([]Node, 1, capNodes), // reserve index 0
-		ExtraList:   make([]NodeID, 0, capExtra),
-		Comments:    make([]token.Token, 0, capComments),
-		LineOffsets: lines,
+		Source:           source,
+		Nodes:            make([]Node, 1, capNodes), // reserve index 0
+		ExtraList:        make([]NodeID, 0, capExtra),
+		Comments:         make([]token.Token, 0, capComments),
+		LineOffsets:      lines,
+		PositionEncoding: "utf-16",
 	}
 
 	t.Nodes[0] = Node{Kind: KindInvalid, Start: 0xFFFFFFFF, End: 0xFFFFFFFF}
 
 	return t
+}
+
+// SetPositionEncoding selects one of the encodings defined by LSP 3.18.
+// Unknown values intentionally fall back to UTF-16.
+func (t *Tree) SetPositionEncoding(encoding string) {
+	switch encoding {
+	case "utf-8", "utf-16", "utf-32":
+		t.PositionEncoding = encoding
+	default:
+		t.PositionEncoding = "utf-16"
+	}
 }
 
 // Position converts a byte offset to a 0-indexed Line and Column
@@ -162,7 +178,7 @@ func (t *Tree) Position(offset uint32) (line, col uint32) {
 			}
 		}
 
-		if !hasNonASCII {
+		if t.PositionEncoding == "utf-8" || !hasNonASCII {
 			return lineIdx, uint32(len(colBytes))
 		}
 
@@ -178,7 +194,9 @@ func (t *Tree) Position(offset uint32) (line, col uint32) {
 			}
 
 			r, size := utf8.DecodeRune(colBytes[i:])
-			if r > 0xFFFF {
+			if t.PositionEncoding == "utf-32" {
+				col++
+			} else if r > 0xFFFF {
 				col += 2 // Surrogate pair
 			} else {
 				col += 1
@@ -218,10 +236,19 @@ func (t *Tree) Offset(line, col uint32) uint32 {
 			}
 
 			r, size := utf8.DecodeRune(rem[i:])
-			if r > 0xFFFF {
-				currentCol += 2
-			} else {
-				currentCol += 1
+			switch t.PositionEncoding {
+			case "utf-8":
+				currentCol += uint32(size)
+			case "utf-32":
+				currentCol++
+			case "utf-16":
+				if r > 0xFFFF {
+					currentCol += 2
+				} else {
+					currentCol++
+				}
+			default:
+				currentCol++
 			}
 
 			i += size

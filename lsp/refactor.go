@@ -1354,7 +1354,7 @@ func (s *Server) handleExecuteCommand(req Request) {
 				edit := s.buildIgnoreDiagnosticEdit(uri, doc, uint32(lineFloat), rule, isFile)
 				WriteMessage(s.Writer, OutgoingRequest{
 					RPC:    "2.0",
-					ID:     99998,
+					ID:     nextOutgoingRequestID(),
 					Method: "workspace/applyEdit",
 					Params: ApplyWorkspaceEditParams{
 						Label: "Ignore diagnostic",
@@ -1404,7 +1404,7 @@ func (s *Server) handleExecuteCommand(req Request) {
 		if len(changes) > 0 {
 			WriteMessage(s.Writer, OutgoingRequest{
 				RPC:    "2.0",
-				ID:     99999, // Fire and forget request ID
+				ID:     nextOutgoingRequestID(), // Fire and forget request ID
 				Method: "workspace/applyEdit",
 				Params: ApplyWorkspaceEditParams{
 					Label: "Apply safe fixes",

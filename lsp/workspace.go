@@ -259,20 +259,22 @@ func (s *Server) refreshWorkspace() {
 
 	s.IsIndexing = true
 
-	// Request client to create a work done progress token
-	WriteMessage(s.Writer, OutgoingRequest{
-		RPC:    "2.0",
-		ID:     10001,
-		Method: "window/workDoneProgress/create",
-		Params: map[string]string{"token": "indexing"},
-	})
+	if s.workDoneProgressSupport {
+		// Request client to create a work done progress token.
+		WriteMessage(s.Writer, OutgoingRequest{
+			RPC:    "2.0",
+			ID:     nextOutgoingRequestID(),
+			Method: "window/workDoneProgress/create",
+			Params: map[string]string{"token": "indexing"},
+		})
 
-	// Notify client that indexing has started
-	s.sendProgressNotification("indexing", WorkDoneProgressBegin{
-		Kind:        "begin",
-		Title:       "Lugo: Indexing workspace",
-		Cancellable: false,
-	})
+		// Notify client that indexing has started.
+		s.sendProgressNotification("indexing", WorkDoneProgressBegin{
+			Kind:        "begin",
+			Title:       "Lugo: Indexing workspace",
+			Cancellable: false,
+		})
+	}
 
 	start := time.Now()
 
@@ -360,6 +362,7 @@ func (s *Server) refreshWorkspace() {
 				} else {
 					tree.Reset(b)
 				}
+				tree.SetPositionEncoding(s.positionEncoding)
 
 				p.MaxErrors = s.MaxParseErrors
 
@@ -669,6 +672,7 @@ func (s *Server) updateDocument(uri string, source []byte) bool {
 	} else {
 		tree = ast.NewTree(source)
 	}
+	tree.SetPositionEncoding(s.positionEncoding)
 
 	p := s.sharedParser
 
@@ -687,6 +691,7 @@ func (s *Server) updateDocument(uri string, source []byte) bool {
 
 func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tree, parseErrors []parser.ParseError, doc *Document) bool {
 	var needsWorkspaceRepublish bool
+	tree.SetPositionEncoding(s.positionEncoding)
 
 	if doc != nil {
 		// Canonical source is owned by the Tree; ensure Tree reflects the latest source.
@@ -1762,6 +1767,10 @@ func (s *Server) resolveModule(currentURI string, modName string) *Document {
 
 // sendProgressNotification sends a $/progress notification to the client.
 func (s *Server) sendProgressNotification(token string, value any) {
+	if !s.workDoneProgressSupport {
+		return
+	}
+
 	params := ProgressParams{
 		Token: token,
 		Value: value,

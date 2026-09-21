@@ -1,6 +1,26 @@
 package lsp
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
+
+func TestCancelRequestTracksNumericAndStringIDs(t *testing.T) {
+	for _, id := range []any{float64(42), "request-42"} {
+		s := NewServer("test")
+		params, err := json.Marshal(CancelRequestParams{ID: id})
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.handleCancelRequest(Request{Params: params})
+		if !s.takeCanceledRequest(id) {
+			t.Fatalf("request ID %#v was not cancelled", id)
+		}
+		if s.takeCanceledRequest(id) {
+			t.Fatalf("request ID %#v remained cancelled", id)
+		}
+	}
+}
 
 func TestGlobalIndexPruneKeepsReferencedResource(t *testing.T) {
 	idx := NewGlobalIndex()

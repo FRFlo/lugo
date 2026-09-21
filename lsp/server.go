@@ -12,6 +12,7 @@ import (
 	"runtime/debug"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/coalaura/plain"
 
@@ -34,16 +35,19 @@ type Server struct {
 	lowerWorkspaceFolders []string
 
 	// Config
-	LibraryPaths           []string
-	lowerLibraryPaths      []string
-	IgnoreGlobs            []string
-	compiledIgnores        []IgnorePattern
-	BannedSymbols          map[string]string
-	MaxParseErrors         int
-	MaxFileSize            int64
-	positionEncoding       string
-	snippetSupport         bool
-	workspaceFolderSupport bool
+	LibraryPaths            []string
+	lowerLibraryPaths       []string
+	IgnoreGlobs             []string
+	compiledIgnores         []IgnorePattern
+	BannedSymbols           map[string]string
+	MaxParseErrors          int
+	MaxFileSize             int64
+	positionEncoding        string
+	snippetSupport          bool
+	workspaceFolderSupport  bool
+	workDoneProgressSupport bool
+	canceledRequests        map[string]struct{}
+	canceledRequestsMu      sync.Mutex
 
 	// Transport & Logging
 	Reader *bufio.Reader
@@ -244,6 +248,7 @@ func NewServer(version string) *Server {
 		MaxFileSize:      DefaultMaxFileSize,
 		positionEncoding: "utf-16",
 		snippetSupport:   true,
+		canceledRequests: make(map[string]struct{}),
 	}
 }
 
@@ -274,7 +279,40 @@ func (s *Server) Start() error {
 		err = json.Unmarshal(msg, &req)
 		if err != nil {
 			s.Log.Errorf("Failed to unmarshal request: %v\n", err)
+			_ = WriteMessage(s.Writer, Response{
+				RPC: "2.0",
+				ID:  nil,
+				Error: ResponseError{
+					Code:    -32700,
+					Message: "parse error",
+				},
+			})
 
+			continue
+		}
+		if req.RPC != "2.0" || req.Method == "" {
+			if req.ID != nil {
+				_ = WriteMessage(s.Writer, Response{
+					RPC: "2.0",
+					ID:  req.ID,
+					Error: ResponseError{
+						Code:    -32600,
+						Message: "invalid request",
+					},
+				})
+			}
+			continue
+		}
+
+		if req.Method != "$/cancelRequest" && req.ID != nil && s.takeCanceledRequest(req.ID) {
+			_ = WriteMessage(s.Writer, Response{
+				RPC: "2.0",
+				ID:  req.ID,
+				Error: ResponseError{
+					Code:    -32800,
+					Message: "request cancelled",
+				},
+			})
 			continue
 		}
 
@@ -444,7 +482,7 @@ func (s *Server) handleMessage(req Request) {
 			FlushTelemetry()
 
 			// Attempt to notify the client before we die
-			if req.ID != 0 {
+			if req.ID != nil {
 				WriteMessage(s.Writer, Response{
 					RPC: "2.0",
 					ID:  req.ID,
@@ -483,8 +521,7 @@ func (s *Server) handleMessage(req Request) {
 	case "workspace/willRenameFiles":
 		s.handleWillRenameFiles(req)
 	case "$/cancelRequest":
-		// Cancel is a no-op for single-threaded servers;
-		// the client may still send it per LSP spec.
+		s.handleCancelRequest(req)
 	case "textDocument/didOpen":
 		s.handleDidOpen(req)
 	case "textDocument/didChange":
@@ -565,7 +602,59 @@ func (s *Server) handleMessage(req Request) {
 		s.handleCallHierarchyIncomingCalls(req)
 	case "callHierarchy/outgoingCalls":
 		s.handleCallHierarchyOutgoingCalls(req)
+	default:
+		// JSON-RPC requests must receive a method-not-found response. Ignore
+		// unknown notifications, which have no response ID by definition.
+		if req.ID != nil {
+			_ = WriteMessage(s.Writer, Response{
+				RPC: "2.0",
+				ID:  req.ID,
+				Error: ResponseError{
+					Code:    -32601,
+					Message: "method not found: " + req.Method,
+				},
+			})
+		}
 	}
+}
+
+func (s *Server) handleCancelRequest(req Request) {
+	var params struct {
+		ID json.RawMessage `json:"id"`
+	}
+	if err := json.Unmarshal(req.Params, &params); err != nil || len(params.ID) == 0 || string(params.ID) == "null" {
+		return
+	}
+
+	s.canceledRequestsMu.Lock()
+	if s.canceledRequests == nil {
+		s.canceledRequests = make(map[string]struct{})
+	}
+	s.canceledRequests[string(params.ID)] = struct{}{}
+	s.canceledRequestsMu.Unlock()
+}
+
+func (s *Server) takeCanceledRequest(id any) bool {
+	key := requestIDBytes(id)
+	if len(key) == 0 {
+		return false
+	}
+	s.canceledRequestsMu.Lock()
+	defer s.canceledRequestsMu.Unlock()
+	_, canceled := s.canceledRequests[string(key)]
+	delete(s.canceledRequests, string(key))
+	return canceled
+}
+
+func requestIDBytes(id any) []byte {
+	if raw, ok := id.(json.RawMessage); ok {
+		return raw
+	}
+	encoded, err := json.Marshal(id)
+	if err != nil {
+		return nil
+	}
+	return encoded
 }
 
 func (s *Server) handleInitialize(req Request) {
@@ -593,7 +682,11 @@ func (s *Server) handleInitialize(req Request) {
 			s.lowerWorkspaceFolders = []string{s.lowerRootPath}
 		}
 
-		s.applyInitializationOptions(params.InitializationOptions)
+		opts := defaultInitializationOptions()
+		if params.InitializationOptions != nil {
+			opts = *params.InitializationOptions
+		}
+		s.applyInitializationOptions(opts)
 		if !s.snippetSupport {
 			s.SuggestFunctionParams = false
 		}
@@ -623,6 +716,7 @@ func (s *Server) handleInitialize(req Request) {
 			ImplementationProvider:          true,
 			PositionEncoding:                s.positionEncoding,
 			OffsetEncoding:                  []string{s.positionEncoding},
+			WorkDoneProgress:                true,
 			CodeActionProvider: map[string]any{
 				"codeActionKinds": []string{"quickfix", "refactor.rewrite"},
 				"resolveProvider": true,
@@ -682,20 +776,18 @@ func (s *Server) applyClientCapabilities(caps *ClientCapabilities) {
 	s.positionEncoding = "utf-16"
 	s.snippetSupport = true
 	s.workspaceFolderSupport = false
+	s.workDoneProgressSupport = false
 
 	if caps == nil {
+		s.applyPositionEncoding()
 		return
 	}
 
 	if caps.General != nil {
 		for _, enc := range caps.General.PositionEncodings {
-			if enc == "utf-8" {
-				s.positionEncoding = "utf-8"
-				break
-			}
-
-			if enc == "utf-16" {
-				s.positionEncoding = "utf-16"
+			if enc == "utf-8" || enc == "utf-16" || enc == "utf-32" {
+				s.positionEncoding = enc
+				break // honor the client's preference order
 			}
 		}
 	}
@@ -707,6 +799,19 @@ func (s *Server) applyClientCapabilities(caps *ClientCapabilities) {
 
 	if caps.Workspace != nil {
 		s.workspaceFolderSupport = caps.Workspace.WorkspaceFolders
+	}
+	if caps.Window != nil {
+		s.workDoneProgressSupport = caps.Window.WorkDoneProgress
+	}
+
+	s.applyPositionEncoding()
+}
+
+func (s *Server) applyPositionEncoding() {
+	for _, doc := range s.Documents {
+		if doc != nil && doc.Tree != nil {
+			doc.Tree.SetPositionEncoding(s.positionEncoding)
+		}
 	}
 }
 
