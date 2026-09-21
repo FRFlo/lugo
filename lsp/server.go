@@ -48,6 +48,7 @@ type Server struct {
 	workDoneProgressSupport bool
 	canceledRequests        map[string]struct{}
 	canceledRequestsMu      sync.Mutex
+	mcpMu                   sync.Mutex
 
 	// Transport & Logging
 	Reader *bufio.Reader
