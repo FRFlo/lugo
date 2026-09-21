@@ -94,6 +94,7 @@ Run the same checks used by CI with the quality-gate script:
 bash ./scripts/quality-gate.sh format     # gofmt and whitespace/diff checks
 bash ./scripts/quality-gate.sh coverage   # package tests with coverage
 bash ./scripts/quality-gate.sh benchmark  # lexer/parser benchmark + zero allocations
+bash ./scripts/quality-gate.sh race       # race-enabled test suite (requires CGO and a C compiler)
 bash ./scripts/quality-gate.sh all
 ```
 
@@ -216,11 +217,20 @@ You can configure Lugo via your VS Code `settings.json` (also available via the 
 
 VS Code uses the `lugo.fivem.*` names below. Standalone clients and CI use the matching `initializationOptions` keys shown in parentheses.
 
+* `lugo.fivem.diagnostics.eventDirection` (`diagFiveMEventDirection`): Toggle client/server event direction validation.
+* `lugo.fivem.diagnostics.eventPayload` (`diagFiveMEventPayload`): Toggle validation of network event arguments against known handler payloads.
+* `lugo.fivem.diagnostics.unregisteredNetEvent` (`diagFiveMUnregisteredNetEvent`): Toggle checks for registered-but-never-triggered and triggered-but-never-registered network events.
+* `lugo.fivem.diagnostics.unknownEvent` (`diagFiveMUnknownEvent`): Toggle warnings for event names unknown to the workspace.
 * `lugo.fivem.diagnostics.unaccountedFile` (`diagFiveMUnaccountedFile`): Toggle warnings for Lua files inside a detected resource root that are not matched by the active manifest. Unaccounted files remain plain Lua.
 * `lugo.fivem.diagnostics.unknownExport` (`diagFiveMUnknownExport`): Toggle warnings for missing exports on known FiveM resources addressed through the `exports` bridge.
 * `lugo.fivem.diagnostics.unknownResource` (`diagFiveMUnknownResource`): Toggle warnings for unknown resource names addressed through the `exports` bridge.
+* `lugo.fivem.diagnostics.trustBoundary` (`diagFiveMTrustBoundary`): Toggle diagnostics for untrusted event data flowing to sensitive FiveM APIs.
+* `lugo.fivem.diagnostics.performance` (`diagFiveMPerformance`): Toggle FiveM game-thread performance diagnostics.
+* `lugo.fivem.diagnostics.sql` (`diagFiveMSQL`): Toggle SQL diagnostics for synchronous calls, placeholder counts, and annotated schemas.
+* `lugo.fivem.frameworkAdapters` (`frameworkAdapters`): Optional metadata packs for `esx`, `qbcore`, and `ox`. Each item accepts `name`, optional `version`, and optional `enabled`, for example `[{"name":"qbcore","version":"1"}]`.
+* `lugo.fivem.sqlAdapters` (`sqlAdapters`): Additional SQL adapter metadata. Each item requires `name` and may set `calls` and `syncCalls` arrays. Built-in `oxmysql` and `mysql-async` call shapes are always available.
 
-There are no additional FiveM configuration keys for manifest/runtime/native selection. Lugo derives those surfaces from the active resource manifest.
+Manifest/runtime/native selection remains derived from the active resource manifest. The FiveM Resources view discovers manifests asynchronously and incrementally; diagnostic changes refresh it after a short debounce.
 
 ## Commands
 
