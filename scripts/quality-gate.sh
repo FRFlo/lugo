@@ -32,6 +32,10 @@ check_coverage() {
   go test -cover ./...
 }
 
+check_race() {
+  CGO_ENABLED=1 go test -v -race ./...
+}
+
 check_benchmarks() {
   local output
   output=$(go test ./lexer ./parser -run '^$' -bench '^Benchmark(Lexer|Parser)$' -benchmem -count=1)
@@ -52,6 +56,7 @@ case "${1:-all}" in
   format) check_format ;;
   coverage) check_coverage ;;
   benchmark) check_benchmarks ;;
-  all) check_format; check_coverage; check_benchmarks ;;
-  *) echo "usage: $0 [all|format|coverage|benchmark]" >&2; exit 2 ;;
+  race) check_race ;;
+  all) check_format; check_coverage; check_benchmarks; check_race ;;
+  *) echo "usage: $0 [all|format|coverage|benchmark|race]" >&2; exit 2 ;;
 esac

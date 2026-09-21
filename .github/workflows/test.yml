@@ -16,6 +16,12 @@ jobs:
       with:
         go-version-file: 'go.mod'
 
+    - name: Install C compiler for race detector
+      run: |
+        sudo apt-get update
+        sudo apt-get install --yes gcc
+        gcc --version
+
     - name: Generate Lua native stubs
       run: go run ./cmd/rage-lua-natives -out ./lsp/stdlib
 
@@ -34,5 +40,25 @@ jobs:
     - name: Build MCP server
       run: go build -trimpath -buildvcs=false ./cmd/lugo-mcp
 
-    - name: Run Tests
-      run: go test -v -race ./...
+    - name: Run race-enabled tests
+      env:
+        CGO_ENABLED: 1
+        CC: gcc
+      run: bash ./scripts/quality-gate.sh race
+
+    - name: Validate VS Code extension package
+      if: github.event_name == 'pull_request'
+      uses: actions/setup-node@v6
+      with:
+        node-version: 22
+
+    - name: Package VS Code extension without publishing
+      if: github.event_name == 'pull_request'
+      working-directory: ./vscode
+      run: |
+        npm install
+        npm run build
+        cp ../README.md .
+        cp ../LICENSE .
+        cp ../logo.png .
+        npx --yes @vscode/vsce package --out ../lugo-pr.vsix
