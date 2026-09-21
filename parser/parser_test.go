@@ -253,3 +253,37 @@ func BenchmarkParser(b *testing.B) {
 		p.Parse()
 	}
 }
+
+func TestParser_LargeASTListCount(t *testing.T) {
+	const statements = 70000
+	src := make([]byte, 0, statements*11)
+	for i := 0; i < statements; i++ {
+		src = append(src, "local a=1\n"...)
+	}
+
+	tree := ast.NewTree(src)
+	root := parser.New(src, tree, 0).Parse()
+	file := tree.Nodes[root]
+	block := tree.Nodes[file.Left]
+	if block.Count != statements {
+		t.Fatalf("block count = %d, want %d", block.Count, statements)
+	}
+}
+
+func TestParser_DeepBlocksAreBounded(t *testing.T) {
+	const depth = 1000
+	src := make([]byte, 0, depth*7)
+	for i := 0; i < depth; i++ {
+		src = append(src, "do\n"...)
+	}
+	for i := 0; i < depth; i++ {
+		src = append(src, "end\n"...)
+	}
+
+	tree := ast.NewTree(src)
+	p := parser.New(src, tree, 0)
+	p.Parse()
+	if len(p.Errors) == 0 {
+		t.Fatal("expected a nesting-depth diagnostic")
+	}
+}

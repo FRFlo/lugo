@@ -67,16 +67,17 @@ type ParseError struct {
 }
 
 type Parser struct {
-	lex       *lexer.Lexer
-	tree      *ast.Tree
-	Errors    []ParseError
-	MaxErrors int
-	prev      token.Token
-	curr      token.Token
-	peek      token.Token
-	loopDepth int
-	depth     int
-	listStack []ast.NodeID
+	lex        *lexer.Lexer
+	tree       *ast.Tree
+	Errors     []ParseError
+	MaxErrors  int
+	prev       token.Token
+	curr       token.Token
+	peek       token.Token
+	loopDepth  int
+	depth      int
+	blockDepth int
+	listStack  []ast.NodeID
 }
 
 func New(source []byte, tree *ast.Tree, maxErrors int) *Parser {
@@ -105,9 +106,24 @@ func (p *Parser) Reset(source []byte, tree *ast.Tree) {
 	p.listStack = p.listStack[:0]
 	p.loopDepth = 0
 	p.depth = 0
+	p.blockDepth = 0
 
 	p.nextToken()
 	p.nextToken()
+}
+
+// TrimOversized releases parser scratch buffers that grew beyond normal input
+// sizes. The common case keeps its capacity for allocation-free reuse.
+func (p *Parser) TrimOversized(maxCap int) {
+	if p == nil {
+		return
+	}
+	if cap(p.Errors) > maxCap {
+		p.Errors = nil
+	}
+	if cap(p.listStack) > maxCap {
+		p.listStack = nil
+	}
 }
 
 func (p *Parser) GetTree() *ast.Tree {
@@ -166,7 +182,7 @@ func (p *Parser) validateLHS(listNodeID ast.NodeID) {
 
 	listNode := p.tree.Nodes[listNodeID]
 
-	for i := uint16(0); i < listNode.Count; i++ {
+	for i := uint32(0); i < listNode.Count; i++ {
 		exprID := p.tree.ExtraList[listNode.Extra+uint32(i)]
 		kind := p.tree.Nodes[exprID].Kind
 
@@ -209,6 +225,19 @@ func (p *Parser) sync() {
 func (p *Parser) parseBlock(stopTokens token.TokenSet) ast.NodeID {
 	start := p.curr.Start
 
+	// Keep malformed or adversarially nested input from exhausting the Go stack.
+	// Once the limit is reached, consume this block at token level; the caller
+	// still owns the terminating token and can continue normal recovery.
+	if p.blockDepth >= 200 {
+		p.error("block nesting too deep (possible cyclic/malicious code)")
+		for p.curr.Kind != token.EOF && !p.isAt(stopTokens) {
+			p.nextToken()
+		}
+		return p.tree.AddNode(ast.Node{Kind: ast.KindBlock, Start: start, End: start})
+	}
+	p.blockDepth++
+	defer func() { p.blockDepth-- }()
+
 	stackStart := len(p.listStack)
 
 	for p.curr.Kind != token.EOF && !p.isAt(stopTokens) {
@@ -246,7 +275,7 @@ func (p *Parser) parseBlock(stopTokens token.TokenSet) ast.NodeID {
 	return p.tree.AddNode(ast.Node{
 		Kind:  ast.KindBlock,
 		Start: start, End: end,
-		Extra: extraStart, Count: uint16(count),
+		Extra: extraStart, Count: count,
 	})
 }
 
@@ -414,7 +443,7 @@ func (p *Parser) parseLocal() ast.NodeID {
 		Start: lhsStart,
 		End:   lhsEnd,
 		Extra: extraStart,
-		Count: uint16(count),
+		Count: count,
 	})
 
 	var rhsList = ast.InvalidNode
@@ -502,7 +531,7 @@ func (p *Parser) parseIf() ast.NodeID {
 		Kind:  ast.KindIf,
 		Start: start, End: p.prev.End,
 		Left: condition, Right: thenBlock,
-		Extra: extraStart, Count: uint16(count),
+		Extra: extraStart, Count: count,
 	})
 }
 
@@ -640,7 +669,7 @@ func (p *Parser) parseFor() ast.NodeID {
 
 		return p.tree.AddNode(ast.Node{
 			Kind: ast.KindForNum, Start: start, End: end,
-			Left: firstIdent, Right: block, Extra: extraStart, Count: uint16(count),
+			Left: firstIdent, Right: block, Extra: extraStart, Count: count,
 		})
 	}
 
@@ -670,7 +699,7 @@ func (p *Parser) parseFor() ast.NodeID {
 	p.listStack = p.listStack[:stackStart]
 
 	nameList := p.tree.AddNode(ast.Node{
-		Kind: ast.KindNameList, Extra: extraStartNames, Count: uint16(count),
+		Kind: ast.KindNameList, Extra: extraStartNames, Count: uint32(count),
 		Start: p.tree.Nodes[firstIdent].Start, End: p.prev.End,
 	})
 
@@ -869,7 +898,7 @@ func (p *Parser) parseExprList() ast.NodeID {
 	return p.tree.AddNode(ast.Node{
 		Kind:  ast.KindExprList,
 		Start: start, End: p.prev.End,
-		Extra: extraStart, Count: uint16(count),
+		Extra: extraStart, Count: uint32(count),
 	})
 }
 
@@ -1159,7 +1188,7 @@ func (p *Parser) parseTableConstructor() ast.NodeID {
 	extraStart, count := p.flushListStack(stackStart)
 
 	return p.tree.AddNode(ast.Node{
-		Kind: ast.KindTableExpr, Start: start, End: end, Extra: extraStart, Count: uint16(count),
+		Kind: ast.KindTableExpr, Start: start, End: end, Extra: extraStart, Count: count,
 	})
 }
 
@@ -1216,7 +1245,7 @@ func (p *Parser) parseCallArgs(left ast.NodeID, callToken token.Kind) ast.NodeID
 	extraStart, count := p.flushListStack(stackStart)
 
 	return p.tree.AddNode(ast.Node{
-		Kind: ast.KindCallExpr, Start: start, End: end, Left: left, Extra: extraStart, Count: uint16(count),
+		Kind: ast.KindCallExpr, Start: start, End: end, Left: left, Extra: extraStart, Count: count,
 	})
 }
 
@@ -1280,13 +1309,13 @@ func (p *Parser) parseFunctionBody(start uint32) ast.NodeID {
 	return p.tree.AddNode(ast.Node{
 		Kind:  ast.KindFunctionExpr,
 		Start: start, End: end,
-		Extra: extraStart, Count: uint16(count),
+		Extra: extraStart, Count: count,
 		Right: block,
 	})
 }
 
-func (p *Parser) flushListStack(stackStart int) (extraStart uint32, count uint16) {
-	count = uint16(len(p.listStack) - stackStart)
+func (p *Parser) flushListStack(stackStart int) (extraStart uint32, count uint32) {
+	count = uint32(len(p.listStack) - stackStart)
 	if count == 0 {
 		return 0, 0
 	}

@@ -234,7 +234,7 @@ func (doc *Document) getAssignedValue(id ast.NodeID) ast.NodeID {
 			}
 
 			rhsNode := doc.Tree.Nodes[grandParentNode.Right]
-			if uint16(idx) >= rhsNode.Count {
+			if uint32(idx) >= rhsNode.Count {
 				return ast.InvalidNode
 			}
 
@@ -256,7 +256,7 @@ func (doc *Document) getAssignedValue(id ast.NodeID) ast.NodeID {
 			}
 
 			rhsNode := doc.Tree.Nodes[grandParentNode.Right]
-			if uint16(idx) >= rhsNode.Count {
+			if uint32(idx) >= rhsNode.Count {
 				return ast.InvalidNode
 			}
 
@@ -303,7 +303,7 @@ func (doc *Document) getFunctionParams(funcExprID ast.NodeID, luadoc *LuaDoc) st
 
 	var params []string
 
-	for i := uint16(0); i < node.Count; i++ {
+	for i := uint32(0); i < node.Count; i++ {
 		if node.Extra+uint32(i) >= uint32(len(doc.Tree.ExtraList)) {
 			continue
 		}
@@ -552,7 +552,7 @@ func (doc *Document) LocalsAt(offset uint32) iter.Seq2[[]byte, ast.NodeID] {
 				if funcExpr != ast.InvalidNode {
 					exprNode := doc.Tree.Nodes[funcExpr]
 
-					for i := uint16(0); i < exprNode.Count; i++ {
+					for i := uint32(0); i < exprNode.Count; i++ {
 						paramID := doc.Tree.ExtraList[exprNode.Extra+uint32(i)]
 						paramNode := doc.Tree.Nodes[paramID]
 
@@ -587,7 +587,7 @@ func (doc *Document) LocalsAt(offset uint32) iter.Seq2[[]byte, ast.NodeID] {
 				if exprListID != ast.InvalidNode && offset > doc.Tree.Nodes[exprListID].End {
 					nameList := doc.Tree.Nodes[node.Left]
 
-					for i := uint16(0); i < nameList.Count; i++ {
+					for i := uint32(0); i < nameList.Count; i++ {
 						identID := doc.Tree.ExtraList[nameList.Extra+uint32(i)]
 						identNode := doc.Tree.Nodes[identID]
 

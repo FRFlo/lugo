@@ -181,7 +181,7 @@ func findLocalAssignByName(t *testing.T, tree *ast.Tree, name string) ast.NodeID
 		if left.Kind != ast.KindNameList {
 			continue
 		}
-		for i := uint16(0); i < left.Count; i++ {
+		for i := uint32(0); i < left.Count; i++ {
 			identID := tree.ExtraList[left.Extra+uint32(i)]
 			ident := tree.Nodes[identID]
 			if ident.Start <= ident.End && ident.End <= uint32(len(tree.Source)) && string(tree.Source[ident.Start:ident.End]) == name {

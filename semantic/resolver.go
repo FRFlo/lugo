@@ -2,6 +2,7 @@ package semantic
 
 import (
 	"bytes"
+	"slices"
 
 	"github.com/coalaura/lugo/ast"
 )
@@ -133,6 +134,41 @@ func (r *Resolver) Reset() {
 		r.nameArena = make([]byte, 0, 2048)
 	} else {
 		r.nameArena = r.nameArena[:0]
+	}
+}
+
+// TrimOversized releases resolver backing arrays that grew beyond normal
+// documents while preserving the resolved data for cross-document features.
+func (r *Resolver) TrimOversized(maxCap int) {
+	if r == nil {
+		return
+	}
+	if cap(r.References) > maxCap {
+		r.References = slices.Clone(r.References)
+	}
+	if cap(r.GlobalRefs) > maxCap {
+		r.GlobalRefs = slices.Clone(r.GlobalRefs)
+	}
+	if cap(r.GlobalDefs) > maxCap {
+		r.GlobalDefs = slices.Clone(r.GlobalDefs)
+	}
+	if cap(r.FieldDefs) > maxCap {
+		r.FieldDefs = slices.Clone(r.FieldDefs)
+	}
+	if cap(r.PendingFields) > maxCap {
+		r.PendingFields = slices.Clone(r.PendingFields)
+	}
+	if cap(r.DuplicateLocals) > maxCap {
+		r.DuplicateLocals = slices.Clone(r.DuplicateLocals)
+	}
+	if cap(r.LocalDefs) > maxCap {
+		r.LocalDefs = slices.Clone(r.LocalDefs)
+	}
+	if cap(r.ShadowedOuter) > maxCap {
+		r.ShadowedOuter = slices.Clone(r.ShadowedOuter)
+	}
+	if cap(r.Reassignments) > maxCap {
+		r.Reassignments = slices.Clone(r.Reassignments)
 	}
 }
 
@@ -408,7 +444,7 @@ func (r *Resolver) getTableReceiver(id ast.NodeID) (ast.NodeID, []byte) {
 		}
 
 		lhsNode := r.Tree.Nodes[grandParentNode.Left]
-		if uint16(idx) >= lhsNode.Count {
+		if uint32(idx) >= lhsNode.Count {
 			return ast.InvalidNode, nil
 		}
 
@@ -471,7 +507,7 @@ func (r *Resolver) visit(id ast.NodeID) {
 	case ast.KindBlock:
 		startScope := r.pushScope()
 
-		for i := uint16(0); i < node.Count; i++ {
+		for i := uint32(0); i < node.Count; i++ {
 			r.visit(r.Tree.ExtraList[node.Extra+uint32(i)])
 		}
 
@@ -481,14 +517,14 @@ func (r *Resolver) visit(id ast.NodeID) {
 
 		nameList := r.Tree.Nodes[node.Left]
 
-		for i := uint16(0); i < nameList.Count; i++ {
+		for i := uint32(0); i < nameList.Count; i++ {
 			r.declare(r.Tree.ExtraList[nameList.Extra+uint32(i)])
 		}
 	case ast.KindLocalFunction:
 		r.declare(node.Left) // Local functions are in scope for their own body
 		r.visit(node.Right)
 	case ast.KindForNum:
-		for i := uint16(0); i < node.Count; i++ {
+		for i := uint32(0); i < node.Count; i++ {
 			r.visit(r.Tree.ExtraList[node.Extra+uint32(i)])
 		}
 
@@ -504,7 +540,7 @@ func (r *Resolver) visit(id ast.NodeID) {
 		startScope := r.pushScope()
 		nameList := r.Tree.Nodes[node.Left]
 
-		for i := uint16(0); i < nameList.Count; i++ {
+		for i := uint32(0); i < nameList.Count; i++ {
 			r.declare(r.Tree.ExtraList[nameList.Extra+uint32(i)])
 		}
 
@@ -515,7 +551,7 @@ func (r *Resolver) visit(id ast.NodeID) {
 		r.resolveReference(id, false)
 	case ast.KindAssign:
 		listNode := r.Tree.Nodes[node.Left]
-		for i := uint16(0); i < listNode.Count; i++ {
+		for i := uint32(0); i < listNode.Count; i++ {
 			exprID := r.Tree.ExtraList[listNode.Extra+uint32(i)]
 			exprNode := r.Tree.Nodes[exprID]
 
@@ -530,7 +566,7 @@ func (r *Resolver) visit(id ast.NodeID) {
 
 				if rhsList != ast.InvalidNode {
 					rhsNode := r.Tree.Nodes[rhsList]
-					if i < uint16(rhsNode.Count) {
+					if i < rhsNode.Count {
 						valID = r.Tree.ExtraList[rhsNode.Extra+uint32(i)]
 					}
 				}
@@ -598,7 +634,7 @@ func (r *Resolver) visit(id ast.NodeID) {
 			recHash = ast.HashBytes(recBytes)
 		}
 
-		for i := uint16(0); i < node.Count; i++ {
+		for i := uint32(0); i < node.Count; i++ {
 			fieldID := r.Tree.ExtraList[node.Extra+uint32(i)]
 			fieldNode := r.Tree.Nodes[fieldID]
 
@@ -631,7 +667,7 @@ func (r *Resolver) visit(id ast.NodeID) {
 		selfStackStart := len(r.selfStack)
 
 		if node.Kind == ast.KindFunctionExpr {
-			for i := uint16(0); i < node.Count; i++ {
+			for i := uint32(0); i < node.Count; i++ {
 				r.declare(r.Tree.ExtraList[node.Extra+uint32(i)])
 			}
 		} else {
@@ -662,7 +698,7 @@ func (r *Resolver) visit(id ast.NodeID) {
 		// Condition is evaluated inside the block's scope
 		blockNode := r.Tree.Nodes[node.Left]
 
-		for i := uint16(0); i < blockNode.Count; i++ {
+		for i := uint32(0); i < blockNode.Count; i++ {
 			r.visit(r.Tree.ExtraList[blockNode.Extra+uint32(i)])
 		}
 
@@ -675,7 +711,7 @@ func (r *Resolver) visit(id ast.NodeID) {
 		r.visit(node.Left)
 		r.visit(node.Right)
 
-		for i := uint16(0); i < node.Count; i++ {
+		for i := uint32(0); i < node.Count; i++ {
 			r.visit(r.Tree.ExtraList[node.Extra+uint32(i)])
 		}
 	default:
@@ -683,7 +719,7 @@ func (r *Resolver) visit(id ast.NodeID) {
 	}
 }
 
-func (r *Resolver) visitArgs(extraStart uint32, count uint16) {
+func (r *Resolver) visitArgs(extraStart uint32, count uint32) {
 	for i := range count {
 		r.visit(r.Tree.ExtraList[extraStart+uint32(i)])
 	}

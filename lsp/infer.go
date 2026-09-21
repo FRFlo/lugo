@@ -790,7 +790,7 @@ func (doc *Document) inferMemberExpr(node ast.Node) TypeSet {
 
 		tableNode := tDoc.Tree.Nodes[tableID]
 		if tableNode.Kind == ast.KindTableExpr {
-			for i := uint16(0); i < tableNode.Count; i++ {
+			for i := uint32(0); i < tableNode.Count; i++ {
 				fieldID := tDoc.Tree.ExtraList[tableNode.Extra+uint32(i)]
 				field := tDoc.Tree.Nodes[fieldID]
 
@@ -1030,7 +1030,7 @@ func (doc *Document) makeCallableProxyType(defID ast.NodeID) TypeSet {
 	}
 
 	funcNode := doc.Tree.Nodes[valID]
-	for i := uint16(0); i < funcNode.Count; i++ {
+	for i := uint32(0); i < funcNode.Count; i++ {
 		if funcNode.Extra+uint32(i) >= uint32(len(doc.Tree.ExtraList)) {
 			continue
 		}
@@ -1063,7 +1063,7 @@ func (doc *Document) findFieldInTable(tableID ast.NodeID, fieldName string) ast.
 		return ast.InvalidNode
 	}
 
-	for i := uint16(0); i < node.Count; i++ {
+	for i := uint32(0); i < node.Count; i++ {
 		if node.Extra+uint32(i) >= uint32(len(doc.Tree.ExtraList)) {
 			continue
 		}
@@ -1108,7 +1108,7 @@ func (doc *Document) getDefForValue(valID ast.NodeID) ast.NodeID {
 				idx := doc.Tree.IndexOfExtra(parentID, valID)
 				if idx != -1 {
 					lhsNode := doc.Tree.Nodes[grandParentNode.Left]
-					if uint16(idx) < lhsNode.Count {
+					if uint32(idx) < lhsNode.Count {
 						lhsID := doc.Tree.ExtraList[lhsNode.Extra+uint32(idx)]
 
 						switch doc.Tree.Nodes[lhsID].Kind {
@@ -1220,7 +1220,7 @@ func (doc *Document) extractArrayElementType(t TypeSet) TypeSet {
 			if node.Kind == ast.KindTableExpr {
 				var elemType TypeSet
 
-				for i := uint16(0); i < node.Count; i++ {
+				for i := uint32(0); i < node.Count; i++ {
 					childID := targetDoc.Tree.ExtraList[node.Extra+uint32(i)]
 
 					child := targetDoc.Tree.Nodes[childID]
@@ -1302,7 +1302,7 @@ func (doc *Document) inferFunctionReturnType(funcExprID ast.NodeID) TypeSet {
 		walk(node.Left)
 		walk(node.Right)
 
-		for i := uint16(0); i < node.Count; i++ {
+		for i := uint32(0); i < node.Count; i++ {
 			walk(doc.Tree.ExtraList[node.Extra+uint32(i)])
 		}
 	}
@@ -1513,7 +1513,7 @@ func InferTableLiteral(doc *Document, tableNode ast.NodeID) Type {
 	}
 
 	fields := make(map[string]Type)
-	for i := uint16(0); i < node.Count; i++ {
+	for i := uint32(0); i < node.Count; i++ {
 		fieldID := doc.Tree.ExtraList[node.Extra+uint32(i)]
 		if !inferValidNode(doc, fieldID) {
 			continue
@@ -1614,7 +1614,7 @@ func inferExprListTypes(doc *Document, id ast.NodeID) []Type {
 	}
 
 	out := make([]Type, 0, node.Count)
-	for i := uint16(0); i < node.Count; i++ {
+	for i := uint32(0); i < node.Count; i++ {
 		out = append(out, inferExpression(doc, doc.Tree.ExtraList[node.Extra+uint32(i)]))
 	}
 
@@ -1688,7 +1688,7 @@ func inferAssignedValueForName(doc *Document, assign ast.Node, name string) ast.
 		return ast.InvalidNode
 	}
 
-	for i := uint16(0); i < left.Count; i++ {
+	for i := uint32(0); i < left.Count; i++ {
 		lhsID := doc.Tree.ExtraList[left.Extra+uint32(i)]
 		if !inferValidNode(doc, lhsID) || doc.Tree.Nodes[lhsID].Kind != ast.KindIdent || string(inferNodeSource(doc, lhsID)) != name {
 			continue
@@ -1760,7 +1760,7 @@ func forEachInferChild(doc *Document, id ast.NodeID, visit func(ast.NodeID) bool
 	if node.Right != ast.InvalidNode && !visit(node.Right) {
 		return
 	}
-	for i := uint16(0); i < node.Count; i++ {
+	for i := uint32(0); i < node.Count; i++ {
 		if !visit(doc.Tree.ExtraList[node.Extra+uint32(i)]) {
 			return
 		}

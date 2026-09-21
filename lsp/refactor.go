@@ -356,7 +356,7 @@ func (s *Server) handleCodeAction(req Request) {
 		if node.Kind == ast.KindIf && targetNestedIf == ast.InvalidNode {
 			var hasElse bool
 
-			for i := uint16(0); i < node.Count; i++ {
+			for i := uint32(0); i < node.Count; i++ {
 				if node.Extra+uint32(i) < uint32(len(doc.Tree.ExtraList)) {
 					childID := doc.Tree.ExtraList[node.Extra+uint32(i)]
 					if int(childID) < len(doc.Tree.Nodes) {
@@ -379,7 +379,7 @@ func (s *Server) handleCodeAction(req Request) {
 							if innerStmt.Kind == ast.KindIf {
 								var innerHasElse bool
 
-								for i := uint16(0); i < innerStmt.Count; i++ {
+								for i := uint32(0); i < innerStmt.Count; i++ {
 									if innerStmt.Extra+uint32(i) < uint32(len(doc.Tree.ExtraList)) {
 										childID := doc.Tree.ExtraList[innerStmt.Extra+uint32(i)]
 										if int(childID) < len(doc.Tree.Nodes) {
@@ -429,12 +429,12 @@ func (s *Server) handleCodeAction(req Request) {
 						if node.Right != ast.InvalidNode {
 							rhsList := doc.Tree.Nodes[node.Right]
 
-							for i := uint16(0); i < lhsList.Count && canSplit; i++ {
+							for i := uint32(0); i < lhsList.Count && canSplit; i++ {
 								lhsID := doc.Tree.ExtraList[lhsList.Extra+uint32(i)]
 								defID := doc.referenceAt(lhsID)
 
 								if defID != ast.InvalidNode {
-									for j := uint16(0); j < rhsList.Count && canSplit; j++ {
+									for j := uint32(0); j < rhsList.Count && canSplit; j++ {
 										rhsExpr := doc.Tree.ExtraList[rhsList.Extra+uint32(j)]
 										rhsNode := doc.Tree.Nodes[rhsExpr]
 
@@ -468,7 +468,7 @@ func (s *Server) handleCodeAction(req Request) {
 				hasElse   bool
 			)
 
-			for i := uint16(0); i < node.Count; i++ {
+			for i := uint32(0); i < node.Count; i++ {
 				if node.Extra+uint32(i) < uint32(len(doc.Tree.ExtraList)) {
 					childID := doc.Tree.ExtraList[node.Extra+uint32(i)]
 					if int(childID) < len(doc.Tree.Nodes) {
@@ -563,7 +563,7 @@ func (s *Server) handleCodeAction(req Request) {
 
 		var hasElseIf bool
 
-		for i := uint16(0); i < ifNode.Count; i++ {
+		for i := uint32(0); i < ifNode.Count; i++ {
 			child := doc.Tree.Nodes[doc.Tree.ExtraList[ifNode.Extra+uint32(i)]]
 			if child.Kind == ast.KindElseIf {
 				hasElseIf = true
@@ -1015,7 +1015,7 @@ func (s *Server) resolveSplitMultiAssign(doc *Document, nodeID ast.NodeID, uri s
 
 	isLocal := assignNode.Kind == ast.KindLocalAssign
 
-	for i := uint16(0); i < lhsList.Count; i++ {
+	for i := uint32(0); i < lhsList.Count; i++ {
 		if i > 0 {
 			newText.WriteString("\n")
 			newText.WriteString(indent)
@@ -1084,7 +1084,7 @@ func (s *Server) resolveSwapIfElse(doc *Document, nodeID ast.NodeID, uri string)
 
 	var elseBlockID ast.NodeID
 
-	for i := uint16(0); i < ifNode.Count; i++ {
+	for i := uint32(0); i < ifNode.Count; i++ {
 		if ifNode.Extra+uint32(i) < uint32(len(doc.Tree.ExtraList)) {
 			childID := doc.Tree.ExtraList[ifNode.Extra+uint32(i)]
 			if int(childID) < len(doc.Tree.Nodes) && doc.Tree.Nodes[childID].Kind == ast.KindElse {
@@ -1660,7 +1660,7 @@ func (s *Server) getSafeFixesForDocument(doc *Document) []SafeFix {
 
 			var coverage []ast.NodeID
 
-			for j := uint16(0); j < lhsList.Count; j++ {
+			for j := uint32(0); j < lhsList.Count; j++ {
 				lhsID := doc.Tree.ExtraList[lhsList.Extra+uint32(j)]
 				defID := s.getRootDef(doc, lhsID)
 
@@ -1679,7 +1679,7 @@ func (s *Server) getSafeFixesForDocument(doc *Document) []SafeFix {
 				if node.Right != ast.InvalidNode {
 					exprList := doc.Tree.Nodes[node.Right]
 
-					for j := uint16(0); j < exprList.Count; j++ {
+					for j := uint32(0); j < exprList.Count; j++ {
 						if !s.isSideEffectFree(doc, doc.Tree.ExtraList[exprList.Extra+uint32(j)]) {
 							rhsSafe = false
 
@@ -1737,7 +1737,7 @@ func (s *Server) getSafeFixesForDocument(doc *Document) []SafeFix {
 					}
 				}
 			} else {
-				for j := uint16(0); j < lhsList.Count; j++ {
+				for j := uint32(0); j < lhsList.Count; j++ {
 					lhsID := doc.Tree.ExtraList[lhsList.Extra+uint32(j)]
 
 					defID := s.getRootDef(doc, lhsID)
@@ -1763,7 +1763,7 @@ func (s *Server) getSafeFixesForDocument(doc *Document) []SafeFix {
 							if defID != ast.InvalidNode && unusedDefs[defID] {
 								argsSafe := true
 
-								for j := uint16(1); j < node.Count; j++ {
+								for j := uint32(1); j < node.Count; j++ {
 									if !s.isSideEffectFree(doc, doc.Tree.ExtraList[node.Extra+uint32(j)]) {
 										argsSafe = false
 
@@ -2092,7 +2092,7 @@ func (s *Server) getSafeFixesForDocument(doc *Document) []SafeFix {
 		case ast.KindBlock, ast.KindFile:
 			var terminalFound bool
 
-			for j := uint16(0); j < node.Count; j++ {
+			for j := uint32(0); j < node.Count; j++ {
 				stmtID := doc.Tree.ExtraList[node.Extra+uint32(j)]
 
 				if terminalFound {
@@ -2129,7 +2129,7 @@ func (s *Server) processListForFixes(doc *Document, nameListID, exprListID ast.N
 
 	var unusedCount int
 
-	for i := uint16(0); i < nameList.Count; i++ {
+	for i := uint32(0); i < nameList.Count; i++ {
 		if unused[doc.Tree.ExtraList[nameList.Extra+uint32(i)]] {
 			unusedCount++
 		}
@@ -2201,7 +2201,7 @@ func (s *Server) processListForFixes(doc *Document, nameListID, exprListID ast.N
 			if exprListID != ast.InvalidNode {
 				exprList := doc.Tree.Nodes[exprListID]
 
-				for i := uint16(0); i < exprList.Count; i++ {
+				for i := uint32(0); i < exprList.Count; i++ {
 					if !s.isSideEffectFree(doc, doc.Tree.ExtraList[exprList.Extra+uint32(i)]) {
 						canRemove = false
 
@@ -2508,7 +2508,7 @@ func (s *Server) formatStatement(doc *Document, stmtID ast.NodeID, indent string
 		elseBlock = ast.InvalidNode
 	)
 
-	for i := uint16(0); i < node.Count; i++ {
+	for i := uint32(0); i < node.Count; i++ {
 		if node.Extra+uint32(i) >= uint32(len(doc.Tree.ExtraList)) {
 			continue
 		}
@@ -2559,7 +2559,7 @@ func (s *Server) formatStatement(doc *Document, stmtID ast.NodeID, indent string
 			if int(elseNode.Left) < len(doc.Tree.Nodes) {
 				elseBlockNode := doc.Tree.Nodes[elseNode.Left]
 
-				for i := uint16(0); i < elseBlockNode.Count; i++ {
+				for i := uint32(0); i < elseBlockNode.Count; i++ {
 					if elseBlockNode.Extra+uint32(i) >= uint32(len(doc.Tree.ExtraList)) {
 						continue
 					}
@@ -2610,7 +2610,7 @@ func (s *Server) formatStatement(doc *Document, stmtID ast.NodeID, indent string
 		out.WriteString("\n")
 	}
 
-	for i := uint16(0); i < node.Count; i++ {
+	for i := uint32(0); i < node.Count; i++ {
 		if node.Extra+uint32(i) >= uint32(len(doc.Tree.ExtraList)) {
 			continue
 		}
@@ -2663,7 +2663,7 @@ func (s *Server) flattenBlock(doc *Document, blockID ast.NodeID, indent string) 
 
 	blockNode := doc.Tree.Nodes[blockID]
 
-	for i := uint16(0); i < blockNode.Count; i++ {
+	for i := uint32(0); i < blockNode.Count; i++ {
 		if blockNode.Extra+uint32(i) >= uint32(len(doc.Tree.ExtraList)) {
 			continue
 		}

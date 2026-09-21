@@ -130,21 +130,12 @@ func NewResolver(tree *ast.Tree, opts ResolverOptions) *Resolver {
 	}
 
 	return &Resolver{
-		Tree:          tree,
-		References:    make([]ast.NodeID, len(tree.Nodes)),
-		GlobalRefs:    make([]ast.NodeID, 0, 256),
-		GlobalDefs:    make([]ast.NodeID, 0, 256),
-		LocalDefs:     make([]ast.NodeID, 0, 512),
-		FieldDefs:     make([]resolverFieldDef, 0, 512),
-		PendingFields: make([]resolverFieldRef, 0, 128),
-		Data:          data,
-		ResourceURI:   opts.ResourceURI,
-		Scope:         scope,
-		Index:         opts.Index,
-		PhaseState:    opts.PhaseState,
-		scopes:        make(map[ast.NodeID]*resolverScope, 64),
-		globals:       make(map[string][]resolverDecl, 256),
-		fieldMap:      make(map[resolverFieldKey]ast.NodeID, 512),
+		Tree:        tree,
+		Data:        data,
+		ResourceURI: opts.ResourceURI,
+		Scope:       scope,
+		Index:       opts.Index,
+		PhaseState:  opts.PhaseState,
 	}
 }
 
@@ -232,6 +223,9 @@ func (r *Resolver) newScope(nodeID ast.NodeID, parent *resolverScope) *resolverS
 		parent.children = append(parent.children, s)
 	}
 	if nodeID != ast.InvalidNode {
+		if r.scopes == nil {
+			r.scopes = make(map[ast.NodeID]*resolverScope, 64)
+		}
 		r.scopes[nodeID] = s
 		r.mergeSemantic(nodeID, SemanticData{Scope: s.data})
 	}
@@ -284,6 +278,9 @@ func (r *Resolver) declareGlobal(identID ast.NodeID) {
 	}
 
 	decl := resolverDecl{Name: name, NodeID: identID, Scope: r.rootScope, Global: true}
+	if r.globals == nil {
+		r.globals = make(map[string][]resolverDecl, 256)
+	}
 	r.globals[name] = append(r.globals[name], decl)
 	r.GlobalDefs = append(r.GlobalDefs, identID)
 	r.References[identID] = identID
@@ -301,7 +298,7 @@ func (r *Resolver) collectDeclarations(id ast.NodeID, scope *resolverScope) {
 		r.collectDeclarations(node.Left, scope)
 	case ast.KindBlock:
 		child := r.newScope(id, scope)
-		for i := uint16(0); i < node.Count; i++ {
+		for i := uint32(0); i < node.Count; i++ {
 			r.collectDeclarations(r.Tree.ExtraList[node.Extra+uint32(i)], child)
 		}
 	case ast.KindDo, ast.KindWhile, ast.KindElseIf, ast.KindElse:
@@ -329,7 +326,7 @@ func (r *Resolver) collectDeclarations(id ast.NodeID, scope *resolverScope) {
 		})
 		r.collectDeclarations(node.Right, scope)
 	case ast.KindForNum:
-		for i := uint16(0); i < node.Count; i++ {
+		for i := uint32(0); i < node.Count; i++ {
 			r.collectDeclarations(r.Tree.ExtraList[node.Extra+uint32(i)], scope)
 		}
 		child := r.newScope(id, scope)
@@ -357,7 +354,7 @@ func (r *Resolver) collectDeclarations(id ast.NodeID, scope *resolverScope) {
 	case ast.KindIf:
 		r.collectDeclarations(node.Left, scope)
 		r.collectDeclarations(node.Right, scope)
-		for i := uint16(0); i < node.Count; i++ {
+		for i := uint32(0); i < node.Count; i++ {
 			r.collectDeclarations(r.Tree.ExtraList[node.Extra+uint32(i)], scope)
 		}
 	case ast.KindExprList, ast.KindReturn:
@@ -367,7 +364,7 @@ func (r *Resolver) collectDeclarations(id ast.NodeID, scope *resolverScope) {
 	case ast.KindCallExpr, ast.KindMethodCall:
 		r.collectDeclarations(node.Left, scope)
 		r.collectDeclarations(node.Right, scope)
-		for i := uint16(0); i < node.Count; i++ {
+		for i := uint32(0); i < node.Count; i++ {
 			r.collectDeclarations(r.Tree.ExtraList[node.Extra+uint32(i)], scope)
 		}
 	case ast.KindBinaryExpr, ast.KindUnaryExpr, ast.KindParenExpr, ast.KindIndexExpr, ast.KindMemberExpr, ast.KindMethodName, ast.KindRecordField, ast.KindIndexField:
@@ -395,7 +392,7 @@ func (r *Resolver) collectFunctionDeclarations(funcID ast.NodeID, parent *resolv
 		}
 	}
 
-	for i := uint16(0); i < node.Count; i++ {
+	for i := uint32(0); i < node.Count; i++ {
 		r.declareLocal(fnScope, r.Tree.ExtraList[node.Extra+uint32(i)])
 	}
 	r.collectDeclarations(node.Right, fnScope)
@@ -437,6 +434,9 @@ func (r *Resolver) collectFieldDeclaration(memberNodeID ast.NodeID) {
 		return
 	}
 	r.FieldDefs = append(r.FieldDefs, resolverFieldDef{ReceiverDef: recDef, ReceiverHash: recHash, ReceiverName: recName, PropHash: propHash, NodeID: node.Right})
+	if r.fieldMap == nil {
+		r.fieldMap = make(map[resolverFieldKey]ast.NodeID, 512)
+	}
 	r.fieldMap[fk] = node.Right
 	r.References[node.Right] = node.Right
 	r.mergeSemantic(node.Right, SemanticData{Bindings: []Binding{{Name: string(r.source(node.Right)), NodeID: NodeID(node.Right)}}})
@@ -460,6 +460,9 @@ func (r *Resolver) collectTableFieldDeclaration(tableID, fieldID ast.NodeID) {
 		return
 	}
 	r.FieldDefs = append(r.FieldDefs, resolverFieldDef{ReceiverDef: parentDef, ReceiverHash: recHash, ReceiverName: parentRec, PropHash: propHash, NodeID: field.Left})
+	if r.fieldMap == nil {
+		r.fieldMap = make(map[resolverFieldKey]ast.NodeID, 512)
+	}
 	r.fieldMap[fk] = field.Left
 	r.References[field.Left] = field.Left
 	r.mergeSemantic(field.Left, SemanticData{Bindings: []Binding{{Name: string(r.source(field.Left)), NodeID: NodeID(field.Left)}}})
@@ -483,7 +486,7 @@ func (r *Resolver) collectReferences(id ast.NodeID, scope *resolverScope) {
 			return
 		}
 		if node.Kind == ast.KindForNum {
-			for i := uint16(0); i < node.Count; i++ {
+			for i := uint32(0); i < node.Count; i++ {
 				r.collectReferences(r.Tree.ExtraList[node.Extra+uint32(i)], scope.parentOrSelf())
 			}
 			r.collectReferences(node.Right, scope)
@@ -499,7 +502,7 @@ func (r *Resolver) collectReferences(id ast.NodeID, scope *resolverScope) {
 			r.collectReferences(node.Right, scope)
 			return
 		}
-		for i := uint16(0); i < node.Count; i++ {
+		for i := uint32(0); i < node.Count; i++ {
 			r.collectReferences(r.Tree.ExtraList[node.Extra+uint32(i)], scope)
 		}
 	case ast.KindLocalAssign:
@@ -537,7 +540,7 @@ func (r *Resolver) collectReferences(id ast.NodeID, scope *resolverScope) {
 			}
 		}
 		if node.Kind == ast.KindMethodCall {
-			for i := uint16(0); i < node.Count; i++ {
+			for i := uint32(0); i < node.Count; i++ {
 				r.collectReferences(r.Tree.ExtraList[node.Extra+uint32(i)], scope)
 			}
 		}
@@ -553,13 +556,13 @@ func (r *Resolver) collectReferences(id ast.NodeID, scope *resolverScope) {
 	case ast.KindIf:
 		r.collectReferences(node.Left, scope)
 		r.collectReferences(node.Right, scope)
-		for i := uint16(0); i < node.Count; i++ {
+		for i := uint32(0); i < node.Count; i++ {
 			r.collectReferences(r.Tree.ExtraList[node.Extra+uint32(i)], scope)
 		}
 	case ast.KindCallExpr, ast.KindExprList, ast.KindReturn:
 		r.collectReferences(node.Left, scope)
 		r.collectReferences(node.Right, scope)
-		for i := uint16(0); i < node.Count; i++ {
+		for i := uint32(0); i < node.Count; i++ {
 			r.collectReferences(r.Tree.ExtraList[node.Extra+uint32(i)], scope)
 		}
 	case ast.KindDo, ast.KindWhile, ast.KindElseIf, ast.KindElse, ast.KindBinaryExpr, ast.KindUnaryExpr, ast.KindParenExpr, ast.KindIndexExpr, ast.KindMethodName, ast.KindRecordField, ast.KindIndexField:
@@ -843,14 +846,14 @@ func (r *Resolver) returnTypes(id ast.NodeID) []Type {
 		if node.Left != ast.InvalidNode && r.validNode(node.Left) {
 			left := r.Tree.Nodes[node.Left]
 			if left.Kind == ast.KindExprList {
-				for i := uint16(0); i < left.Count; i++ {
+				for i := uint32(0); i < left.Count; i++ {
 					out = append(out, r.inferType(r.Tree.ExtraList[left.Extra+uint32(i)]))
 				}
 			} else {
 				out = append(out, r.inferType(node.Left))
 			}
 		}
-		for i := uint16(0); i < node.Count; i++ {
+		for i := uint32(0); i < node.Count; i++ {
 			out = append(out, r.inferType(r.Tree.ExtraList[node.Extra+uint32(i)]))
 		}
 		return out
@@ -869,7 +872,7 @@ func (r *Resolver) returnTypes(id ast.NodeID) []Type {
 func (r *Resolver) tableType(id ast.NodeID) Type {
 	fields := make(map[string]Type)
 	node := r.Tree.Nodes[id]
-	for i := uint16(0); i < node.Count; i++ {
+	for i := uint32(0); i < node.Count; i++ {
 		fieldID := r.Tree.ExtraList[node.Extra+uint32(i)]
 		if !r.validNode(fieldID) {
 			continue
@@ -956,7 +959,7 @@ func (r *Resolver) assignDeclarationTypes(leftID, rightID ast.NodeID) {
 	}
 	left := r.Tree.Nodes[leftID]
 	right := r.Tree.Nodes[rightID]
-	for i := uint16(0); i < left.Count; i++ {
+	for i := uint32(0); i < left.Count; i++ {
 		if left.Extra+uint32(i) >= uint32(len(r.Tree.ExtraList)) {
 			continue
 		}
@@ -1118,7 +1121,7 @@ func (r *Resolver) assignedValue(id ast.NodeID) ast.NodeID {
 				return ast.InvalidNode
 			}
 			rhs := r.Tree.Nodes[grandParent.Right]
-			if uint16(idx) >= rhs.Count {
+			if uint32(idx) >= rhs.Count {
 				return ast.InvalidNode
 			}
 			return r.Tree.ExtraList[rhs.Extra+uint32(idx)]
@@ -1136,7 +1139,7 @@ func (r *Resolver) assignedValue(id ast.NodeID) ast.NodeID {
 				return ast.InvalidNode
 			}
 			rhs := r.Tree.Nodes[grandParent.Right]
-			if uint16(idx) >= rhs.Count {
+			if uint32(idx) >= rhs.Count {
 				return ast.InvalidNode
 			}
 			return r.Tree.ExtraList[rhs.Extra+uint32(idx)]
@@ -1210,7 +1213,7 @@ func (r *Resolver) tableReceiver(id ast.NodeID) (ast.NodeID, []byte) {
 			return ast.InvalidNode, nil
 		}
 		lhs := r.Tree.Nodes[grandParent.Left]
-		if uint16(idx) >= lhs.Count {
+		if uint32(idx) >= lhs.Count {
 			return ast.InvalidNode, nil
 		}
 		leftID := r.Tree.ExtraList[lhs.Extra+uint32(idx)]
@@ -1243,7 +1246,7 @@ func (r *Resolver) walkChildren(id ast.NodeID, visit func(ast.NodeID) Type) {
 	if node.Kind == ast.KindForIn && node.Extra != 0 {
 		visit(ast.NodeID(node.Extra))
 	}
-	for i := uint16(0); i < node.Count; i++ {
+	for i := uint32(0); i < node.Count; i++ {
 		visit(r.Tree.ExtraList[node.Extra+uint32(i)])
 	}
 }
@@ -1299,7 +1302,7 @@ func forEachExtra(tree *ast.Tree, listID ast.NodeID, visit func(ast.NodeID)) {
 		return
 	}
 	node := tree.Nodes[listID]
-	for i := uint16(0); i < node.Count; i++ {
+	for i := uint32(0); i < node.Count; i++ {
 		visit(tree.ExtraList[node.Extra+uint32(i)])
 	}
 }

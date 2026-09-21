@@ -800,7 +800,7 @@ func (s *Server) publishDiagnostics(uri string) {
 			if s.DiagLoopVarMutation {
 				lhsList := doc.Tree.Nodes[node.Left]
 
-				for j := uint16(0); j < lhsList.Count; j++ {
+				for j := uint32(0); j < lhsList.Count; j++ {
 					lhsID := doc.Tree.ExtraList[lhsList.Extra+uint32(j)]
 					if doc.Tree.Nodes[lhsID].Kind == ast.KindIdent {
 						defID := doc.referenceAt(lhsID)
@@ -947,7 +947,7 @@ func (s *Server) publishDiagnostics(uri string) {
 
 				seenKeys := s.seenKeysBuf
 
-				for j := uint16(0); j < node.Count; j++ {
+				for j := uint32(0); j < node.Count; j++ {
 					fieldID := doc.Tree.ExtraList[node.Extra+uint32(j)]
 					fieldNode := doc.Tree.Nodes[fieldID]
 
@@ -1016,7 +1016,7 @@ func (s *Server) publishDiagnostics(uri string) {
 			}
 
 			if s.DiagUnreachableElse || s.DiagConstantCondition {
-				for j := uint16(0); j < node.Count; j++ {
+				for j := uint32(0); j < node.Count; j++ {
 					if node.Extra+uint32(j) >= uint32(len(doc.Tree.ExtraList)) {
 						continue
 					}
@@ -1290,7 +1290,7 @@ func (s *Server) publishDiagnostics(uri string) {
 					if fmtNode.Kind == ast.KindString && fmtNode.Start <= fmtNode.End && fmtNode.End <= uint32(len(doc.Source())) {
 						var hasDynamicArgs bool
 
-						for j := uint16(0); j < node.Count; j++ {
+						for j := uint32(0); j < node.Count; j++ {
 							if node.Extra+uint32(j) >= uint32(len(doc.Tree.ExtraList)) {
 								continue
 							}
@@ -1678,7 +1678,7 @@ func (s *Server) isSideEffectFree(doc *Document, id ast.NodeID) bool {
 	case ast.KindIndexExpr:
 		return s.isSideEffectFree(doc, node.Left) && s.isSideEffectFree(doc, node.Right)
 	case ast.KindExprList:
-		for i := uint16(0); i < node.Count; i++ {
+		for i := uint32(0); i < node.Count; i++ {
 			if node.Extra+uint32(i) >= uint32(len(doc.Tree.ExtraList)) || !s.isSideEffectFree(doc, doc.Tree.ExtraList[node.Extra+uint32(i)]) {
 				return false
 			}
@@ -1686,7 +1686,7 @@ func (s *Server) isSideEffectFree(doc *Document, id ast.NodeID) bool {
 
 		return true
 	case ast.KindTableExpr:
-		for i := uint16(0); i < node.Count; i++ {
+		for i := uint32(0); i < node.Count; i++ {
 			if node.Extra+uint32(i) >= uint32(len(doc.Tree.ExtraList)) {
 				return false
 			}
@@ -1739,7 +1739,7 @@ func (s *Server) isSideEffectFree(doc *Document, id ast.NodeID) bool {
 		if len(nameBytes) > 0 {
 			if hasPrefixFold(nameBytes, "get") || hasPrefixFold(nameBytes, "is") || hasPrefixFold(nameBytes, "has") || hasPrefixFold(nameBytes, "can") || hasPrefixFold(nameBytes, "unpack") || hasPrefixFold(nameBytes, "math.") || hasPrefixFold(nameBytes, "string.") || hasPrefixFold(nameBytes, "type") || hasPrefixFold(nameBytes, "tostring") || hasPrefixFold(nameBytes, "tonumber") || hasPrefixFold(nameBytes, "pairs") || hasPrefixFold(nameBytes, "ipairs") {
 				// Check args
-				for i := uint16(0); i < node.Count; i++ {
+				for i := uint32(0); i < node.Count; i++ {
 					if node.Extra+uint32(i) >= uint32(len(doc.Tree.ExtraList)) || !s.isSideEffectFree(doc, doc.Tree.ExtraList[node.Extra+uint32(i)]) {
 						return false
 					}

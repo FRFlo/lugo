@@ -531,7 +531,7 @@ func isTerminal(doc *Document, id ast.NodeID) bool {
 	case ast.KindDo:
 		return isTerminal(doc, node.Left)
 	case ast.KindBlock:
-		for i := uint16(0); i < node.Count; i++ {
+		for i := uint32(0); i < node.Count; i++ {
 			if node.Extra+uint32(i) < uint32(len(tree.ExtraList)) {
 				if isTerminal(doc, tree.ExtraList[node.Extra+uint32(i)]) {
 					return true
@@ -569,7 +569,7 @@ func isTerminal(doc *Document, id ast.NodeID) bool {
 			isExhaustive bool
 		)
 
-		for i := uint16(0); i < node.Count; i++ {
+		for i := uint32(0); i < node.Count; i++ {
 			if node.Extra+uint32(i) >= uint32(len(tree.ExtraList)) {
 				continue
 			}

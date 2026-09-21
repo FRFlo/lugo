@@ -64,6 +64,11 @@ func (s *Server) handleDidOpen(req Request) {
 
 	s.OpenFiles[uri] = true
 
+	if s.contentExceedsMaxFileSize(params.TextDocument.Text) {
+		s.publishFileSizeDiagnostic(uri)
+		return
+	}
+
 	needsRepublish := s.updateDocument(uri, []byte(params.TextDocument.Text))
 
 	if needsRepublish {
@@ -94,6 +99,11 @@ func (s *Server) handleDidChange(req Request) {
 	}
 
 	if len(params.ContentChanges) > 0 {
+		if s.contentExceedsMaxFileSize(params.ContentChanges[0].Text) {
+			s.publishFileSizeDiagnostic(uri)
+			return
+		}
+
 		needsRepublish := s.updateDocument(uri, []byte(params.ContentChanges[0].Text))
 
 		if needsRepublish {
@@ -610,7 +620,38 @@ func (s *Server) indexWorkspace(rootPathOrURI string, pendingJobs *[]*IndexJob, 
 	walk(path, true)
 }
 
+func (s *Server) contentExceedsMaxFileSize(text string) bool {
+	return s.MaxFileSize > 0 && int64(len(text)) > s.MaxFileSize
+}
+
+func (s *Server) publishFileSizeDiagnostic(uri string) {
+	diag := Diagnostic{
+		Range:    Range{},
+		Severity: SeverityError,
+		Code:     "file-too-large",
+		Message:  fmt.Sprintf("Document exceeds the maximum file size of %d bytes.", s.MaxFileSize),
+	}
+
+	if s.IsCI {
+		s.printCIDiagnostics(uri, []Diagnostic{diag})
+		return
+	}
+
+	WriteMessage(s.Writer, OutgoingNotification{
+		RPC:    "2.0",
+		Method: "textDocument/publishDiagnostics",
+		Params: PublishDiagnosticsParams{
+			URI:         uri,
+			Diagnostics: []Diagnostic{diag},
+		},
+	})
+}
+
 func (s *Server) updateDocument(uri string, source []byte) bool {
+	if s.MaxFileSize > 0 && int64(len(source)) > s.MaxFileSize {
+		return false
+	}
+
 	var (
 		tree *ast.Tree
 		doc  *Document
@@ -798,7 +839,7 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 		if root.Kind == ast.KindFile && root.Left != ast.InvalidNode {
 			block := tree.Nodes[root.Left]
 
-			for i := uint16(0); i < block.Count; i++ {
+			for i := uint32(0); i < block.Count; i++ {
 				if block.Extra+uint32(i) >= uint32(len(tree.ExtraList)) {
 					continue
 				}
@@ -1141,7 +1182,7 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 				}
 			}
 		} else if exportNode.Kind == ast.KindTableExpr {
-			for i := uint16(0); i < exportNode.Count; i++ {
+			for i := uint32(0); i < exportNode.Count; i++ {
 				if exportNode.Extra+uint32(i) >= uint32(len(doc.Tree.ExtraList)) {
 					continue
 				}
@@ -1330,11 +1371,17 @@ func (s *Server) clearDocument(uri string) {
 		s.removeDocumentGlobals(uri)
 	}
 
-	if s.GlobalIndex != nil && !s.isGlobalIndexResourceReferencedByOpenDocument(resource, uri) {
+	// A resource scope may be shared by several documents (and by graph
+	// dependencies). Prune only the document source; GlobalIndex keeps shared
+	// metadata until its last symbol/reference disappears.
+	if s.GlobalIndex != nil && !s.isGlobalIndexResourceReferencedByDocument(resource, uri) {
+		s.GlobalIndex.PruneResource(ResourceURI(uri))
+	} else if s.GlobalIndex != nil {
 		s.GlobalIndex.EvictSource(ResourceURI(uri))
 	}
 
 	delete(s.Documents, uri)
+	s.dropURICache(uri)
 
 	if !s.IsCI {
 		WriteMessage(s.Writer, OutgoingNotification{
@@ -1348,28 +1395,31 @@ func (s *Server) clearDocument(uri string) {
 	}
 }
 
-func (s *Server) isGlobalIndexResourceReferencedByOpenDocument(resource ResourceURI, closingURI string) bool {
+func (s *Server) isGlobalIndexResourceReferencedByDocument(resource ResourceURI, closingURI string) bool {
 	if s == nil || resource == "" {
 		return false
 	}
 
-	for openURI, open := range s.OpenFiles {
-		if !open || openURI == closingURI {
+	for uri, doc := range s.Documents {
+		if uri == closingURI || doc == nil {
 			continue
 		}
-
-		doc := s.Documents[openURI]
-		if doc == nil {
-			continue
-		}
-
-		openResource, _ := s.globalIndexContext(doc)
-		if openResource == resource {
+		if otherResource, _ := s.globalIndexContext(doc); otherResource == resource {
 			return true
 		}
 	}
-
 	return false
+}
+
+func (s *Server) dropURICache(uri string) {
+	if s == nil {
+		return
+	}
+	delete(s.uriCache, uri)
+	path := s.uriToPath(uri)
+	if path != "" {
+		delete(s.symlinkCache, filepath.Dir(path))
+	}
 }
 
 func (s *Server) compileIgnorePatterns() {
@@ -1588,6 +1638,11 @@ func (s *Server) computeModuleName(uri, path, lowerPath string) string {
 	return base
 }
 
+const (
+	maxURICacheEntries     = 4096
+	maxSymlinkCacheEntries = 1024
+)
+
 func (s *Server) normalizeURI(uri string) string {
 	if !strings.HasPrefix(uri, "file://") {
 		return uri
@@ -1614,6 +1669,12 @@ func (s *Server) normalizeURI(uri string) string {
 			realDir = dir
 		}
 
+		if len(s.symlinkCache) >= maxSymlinkCacheEntries {
+			for cachedDir := range s.symlinkCache {
+				delete(s.symlinkCache, cachedDir)
+				break
+			}
+		}
 		s.symlinkCache[dir] = realDir
 	}
 
@@ -1621,6 +1682,12 @@ func (s *Server) normalizeURI(uri string) string {
 
 	res := s.pathToURI(path)
 
+	if len(s.uriCache) >= maxURICacheEntries {
+		for cachedURI := range s.uriCache {
+			delete(s.uriCache, cachedURI)
+			break
+		}
+	}
 	s.uriCache[uri] = res
 
 	return res

@@ -81,7 +81,7 @@ type Node struct {
 	Left       NodeID
 	Right      NodeID
 	Extra      uint32   // Index into Tree.ExtraList
-	Count      uint16   // Number of items in ExtraList
+	Count      uint32   // Number of items in ExtraList
 	Kind       NodeKind // 1 byte
 	Flags      uint8
 }
@@ -103,11 +103,13 @@ type Tree struct {
 func NewTree(source []byte) *Tree {
 	sourceLen := len(source)
 
-	// Heuristics derived from typical Lua codebases
-	capLines := sourceLen/30 + 128
-	capNodes := sourceLen/10 + 1024
-	capExtra := capNodes / 2
-	capComments := sourceLen/50 + 128
+	// Keep reservations proportional to the input. The old fixed minimums made
+	// even empty and tiny trees allocate several sizeable backing arrays (the
+	// server creates an empty tree for its shared parser).
+	capLines := sourceLen/30 + 1
+	capNodes := sourceLen/4 + 1
+	capExtra := sourceLen/8 + 1
+	capComments := sourceLen/50 + 1
 
 	lines := make([]uint32, 1, capLines)
 
@@ -349,7 +351,7 @@ func (t *Tree) AddNode(n Node) NodeID {
 		t.Nodes[n.Extra].Parent = id
 	}
 
-	for i := uint16(0); i < n.Count; i++ {
+	for i := uint32(0); i < n.Count; i++ {
 		child := t.ExtraList[n.Extra+uint32(i)]
 
 		if child != InvalidNode {
@@ -358,6 +360,34 @@ func (t *Tree) AddNode(n Node) NodeID {
 	}
 
 	return id
+}
+
+// TrimOversized releases AST backing arrays that grew beyond normal files.
+// Existing nodes and offsets are preserved; only excess capacity is dropped.
+func (t *Tree) TrimOversized(maxCap int) {
+	if t == nil {
+		return
+	}
+	if cap(t.Nodes) > maxCap {
+		nodes := make([]Node, len(t.Nodes))
+		copy(nodes, t.Nodes)
+		t.Nodes = nodes
+	}
+	if cap(t.ExtraList) > maxCap {
+		extra := make([]NodeID, len(t.ExtraList))
+		copy(extra, t.ExtraList)
+		t.ExtraList = extra
+	}
+	if cap(t.Comments) > maxCap {
+		comments := make([]token.Token, len(t.Comments))
+		copy(comments, t.Comments)
+		t.Comments = comments
+	}
+	if cap(t.LineOffsets) > maxCap {
+		lines := make([]uint32, len(t.LineOffsets))
+		copy(lines, t.LineOffsets)
+		t.LineOffsets = lines
+	}
 }
 
 func (t *Tree) Reset(source []byte) {

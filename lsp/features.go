@@ -814,7 +814,7 @@ func (s *Server) handleCompletion(req Request) {
 
 		snippetIdx := 1
 
-		for i := uint16(0); i < node.Count; i++ {
+		for i := uint32(0); i < node.Count; i++ {
 			if node.Extra+uint32(i) >= uint32(len(dDoc.Tree.ExtraList)) {
 				continue
 			}
@@ -1240,7 +1240,7 @@ func (s *Server) handleCompletion(req Request) {
 			}
 
 			// 1. Fields inside the table literal
-			for i := uint16(0); i < tableNode.Count; i++ {
+			for i := uint32(0); i < tableNode.Count; i++ {
 				if tableNode.Extra+uint32(i) >= uint32(len(tDoc.Tree.ExtraList)) {
 					continue
 				}
@@ -1691,7 +1691,7 @@ func (s *Server) handleSignatureHelp(req Request) {
 
 	var activeParam int
 
-	for i := uint16(0); i < callNode.Count; i++ {
+	for i := uint32(0); i < callNode.Count; i++ {
 		if callNode.Extra+uint32(i) >= uint32(len(doc.Tree.ExtraList)) {
 			continue
 		}
@@ -1746,7 +1746,7 @@ func (s *Server) handleSignatureHelp(req Request) {
 		paramOffset := getImplicitSelfOffset(ctx, callNode, tDoc, def.NodeID)
 
 		if funcNode.Count > 0 {
-			for i := uint16(0); i < funcNode.Count; i++ {
+			for i := uint32(0); i < funcNode.Count; i++ {
 				if funcNode.Extra+uint32(i) >= uint32(len(tDoc.Tree.ExtraList)) {
 					continue
 				}
@@ -2097,7 +2097,7 @@ func (s *Server) handleInlayHint(req Request) {
 
 		funcNode := ctx.TargetDoc.Tree.Nodes[valID]
 
-		for j := uint16(0); j < node.Count; j++ {
+		for j := uint32(0); j < node.Count; j++ {
 			paramIdx := int(j) + paramOffset
 
 			if paramIdx < 0 || paramIdx >= int(funcNode.Count) {
@@ -3313,7 +3313,7 @@ func (s *Server) handleCallHierarchyOutgoingCalls(req Request) {
 		walk(node.Left)
 		walk(node.Right)
 
-		for i := uint16(0); i < node.Count; i++ {
+		for i := uint32(0); i < node.Count; i++ {
 			if node.Extra+uint32(i) < uint32(len(doc.Tree.ExtraList)) {
 				walk(doc.Tree.ExtraList[node.Extra+uint32(i)])
 			}
@@ -3549,7 +3549,7 @@ func (s *Server) getEnclosingFunctionDef(doc *Document, id ast.NodeID) ast.NodeI
 						if (gpNode.Kind == ast.KindAssign || gpNode.Kind == ast.KindLocalAssign) && gpNode.Right == pID {
 							idx := -1
 
-							for i := uint16(0); i < pNode.Count; i++ {
+							for i := uint32(0); i < pNode.Count; i++ {
 								if pNode.Extra+uint32(i) < uint32(len(doc.Tree.ExtraList)) && doc.Tree.ExtraList[pNode.Extra+uint32(i)] == curr {
 									idx = int(i)
 
@@ -3559,7 +3559,7 @@ func (s *Server) getEnclosingFunctionDef(doc *Document, id ast.NodeID) ast.NodeI
 
 							if idx != -1 {
 								lhs := doc.Tree.Nodes[gpNode.Left]
-								if uint16(idx) < lhs.Count && lhs.Extra+uint32(idx) < uint32(len(doc.Tree.ExtraList)) {
+								if uint32(idx) < lhs.Count && lhs.Extra+uint32(idx) < uint32(len(doc.Tree.ExtraList)) {
 									return doc.Tree.ExtraList[lhs.Extra+uint32(idx)]
 								}
 							}

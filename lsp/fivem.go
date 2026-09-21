@@ -1041,7 +1041,7 @@ func (s *Server) buildFiveMManifestDiagnostics(doc *Document) []Diagnostic {
 	}
 
 	block := doc.Tree.Nodes[root.Left]
-	for i := uint16(0); i < block.Count; i++ {
+	for i := uint32(0); i < block.Count; i++ {
 		if block.Extra+uint32(i) >= uint32(len(doc.Tree.ExtraList)) {
 			continue
 		}
@@ -1205,7 +1205,7 @@ func (s *Server) fiveMManifestEntriesForCall(doc *Document, nodeID ast.NodeID) (
 			tableNode := doc.Tree.Nodes[argID]
 			emittedName = normalizedName
 
-			for i := uint16(0); i < tableNode.Count; i++ {
+			for i := uint32(0); i < tableNode.Count; i++ {
 				if tableNode.Extra+uint32(i) >= uint32(len(doc.Tree.ExtraList)) {
 					continue
 				}
@@ -1248,7 +1248,7 @@ func (s *Server) fiveMManifestEntriesForCall(doc *Document, nodeID ast.NodeID) (
 		return rawName, emittedName, normalizedName, entries, true
 	}
 
-	for i := uint16(0); i < node.Count; i++ {
+	for i := uint32(0); i < node.Count; i++ {
 		if node.Extra+uint32(i) >= uint32(len(doc.Tree.ExtraList)) {
 			continue
 		}

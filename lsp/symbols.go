@@ -792,7 +792,7 @@ func (s *Server) handleDocumentSymbol(req Request) {
 	walkTable = func(tableID ast.NodeID, out *[]DocumentSymbol) {
 		node := doc.Tree.Nodes[tableID]
 
-		for i := uint16(0); i < node.Count; i++ {
+		for i := uint32(0); i < node.Count; i++ {
 			fieldID := doc.Tree.ExtraList[node.Extra+uint32(i)]
 			fieldNode := doc.Tree.Nodes[fieldID]
 
@@ -842,7 +842,7 @@ func (s *Server) handleDocumentSymbol(req Request) {
 		case ast.KindFile:
 			walk(node.Left, out)
 		case ast.KindBlock:
-			for i := uint16(0); i < node.Count; i++ {
+			for i := uint32(0); i < node.Count; i++ {
 				walk(doc.Tree.ExtraList[node.Extra+uint32(i)], out)
 			}
 		case ast.KindLocalFunction, ast.KindFunctionStmt:
@@ -881,7 +881,7 @@ func (s *Server) handleDocumentSymbol(req Request) {
 			if rhsList != ast.InvalidNode {
 				rhsNode := doc.Tree.Nodes[rhsList]
 
-				for i := uint16(0); i < lhsList.Count && i < rhsNode.Count; i++ {
+				for i := uint32(0); i < lhsList.Count && i < rhsNode.Count; i++ {
 					lID := doc.Tree.ExtraList[lhsList.Extra+uint32(i)]
 					lNode := doc.Tree.Nodes[lID]
 
@@ -993,7 +993,7 @@ func (s *Server) handleDocumentSymbol(req Request) {
 				}
 			}
 
-			for i := uint16(0); i < node.Count; i++ {
+			for i := uint32(0); i < node.Count; i++ {
 				argID := doc.Tree.ExtraList[node.Extra+uint32(i)]
 				argNode := doc.Tree.Nodes[argID]
 
@@ -1059,7 +1059,7 @@ func (s *Server) handleDocumentSymbol(req Request) {
 			if node.Left != ast.InvalidNode {
 				exprList := doc.Tree.Nodes[node.Left]
 
-				for i := uint16(0); i < exprList.Count; i++ {
+				for i := uint32(0); i < exprList.Count; i++ {
 					exprID := doc.Tree.ExtraList[exprList.Extra+uint32(i)]
 					exprNode := doc.Tree.Nodes[exprID]
 
@@ -1092,7 +1092,7 @@ func (s *Server) handleDocumentSymbol(req Request) {
 		case ast.KindIf:
 			walk(node.Right, out)
 
-			for i := uint16(0); i < node.Count; i++ {
+			for i := uint32(0); i < node.Count; i++ {
 				walk(doc.Tree.ExtraList[node.Extra+uint32(i)], out)
 			}
 		case ast.KindElseIf, ast.KindWhile, ast.KindForIn, ast.KindForNum:

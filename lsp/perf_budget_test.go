@@ -1,6 +1,7 @@
 package lsp
 
 import (
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -27,6 +28,8 @@ var perfTypeCycle = []Type{
 	{Primitive: TypeBoolean},
 }
 
+var perfConstructorSink any
+
 type perfSymbolFixture struct {
 	Name  SymbolName
 	Scope GlobalIndexScope
@@ -36,6 +39,31 @@ type perfSymbolFixture struct {
 type perfResourceFixture struct {
 	URI     ResourceURI
 	Symbols []perfSymbolFixture
+}
+
+func TestColdStartConstructorAllocationBudget(t *testing.T) {
+	allocs := testing.AllocsPerRun(100, func() {
+		tree := ast.NewTree([]byte("value"))
+		index := NewGlobalIndex()
+		data := NewSemanticDataTable()
+		resolver := NewResolver(tree, ResolverOptions{Index: index, SemanticData: data})
+		runtime.KeepAlive(resolver)
+	})
+	if allocs > 12 {
+		t.Fatalf("cold-start constructors allocated %.2f times, budget is 12", allocs)
+	}
+}
+
+func BenchmarkColdStartConstructors(b *testing.B) {
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		tree := ast.NewTree([]byte("local value = 1\n"))
+		perfConstructorSink = NewGlobalIndex()
+		perfConstructorSink = NewSemanticDataTable()
+		perfConstructorSink = NewResolver(tree, ResolverOptions{})
+	}
 }
 
 func BenchmarkColdStart(b *testing.B) {
@@ -155,7 +183,7 @@ func buildPerfResolverTree(res perfResourceFixture) *ast.Tree {
 	fileID := ast.NodeID(1)
 	blockID := ast.NodeID(2)
 	tree.Nodes[fileID] = ast.Node{Kind: ast.KindFile, Left: blockID, End: uint32(len(tree.Source))}
-	tree.Nodes[blockID] = ast.Node{Kind: ast.KindBlock, Parent: fileID, Count: uint16(len(res.Symbols)), Extra: 0, End: uint32(len(tree.Source))}
+	tree.Nodes[blockID] = ast.Node{Kind: ast.KindBlock, Parent: fileID, Count: uint32(len(res.Symbols)), Extra: 0, End: uint32(len(tree.Source))}
 	tree.ExtraList = make([]ast.NodeID, len(res.Symbols))
 
 	for i, pos := range positions {
