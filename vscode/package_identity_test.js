@@ -22,6 +22,31 @@ test('contributes FiveM snippets for Lua files', () => {
   }
 });
 
+test('exposes every FiveM diagnostic and adapter option', () => {
+  const properties = Object.assign({}, ...manifest.contributes.configuration.map(group => group.properties));
+  for (const key of [
+    'lugo.fivem.diagnostics.eventDirection',
+    'lugo.fivem.diagnostics.eventPayload',
+    'lugo.fivem.diagnostics.unregisteredNetEvent',
+    'lugo.fivem.diagnostics.unknownEvent',
+    'lugo.fivem.diagnostics.unaccountedFile',
+    'lugo.fivem.diagnostics.unknownExport',
+    'lugo.fivem.diagnostics.unknownResource',
+    'lugo.fivem.diagnostics.trustBoundary',
+    'lugo.fivem.diagnostics.performance',
+    'lugo.fivem.diagnostics.sql',
+    'lugo.fivem.frameworkAdapters',
+    'lugo.fivem.sqlAdapters',
+  ]) {
+    assert.ok(properties[key], `missing ${key}`);
+  }
+
+  const extension = fs.readFileSync(path.join(root, 'extension.js'), 'utf8');
+  for (const key of ['frameworkAdapters', 'sqlAdapters', 'diagFiveMEventPayload', 'diagFiveMTrustBoundary', 'diagFiveMPerformance', 'diagFiveMSQL']) {
+    assert.match(extension, new RegExp(`\\b${key}\\b`), `initialization options omit ${key}`);
+  }
+});
+
 test('uses the canonical Lugo package and repository identity', () => {
   assert.equal(manifest.name, 'lugo-vscode');
   assert.equal(manifest.publisher, 'coalaura');

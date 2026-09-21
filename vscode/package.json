@@ -492,6 +492,66 @@
                         "scope": "resource",
                         "markdownDescription": "Enable diagnostics for unknown resource names addressed through the FiveM `exports` bridge.",
                         "order": 4
+                    },
+                    "lugo.fivem.diagnostics.eventPayload": {
+                        "type": "boolean",
+                        "default": true,
+                        "scope": "resource",
+                        "markdownDescription": "Enable diagnostics when FiveM network event arguments do not match a known handler payload.",
+                        "order": 7
+                    },
+                    "lugo.fivem.diagnostics.trustBoundary": {
+                        "type": "boolean",
+                        "default": true,
+                        "scope": "resource",
+                        "markdownDescription": "Enable diagnostics for untrusted FiveM event data reaching sensitive APIs.",
+                        "order": 8
+                    },
+                    "lugo.fivem.diagnostics.performance": {
+                        "type": "boolean",
+                        "default": true,
+                        "scope": "resource",
+                        "markdownDescription": "Enable FiveM performance diagnostics, including potentially blocking work on the game thread.",
+                        "order": 9
+                    },
+                    "lugo.fivem.diagnostics.sql": {
+                        "type": "boolean",
+                        "default": true,
+                        "scope": "resource",
+                        "markdownDescription": "Enable FiveM SQL diagnostics for synchronous adapter calls, placeholder counts, and annotated schemas.",
+                        "order": 10
+                    },
+                    "lugo.fivem.frameworkAdapters": {
+                        "type": "array",
+                        "default": [],
+                        "scope": "resource",
+                        "markdownDescription": "Optional FiveM framework metadata packs. Supported built-ins are `esx`, `qbcore`, and `ox`; entries may include `name`, `version`, and `enabled`.",
+                        "items": {
+                            "type": "object",
+                            "required": ["name"],
+                            "properties": {
+                                "name": { "type": "string", "enum": ["esx", "qbcore", "ox"] },
+                                "version": { "type": "string" },
+                                "enabled": { "type": "boolean" }
+                            }
+                        },
+                        "order": 11
+                    },
+                    "lugo.fivem.sqlAdapters": {
+                        "type": "array",
+                        "default": [],
+                        "scope": "resource",
+                        "markdownDescription": "Additional FiveM SQL adapter call shapes. Built-in oxmysql and mysql-async support remains enabled; each entry has a `name`, optional `calls`, and optional `syncCalls`.",
+                        "items": {
+                            "type": "object",
+                            "required": ["name"],
+                            "properties": {
+                                "name": { "type": "string" },
+                                "calls": { "type": "array", "items": { "type": "string" } },
+                                "syncCalls": { "type": "array", "items": { "type": "string" } }
+                            }
+                        },
+                        "order": 12
                     }
                 }
             }

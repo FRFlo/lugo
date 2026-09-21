@@ -19,29 +19,35 @@ function firstString(text, pattern) {
 	return match && match[1];
 }
 
-function findManifests(root, results = []) {
+async function findManifests(root, onManifest, results = []) {
 	let entries;
-	try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { return results; }
+	try { entries = await fs.promises.readdir(root, { withFileTypes: true }); } catch { return results; }
 	for (const entry of entries) {
 		if (entry.name === "node_modules" || entry.name === ".git") continue;
 		const fullPath = path.join(root, entry.name);
-		if (entry.isDirectory()) findManifests(fullPath, results);
-		else if (entry.name === "fxmanifest.lua" || entry.name === "__resource.lua") results.push(fullPath);
+		if (entry.isDirectory()) await findManifests(fullPath, onManifest, results);
+		else if (entry.name === "fxmanifest.lua" || entry.name === "__resource.lua") {
+			results.push(fullPath);
+			if (onManifest) await onManifest(fullPath);
+		}
 	}
 	return results;
 }
 
-function discoverResources(workspaceFolders, diagnostics = []) {
+// Discovery reports each parsed resource as soon as its manifest is found, so
+// large workspaces do not wait for a complete traversal before updating the view.
+async function discoverResources(workspaceFolders, diagnostics = [], onResource) {
 	const resources = [];
 	for (const folder of workspaceFolders || []) {
-		for (const manifestPath of findManifests(folder)) {
+		await findManifests(folder, async manifestPath => {
 			try {
-				const resource = parseManifest(fs.readFileSync(manifestPath, "utf8"), manifestPath);
+				const resource = parseManifest(await fs.promises.readFile(manifestPath, "utf8"), manifestPath);
 				const root = path.dirname(manifestPath) + path.sep;
 				resource.diagnostics = diagnostics.filter(item => item.path === manifestPath || item.path.startsWith(root)).reduce((total, item) => total + item.count, 0);
 				resources.push(resource);
+				if (onResource) onResource(resource);
 			} catch { /* Ignore unreadable manifests. */ }
-		}
+		});
 	}
 	return resources.sort((a, b) => a.name.localeCompare(b.name) || a.manifestPath.localeCompare(b.manifestPath));
 }

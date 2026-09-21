@@ -20,12 +20,25 @@ class FiveMResourceItem extends vscode.TreeItem {
 class FiveMResourceProvider {
 	constructor() {
 		this.resources = [];
+		this.refreshVersion = 0;
 		this.onDidChangeTreeData = new vscode.EventEmitter();
 	}
-	refresh() {
+	async refresh() {
+		const version = ++this.refreshVersion;
 		const diagnostics = vscode.languages.getDiagnostics().map(([uri, values]) => ({ path: uri.fsPath, count: values.length }));
-		this.resources = discoverResources((vscode.workspace.workspaceFolders || []).map(folder => folder.uri.fsPath), diagnostics);
+		this.resources = [];
 		this.onDidChangeTreeData.fire();
+		const workspaceFolders = (vscode.workspace.workspaceFolders || []).map(folder => folder.uri.fsPath);
+		const resources = await discoverResources(workspaceFolders, diagnostics, resource => {
+			if (version !== this.refreshVersion) return;
+			this.resources.push(resource);
+			this.resources.sort((a, b) => a.name.localeCompare(b.name) || a.manifestPath.localeCompare(b.manifestPath));
+			this.onDidChangeTreeData.fire();
+		});
+		if (version === this.refreshVersion) {
+			this.resources = resources;
+			this.onDidChangeTreeData.fire();
+		}
 		return this.resources;
 	}
 	getTreeItem(resource) { return new FiveMResourceItem(resource); }
@@ -115,6 +128,8 @@ function buildInitializationOptions() {
 		libraryPaths: resolveLibraryPathsToAbsolute(lugoConfig.get("workspace.libraryPaths") || []),
 		ignoreGlobs: ignoreGlobs,
 		knownGlobals: lugoConfig.get("environment.knownGlobals") || [],
+		frameworkAdapters: lugoConfig.get("fivem.frameworkAdapters") || [],
+		sqlAdapters: lugoConfig.get("fivem.sqlAdapters") || [],
 		bannedSymbols: lugoConfig.get("diagnostics.bannedSymbols") || {},
 		maxFileSizeMB: lugoConfig.get("workspace.maxFileSizeMB") ?? 4,
 		telemetryEnabled: lugoConfig.get("telemetry.enabled") !== false,
@@ -161,11 +176,15 @@ function buildInitializationOptions() {
 		suggestFunctionParams: lugoConfig.get("completion.suggestFunctionParams") !== false,
 
 		diagFiveMEventDirection: lugoConfig.get("fivem.diagnostics.eventDirection") !== false,
+		diagFiveMEventPayload: lugoConfig.get("fivem.diagnostics.eventPayload") !== false,
 		diagFiveMUnregisteredNetEvent: lugoConfig.get("fivem.diagnostics.unregisteredNetEvent") !== false,
 		diagFiveMUnknownEvent: lugoConfig.get("fivem.diagnostics.unknownEvent") !== false,
 		diagFiveMUnaccountedFile: lugoConfig.get("fivem.diagnostics.unaccountedFile") !== false,
 		diagFiveMUnknownExport: lugoConfig.get("fivem.diagnostics.unknownExport") !== false,
 		diagFiveMUnknownResource: lugoConfig.get("fivem.diagnostics.unknownResource") !== false,
+		diagFiveMTrustBoundary: lugoConfig.get("fivem.diagnostics.trustBoundary") !== false,
+		diagFiveMPerformance: lugoConfig.get("fivem.diagnostics.performance") !== false,
+		diagFiveMSQL: lugoConfig.get("fivem.diagnostics.sql") !== false,
 	};
 }
 
@@ -277,19 +296,24 @@ async function activate(context) {
 	const resourceStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
 	resourceStatus.command = "lugo.fivem.refresh";
 	resourceStatus.tooltip = "Refresh FiveM resources";
-	const refreshResources = () => {
-		const resources = resourceProvider.refresh();
+	const refreshResources = async () => {
+		const resources = await resourceProvider.refresh();
 		const diagnostics = resources.reduce((total, resource) => total + resource.diagnostics, 0);
 		resourceStatus.text = `$(server) FiveM: ${resources.length} resources · ${diagnostics} diagnostics`;
 		resourceStatus.show();
 	};
-	context.subscriptions.push(resourceProvider, resourceView, resourceStatus);
+	let resourceRefreshDebounce;
+	const scheduleResourceRefresh = () => {
+		clearTimeout(resourceRefreshDebounce);
+		resourceRefreshDebounce = setTimeout(() => { void refreshResources(); }, 250);
+	};
+	context.subscriptions.push(resourceProvider, resourceView, resourceStatus, { dispose: () => clearTimeout(resourceRefreshDebounce) });
 	context.subscriptions.push(vscode.commands.registerCommand("lugo.fivem.refresh", refreshResources));
-	context.subscriptions.push(vscode.languages.onDidChangeDiagnostics(refreshResources));
-	context.subscriptions.push(vscode.workspace.onDidCreateFiles(refreshResources));
-	context.subscriptions.push(vscode.workspace.onDidDeleteFiles(refreshResources));
-	context.subscriptions.push(vscode.workspace.onDidRenameFiles(refreshResources));
-	refreshResources();
+	context.subscriptions.push(vscode.languages.onDidChangeDiagnostics(scheduleResourceRefresh));
+	context.subscriptions.push(vscode.workspace.onDidCreateFiles(scheduleResourceRefresh));
+	context.subscriptions.push(vscode.workspace.onDidDeleteFiles(scheduleResourceRefresh));
+	context.subscriptions.push(vscode.workspace.onDidRenameFiles(scheduleResourceRefresh));
+	void refreshResources();
 
 	const telemetryEnabled = vscode.workspace.getConfiguration("lugo").get("telemetry.enabled") !== false;
 	if (telemetryEnabled) {
