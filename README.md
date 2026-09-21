@@ -51,6 +51,9 @@ Lugo implements a comprehensive suite of modern Language Server Protocol feature
 * **Diagnostic Suppression:** Disable specific diagnostics per-line or per-file using standard `---@diagnostic disable-line code` comments (with built-in Code Actions to instantly generate them).
 * **Full Lua 5.4 Support:** Native parsing, type-inference and semantic highlighting for `<const>` and `<close>` attributes, `goto` statements and `::labels::`.
 * **FiveM Profiles, Manifests & Runtime Metadata:** Native support for `fxmanifest.lua` and `__resource.lua`, profile-scoped runtime globals, export/resource validation, callable bridge signatures and manifest-aware diagnostics.
+* **FiveM Event Intelligence:** Indexes `RegisterNetEvent`, `AddEventHandler`, `TriggerEvent`, `TriggerServerEvent` and `TriggerClientEvent` across resources. Events support completion, hover, go-to-definition, references, workspace symbols and Code Lens, with diagnostics for unknown events, invalid client/server direction, missing registrations and payload arity mismatches.
+* **Cross-Resource Contracts:** Tracks resource dependencies, exports, convars, state bags and NUI callback/message names. It validates declarations and consumers across Lua and JavaScript assets while preserving resource/profile boundaries.
+* **Native and Framework Metadata:** Generated FiveM native catalogs, runtime libraries, JSON/msgpack/GLM types, OAL-aware signatures, and optional ESX, QBCore and ox framework metadata are indexed without requiring a local FiveM installation.
 * **File Watching:** Automatically synchronizes with workspace file creations, deletions and external changes in real-time.
 * **Built-in Formatter:** A blazingly fast, AST-aware Lua formatter. Elegantly fixes whitespace, enforces indentation rules, strips trailing semicolons, expands minified code and optionally applies opinionated stylistic tweaks (like separating unrelated statements with blank lines).
 * **Folding Ranges:** Accurately fold functions, tables, control flow blocks and multi-line strings/comments.
@@ -73,6 +76,7 @@ Lugo performs workspace-wide analysis to catch bugs before runtime:
 * **Used Ignored Variables:** Warns when a variable conventionally marked as ignored (prefixed with `_`) is actually used in the code, offering a quick-fix to safely rename it.
 * **Deprecation:** Warns when using symbols marked with `@deprecated`.
 * **Banned Symbols:** Warns when using customized banned functions or properties (e.g., banning `print` to enforce a custom logger).
+* **FiveM Safety and Performance:** Detects untrusted event data reaching sensitive sinks, synchronous SQL and other likely game-thread hotspots, source access after yields, invalid SQL placeholders/schema references, unsafe resource contracts and unused NUI handlers.
 
 ## FiveM Support
 
@@ -85,6 +89,12 @@ This fork is dedicated to FiveM support. Lugo activates FiveM metadata for files
 * **Export/resource validation:** Lugo validates `exports.resourceName:methodName()` and `exports.resourceName.methodName` lookups against the addressed resource, warning for unknown resources and unknown exports.
 * **Callable proxies & bridge metadata:** Imported exports and bridge callback values stay table-shaped, but Lugo still provides hover and signature help for their callable proxy surface.
 * **Native helpers:** Client and server native helper docs are selected automatically from manifest metadata such as `fx_version`, `game`, `resource_manifest_version` and `use_experimental_fxv2_oal`. There is no separate FiveM setting for native bundle selection.
+* **Event intelligence:** Event registrations and triggers are indexed globally, including built-in FiveM events such as `playerConnecting` and `playerDropped`. Completion, hover, definition, references, symbols and Code Lens respect client/server/shared profile visibility.
+* **Resource graph:** Manifest includes, dependencies, scripts, files and unaccounted assets are tracked incrementally. Cross-resource `@resource/path.lua` references and exports are resolved through the graph.
+* **Commands and convars:** Manifest `command`, `convar` and `convar_category` declarations are checked against literal uses, including scope, type and default conflicts.
+* **NUI contracts:** Literal `RegisterNUICallback` and `SendNUIMessage` names are matched against local JavaScript handlers. Missing and unused handlers are reported with precise asset ranges.
+* **Trust-boundary checks:** Event parameters are treated as untrusted until validated before reaching sensitive operations such as exports, SQL, HTTP, command execution or event forwarding.
+* **Performance and SQL checks:** Low-confidence diagnostics flag tight `Wait(0)` loops, synchronous SQL, excessive network handlers, placeholder mismatches and optional annotated-table/column mismatches. Built-in adapter metadata covers `oxmysql` and `mysql-async`, and custom adapters can be configured.
 
 ## Repository quality gates
 
@@ -108,7 +118,7 @@ The lexer and parser benchmarks must continue to report `0 allocs/op`.
 lugo-mcp /path/to/project
 ```
 
-The server registers read-only LSP tools such as `lugo_hover`, `lugo_completion`, `lugo_definition`, `lugo_references`, `lugo_document_symbols`, `lugo_workspace_symbols`, `lugo_format`, `lugo_range_format`, `lugo_diagnostics`, and `lugo_semantic_tokens`. Higher-level tools include `lugo_workspace`, `lugo_workspace_status`, `lugo_symbol_context`, `lugo_fivem_resources`, `lugo_fivem_events`, `lugo_fivem_exports`, and `lugo_reindex`. `lugo_validate_workspace_edit` and `lugo_preview_workspace_edit` validate or preview edits only; they never write files.
+The server registers read-only LSP tools such as `lugo_hover`, `lugo_completion`, `lugo_definition`, `lugo_references`, `lugo_document_symbols`, `lugo_workspace_symbols`, `lugo_format`, `lugo_range_format`, `lugo_diagnostics`, and `lugo_semantic_tokens`. Higher-level tools include `lugo_workspace`, `lugo_workspace_status`, `lugo_symbol_context`, `lugo_fivem_resources`, `lugo_fivem_events`, `lugo_fivem_exports`, `lugo_fivem_contracts`, and `lugo_reindex`. `lugo_validate_workspace_edit` and `lugo_preview_workspace_edit` validate or preview edits only; they never write files.
 
 `lugo_lsp_request_advanced` is restricted to the supported read-only methods: `textDocument/hover`, `textDocument/completion`, `textDocument/signatureHelp`, `textDocument/definition`, `textDocument/typeDefinition`, `textDocument/implementation`, `textDocument/references`, `textDocument/documentSymbol`, `workspace/symbol`, `textDocument/inlayHint`, `textDocument/semanticTokens/full`, `textDocument/foldingRange`, `textDocument/selectionRange`, `textDocument/codeLens`, `textDocument/documentLink`, and `textDocument/prepareCallHierarchy`.
 
@@ -119,6 +129,8 @@ Resources are available at `lugo://workspace/summary`, with templates `lugo://wo
 ```
 
 A client can read `lugo://workspace/document/client/main.lua` before reviewing it. The `lugo_fivem_review` prompt takes a required workspace-relative `path` and directs clients to `lugo_diagnostics`, `lugo_hover`, `lugo_definition`, `lugo_references`, and `lugo_workspace`.
+
+MCP requests are constrained to the workspace root and reject traversal, unsafe methods and invalid paths. Structured tools return stable JSON suitable for agents and automation. Workspace edits are exposed as validated or previewed `WorkspaceEdit` results; Lugo never writes files through MCP. The server also exposes FiveM contract summaries and deterministic workspace freshness/status information.
 
 ## Installation
 
@@ -161,6 +173,22 @@ Check out the examples:
 * [**`example.ci.json`**](example.ci.json) - An example CI configuration file (maps exactly to the LSP `initializationOptions`).
 * [**`example.ci.yml`**](example.ci.yml) - A sample GitHub Actions workflow demonstrating how to download and execute Lugo.
 
+CI policy can filter diagnostic codes, set the failure severity and enforce diagnostic budgets. It can also emit a SARIF report for code-scanning integrations:
+
+```json
+{
+  "workspaceFolders": ["."],
+  "settings": {},
+  "ciPolicy": {
+    "failOnSeverity": "warning",
+    "excludeCodes": ["style"],
+    "maxErrors": 0,
+    "maxWarnings": 25,
+    "sarifPath": "lugo.sarif"
+  }
+}
+```
+
 ## Configuration
 
 You can configure Lugo via your VS Code `settings.json` (also available via the settings UI under **Extensions -> Lugo LSP**):
@@ -170,6 +198,7 @@ You can configure Lugo via your VS Code `settings.json` (also available via the 
 * `lugo.workspace.ignoreGlobs`: Additional glob patterns to ignore during indexing. Inherits VS Code's `files.exclude` automatically.
 * `lugo.environment.knownGlobals`: Global variables to ignore when reporting undefined globals. Supports wildcards (e.g., `N_0x*`).
 * `lugo.workspace.maxFileSizeMB`: Maximum file size in megabytes to index (default: `4`). Files larger than this are ignored to prevent out-of-memory crashes.
+* `lugo.telemetry.enabled`: Enable or disable anonymous crash reporting and telemetry (default: `true`).
 
 **Parser & Diagnostics**
 * `lugo.diagnostics.bannedSymbols`: Map of banned global functions/symbols to a custom warning message (e.g., `{"print": "Use customLogger instead"}`).
@@ -239,3 +268,7 @@ Available via the VS Code Command Palette (`Ctrl+Shift+P`):
 * **Lugo: Apply Safe Fixes (Current File):** Automatically clean up unused variables, parameters and assignments in the active file without breaking side-effects.
 * **Lugo: Apply Safe Fixes (Workspace):** Apply all safe fixes across the entire workspace.
 * **Lugo: Ignore Diagnostic:** Instantly adds a `---@diagnostic disable-next-line` (or `disable-file`) comment for the selected rule (Triggered via Quick Fix Code Actions).
+* **Lugo: Export Debug Data...:** Export selected workspace/index/resource data for troubleshooting without exposing source files by default.
+* **Lugo: Refresh FiveM Resources:** Refresh the asynchronous FiveM Resources view in the Explorer.
+
+The Explorer also provides folder actions for adding a directory to `libraryPaths` or `ignoreGlobs`. The FiveM Resources view discovers manifests asynchronously and refreshes after relevant diagnostics or workspace changes.
