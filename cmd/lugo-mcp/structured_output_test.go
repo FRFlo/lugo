@@ -46,9 +46,17 @@ func TestStructuredOutputContractForWorkspaceDiagnosticsAndFiveM(t *testing.T) {
 		}
 		tools[tool.Name] = tool
 	}
-	for _, name := range []string{"lugo_workspace", "lugo_diagnostics", "lugo_fivem_resources", "lugo_fivem_events", "lugo_fivem_exports"} {
+	for _, name := range []string{"lugo_workspace", "lugo_diagnostics"} {
 		if tools[name] == nil || tools[name].OutputSchema == nil {
 			t.Fatalf("%s must declare an output schema", name)
+		}
+	}
+	for _, name := range []string{"lugo_fivem_resources", "lugo_fivem_events", "lugo_fivem_exports"} {
+		if tools[name] == nil {
+			t.Fatalf("%s must be advertised", name)
+		}
+		if tools[name].OutputSchema != nil {
+			t.Fatalf("%s must not advertise a union output schema unsupported by pi", name)
 		}
 	}
 
@@ -68,17 +76,21 @@ func TestStructuredOutputContractForWorkspaceDiagnosticsAndFiveM(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if result.StructuredContent == nil {
-				t.Fatalf("%s returned no structured content", call.name)
-			}
 			if len(result.Content) != 1 {
 				t.Fatalf("%s returned %d content blocks, want text compatibility block", call.name, len(result.Content))
 			}
 			if _, ok := result.Content[0].(*mcp.TextContent); !ok {
 				t.Fatalf("%s content type = %T, want *mcp.TextContent", call.name, result.Content[0])
 			}
-			if _, err := json.Marshal(result.StructuredContent); err != nil {
-				t.Fatalf("%s structured content is not JSON: %v", call.name, err)
+			if call.name == "lugo_workspace" || call.name == "lugo_diagnostics" {
+				if result.StructuredContent == nil {
+					t.Fatalf("%s returned no structured content", call.name)
+				}
+				if _, err := json.Marshal(result.StructuredContent); err != nil {
+					t.Fatalf("%s structured content is not JSON: %v", call.name, err)
+				}
+			} else if result.StructuredContent != nil {
+				t.Fatalf("%s returned structured content for an array-root result", call.name)
 			}
 		})
 	}

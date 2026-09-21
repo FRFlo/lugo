@@ -224,22 +224,19 @@ func (s *server) registerTools(m *mcp.Server) {
 		OutputSchema: schema(`{"type":"object"}`),
 	}, s.workspaceStatus)
 	m.AddTool(&mcp.Tool{
-		Name:         "lugo_fivem_resources",
-		Description:  "List FiveM resources, manifests, dependencies, profiles, and exports.",
-		InputSchema:  fivemListSchema,
-		OutputSchema: fivemOutputSchema,
+		Name:        "lugo_fivem_resources",
+		Description: "List FiveM resources, manifests, dependencies, profiles, and exports.",
+		InputSchema: fivemListSchema,
 	}, s.fivemResources)
 	m.AddTool(&mcp.Tool{
-		Name:         "lugo_fivem_events",
-		Description:  "List registered and triggered FiveM events across resources.",
-		InputSchema:  fivemListSchema,
-		OutputSchema: fivemOutputSchema,
+		Name:        "lugo_fivem_events",
+		Description: "List registered and triggered FiveM events across resources.",
+		InputSchema: fivemListSchema,
 	}, s.fivemEvents)
 	m.AddTool(&mcp.Tool{
-		Name:         "lugo_fivem_exports",
-		Description:  "List client and server FiveM exports across resources.",
-		InputSchema:  fivemListSchema,
-		OutputSchema: fivemOutputSchema,
+		Name:        "lugo_fivem_exports",
+		Description: "List client and server FiveM exports across resources.",
+		InputSchema: fivemListSchema,
 	}, s.fivemExports)
 	m.AddTool(&mcp.Tool{
 		Name:         "lugo_fivem_contracts",
@@ -358,7 +355,13 @@ func (s *server) registerPrompts(m *mcp.Server) {
 func schema(value string) json.RawMessage { return json.RawMessage(value) }
 
 var fivemListSchema = schema(`{"type":"object","properties":{"resource":{"type":"string"},"limit":{"type":"integer","minimum":1},"cursor":{"type":"string"},"detail":{"type":"boolean"}}}`)
-var fivemOutputSchema = schema(`{"oneOf":[{"type":"array","items":{"type":"object"}},{"type":"object","required":["items","nextCursor","truncated","total"],"properties":{"items":{"type":"array","items":{"type":"object"}},"nextCursor":{"type":"string"},"truncated":{"type":"boolean"},"hasMore":{"type":"boolean"},"total":{"type":"integer"}}}]}`)
+
+// FiveM list tools intentionally omit outputSchema. Their legacy response is
+// an array when pagination is not requested and an object when it is. Pi
+// validates every advertised outputSchema as an object-root schema and
+// rejects the MCP-valid oneOf/array union before it can connect. Array-root
+// responses are carried in the compatibility text block; paginated object
+// responses still use structuredContent.
 
 var advancedReadOnlyMethods = map[string]bool{
 	"textDocument/hover": true, "textDocument/completion": true, "textDocument/signatureHelp": true,
@@ -1158,11 +1161,16 @@ func textResult(text string) *mcp.CallToolResult {
 }
 
 // structuredResult keeps the existing text block for clients that only support
-// TextContent while also exposing the same JSON value through MCP's structured
-// output field. All callers pass JSON produced by the workspace model.
+// TextContent while also exposing JSON objects through MCP's structured output
+// field. MCP 2025-06 and pi's client schema require structuredContent to be an
+// object, so array and scalar results remain available through the text block.
 func structuredResult(text string) *mcp.CallToolResult {
-	return &mcp.CallToolResult{
-		Content:           []mcp.Content{&mcp.TextContent{Text: text}},
-		StructuredContent: json.RawMessage(text),
+	result := &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}
+	var value any
+	if err := json.Unmarshal([]byte(text), &value); err == nil {
+		if _, ok := value.(map[string]any); ok {
+			result.StructuredContent = json.RawMessage(text)
+		}
 	}
+	return result
 }

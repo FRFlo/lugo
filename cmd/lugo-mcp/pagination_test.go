@@ -56,7 +56,8 @@ func TestFiveMListDefaultsRemainArraysAndAcceptConsistentParameters(t *testing.T
 			t.Fatal(err)
 		}
 		var items []any
-		if err := json.Unmarshal(result.StructuredContent.(json.RawMessage), &items); err != nil {
+		text := result.Content[0].(*mcp.TextContent).Text
+		if err := json.Unmarshal([]byte(text), &items); err != nil {
 			t.Fatalf("default output is not array: %v", err)
 		}
 		result, err = call(highLevelRequest(t, map[string]any{"limit": 1, "cursor": "0", "detail": false}))
