@@ -3,8 +3,8 @@ package parser_test
 import (
 	"testing"
 
-	"github.com/coalaura/lugo/ast"
-	"github.com/coalaura/lugo/parser"
+	"github.com/FRFlo/lugo/ast"
+	"github.com/FRFlo/lugo/parser"
 )
 
 func TestParser_ValidSyntax(t *testing.T) {

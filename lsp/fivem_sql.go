@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/coalaura/lugo/ast"
+	"github.com/FRFlo/lugo/ast"
 )
 
 // FiveMSQLAdapterMetadata describes an adapter without tying diagnostics to a

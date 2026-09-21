@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/coalaura/lugo/ast"
+	"github.com/FRFlo/lugo/ast"
 )
 
 const (

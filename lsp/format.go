@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/coalaura/lugo/lexer"
-	"github.com/coalaura/lugo/token"
+	"github.com/FRFlo/lugo/lexer"
+	"github.com/FRFlo/lugo/token"
 )
 
 type Formatter struct {

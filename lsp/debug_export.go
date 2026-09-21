@@ -8,9 +8,9 @@ import (
 	"slices"
 	"sort"
 
-	"github.com/coalaura/lugo/ast"
-	"github.com/coalaura/lugo/lexer"
-	"github.com/coalaura/lugo/token"
+	"github.com/FRFlo/lugo/ast"
+	"github.com/FRFlo/lugo/lexer"
+	"github.com/FRFlo/lugo/token"
 )
 
 const (

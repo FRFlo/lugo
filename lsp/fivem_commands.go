@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/coalaura/lugo/ast"
+	"github.com/FRFlo/lugo/ast"
 )
 
 // FiveM command analysis is deliberately limited to literal arguments. Command

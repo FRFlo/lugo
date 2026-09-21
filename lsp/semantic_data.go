@@ -1,6 +1,6 @@
 package lsp
 
-import "github.com/coalaura/lugo/ast"
+import "github.com/FRFlo/lugo/ast"
 
 const semanticDataArenaSize = 1024
 

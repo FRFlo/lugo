@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"strings"
 
-	"github.com/coalaura/lugo/ast"
+	"github.com/FRFlo/lugo/ast"
 )
 
 func setCfg[T comparable](dst *T, value T, flag *bool) {

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/coalaura/lugo/ast"
+	"github.com/FRFlo/lugo/ast"
 )
 
 func TestFiveMProfileMatrix(t *testing.T) {

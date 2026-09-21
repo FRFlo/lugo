@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/coalaura/lugo/lsp"
+	"github.com/FRFlo/lugo/lsp"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 

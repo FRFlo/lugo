@@ -3,7 +3,7 @@ package lsp
 import (
 	"testing"
 
-	"github.com/coalaura/lugo/semantic"
+	"github.com/FRFlo/lugo/semantic"
 )
 
 func TestParity_V1AndCurrentSymbolCountAndType(t *testing.T) {

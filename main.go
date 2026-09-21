@@ -8,7 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/coalaura/lugo/lsp"
+	"github.com/FRFlo/lugo/lsp"
 )
 
 // Version specifies the current build version of the Lugo binary.

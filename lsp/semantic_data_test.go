@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/coalaura/lugo/ast"
+	"github.com/FRFlo/lugo/ast"
 )
 
 func TestSemanticData(t *testing.T) {

@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/coalaura/lugo/ast"
+	"github.com/FRFlo/lugo/ast"
 )
 
 // Go-friendly alias for LSP URI values used across the FiveM integration.

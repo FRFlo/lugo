@@ -3,7 +3,7 @@ package lexer
 import (
 	"bytes"
 
-	"github.com/coalaura/lugo/token"
+	"github.com/FRFlo/lugo/token"
 )
 
 const (

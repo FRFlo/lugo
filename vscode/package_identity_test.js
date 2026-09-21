@@ -49,9 +49,9 @@ test('exposes every FiveM diagnostic and adapter option', () => {
 
 test('uses the canonical Lugo package and repository identity', () => {
   assert.equal(manifest.name, 'lugo-vscode');
-  assert.equal(manifest.publisher, 'coalaura');
-  assert.equal(manifest.repository.url, 'https://github.com/coalaura/lugo.git');
-  assert.equal(`${manifest.publisher}.${manifest.name}`, 'coalaura.lugo-vscode');
+  assert.equal(manifest.publisher, 'FRFlo');
+  assert.equal(manifest.repository.url, 'https://github.com/FRFlo/lugo.git');
+  assert.equal(`${manifest.publisher}.${manifest.name}`, 'FRFlo.lugo-vscode');
 });
 
 function test(name, fn) {

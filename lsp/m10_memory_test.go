@@ -3,9 +3,9 @@ package lsp
 import (
 	"testing"
 
-	"github.com/coalaura/lugo/ast"
-	"github.com/coalaura/lugo/parser"
-	"github.com/coalaura/lugo/semantic"
+	"github.com/FRFlo/lugo/ast"
+	"github.com/FRFlo/lugo/parser"
+	"github.com/FRFlo/lugo/semantic"
 )
 
 func TestTrimSharedBuffersDropsOnlyOversizedCapacity(t *testing.T) {

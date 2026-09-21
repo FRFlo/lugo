@@ -1,6 +1,6 @@
 package lsp
 
-import "github.com/coalaura/lugo/ast"
+import "github.com/FRFlo/lugo/ast"
 
 // fiveMASTFacts records the parent-derived facts used by the FiveM audits.
 // Each audit builds this per-document index instead of repeatedly walking the

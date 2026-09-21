@@ -3,8 +3,8 @@ package ast_test
 import (
 	"testing"
 
-	"github.com/coalaura/lugo/ast"
-	"github.com/coalaura/lugo/parser"
+	"github.com/FRFlo/lugo/ast"
+	"github.com/FRFlo/lugo/parser"
 )
 
 func TestTree_PositionAndOffset(t *testing.T) {

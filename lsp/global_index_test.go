@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/coalaura/lugo/ast"
+	"github.com/FRFlo/lugo/ast"
 )
 
 func TestGlobalIndex(t *testing.T) {

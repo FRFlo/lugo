@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"slices"
 
-	"github.com/coalaura/lugo/ast"
+	"github.com/FRFlo/lugo/ast"
 )
 
 type FieldDef struct {

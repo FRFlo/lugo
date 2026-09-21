@@ -4,7 +4,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/coalaura/lugo/lsp"
+	"github.com/FRFlo/lugo/lsp"
 )
 
 func TestSourceOffsetsUTF16(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/coalaura/lugo/ast"
+	"github.com/FRFlo/lugo/ast"
 )
 
 type ResolverPhase uint8

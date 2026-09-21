@@ -1,4 +1,4 @@
-module github.com/coalaura/lugo
+module github.com/FRFlo/lugo
 
 go 1.26.1
 

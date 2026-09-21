@@ -4,7 +4,7 @@ import (
 	"hash/fnv"
 	"slices"
 
-	"github.com/coalaura/lugo/ast"
+	"github.com/FRFlo/lugo/ast"
 )
 
 // TreeDiffResult holds the sets of nodes that were added, removed, or modified between two ASTs.

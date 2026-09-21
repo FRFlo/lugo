@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/coalaura/lugo/ast"
+	"github.com/FRFlo/lugo/ast"
 )
 
 // Convar checking intentionally only considers literal names.  Convars are

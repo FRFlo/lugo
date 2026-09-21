@@ -3,7 +3,7 @@ package lsp
 import (
 	"strings"
 
-	"github.com/coalaura/lugo/ast"
+	"github.com/FRFlo/lugo/ast"
 )
 
 // fiveMNativeMetadata identifies the catalog metadata attached to an embedded native.

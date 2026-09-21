@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/coalaura/lugo/ast"
+	"github.com/FRFlo/lugo/ast"
 )
 
 const DefaultGlobalIndexMaxMemory uint64 = 256 * 1024 * 1024

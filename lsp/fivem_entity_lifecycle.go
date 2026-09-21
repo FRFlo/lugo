@@ -3,7 +3,7 @@ package lsp
 import (
 	"fmt"
 
-	"github.com/coalaura/lugo/ast"
+	"github.com/FRFlo/lugo/ast"
 )
 
 // buildFiveMEntityLifecycleDiagnostics performs deliberately conservative checks

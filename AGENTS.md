@@ -1,6 +1,6 @@
 # Lugo — Lua 5.4 Parser & LSP
 
-**Module**: `github.com/coalaura/lugo` · **Go** 1.26.1 · **License**: MIT
+**Module**: `github.com/FRFlo/lugo` · **Go** 1.26.1 · **License**: MIT
 
 A ridiculously fast, zero-allocation Lua 5.4 parser and Language Server (LSP) written in Go. Designed for massive codebases (game servers, modding frameworks) where traditional LSPs struggle with RAM and indexing speed.
 

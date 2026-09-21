@@ -3,7 +3,7 @@ package lsp
 import (
 	"testing"
 
-	"github.com/coalaura/lugo/ast"
+	"github.com/FRFlo/lugo/ast"
 )
 
 // TestFiveMGlobalIndexCompaction tests that GlobalIndex compaction correctly removes

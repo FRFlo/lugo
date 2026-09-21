@@ -3,7 +3,7 @@ package lsp
 import (
 	"testing"
 
-	"github.com/coalaura/lugo/ast"
+	"github.com/FRFlo/lugo/ast"
 )
 
 // TestFiveMEviction tests cache eviction behavior when documents are closed.

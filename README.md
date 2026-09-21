@@ -1,12 +1,12 @@
 ![banner](banner.jpg)
 
-[![Tests](https://github.com/coalaura/lugo/actions/workflows/test.yml/badge.svg)](https://github.com/coalaura/lugo/actions/workflows/test.yml)
+[![Tests](https://github.com/FRFlo/lugo/actions/workflows/test.yml/badge.svg)](https://github.com/FRFlo/lugo/actions/workflows/test.yml)
 
 A ridiculously fast, zero-allocation Lua 5.4 parser and Language Server (LSP) written in Go.
 
 Lugo is built from the ground up for maximum performance. By iterating over source code using a flat-array/arena architecture (`[]Node`) and storing only byte offsets, it heavily eliminates pointer allocations, heap strings and garbage collection pressure.
 
-[**Install from the VS Code Marketplace**](https://marketplace.visualstudio.com/items?itemName=coalaura.lugo-vscode)
+[**Install from the VS Code Marketplace**](https://marketplace.visualstudio.com/items?itemName=FRFlo.lugo-vscode)
 
 ## Why Lugo?
 
@@ -135,10 +135,10 @@ MCP requests are constrained to the workspace root and reject traversal, unsafe 
 ## Installation
 
 ### VS Code
-Simply install the extension from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=coalaura.lugo-vscode). The extension automatically detects your OS and architecture and runs the correct bundled Go binary. No external dependencies are required.
+Simply install the extension from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=FRFlo.lugo-vscode). The extension automatically detects your OS and architecture and runs the correct bundled Go binary. No external dependencies are required.
 
 ### Other Editors (Neovim, Helix, etc.)
-Lugo is entirely editor-agnostic and communicates using standard JSON-RPC over `stdio`. You can download the standalone LSP binaries for Windows, Linux and macOS from the [GitHub Releases](https://github.com/coalaura/lugo/releases) page.
+Lugo is entirely editor-agnostic and communicates using standard JSON-RPC over `stdio`. You can download the standalone LSP binaries for Windows, Linux and macOS from the [GitHub Releases](https://github.com/FRFlo/lugo/releases) page.
 
 Because Lugo does not rely on a generic wrapper, you must pass your settings directly into `initializationOptions` when setting up the client.
 

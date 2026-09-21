@@ -5,7 +5,7 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
-	"github.com/coalaura/lugo/token"
+	"github.com/FRFlo/lugo/token"
 )
 
 // NodeKind defines what type of syntax this node represents.

@@ -21,7 +21,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/coalaura/lugo/lsp"
+	"github.com/FRFlo/lugo/lsp"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 

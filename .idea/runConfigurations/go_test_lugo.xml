@@ -3,7 +3,7 @@
     <module name="lugo" />
     <working_directory value="$PROJECT_DIR$" />
     <kind value="DIRECTORY" />
-    <package value="github.com/coalaura/lugo" />
+    <package value="github.com/FRFlo/lugo" />
     <directory value="$PROJECT_DIR$" />
     <filePath value="$PROJECT_DIR$" />
     <framework value="gotest" />

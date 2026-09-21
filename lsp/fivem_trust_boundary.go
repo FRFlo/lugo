@@ -3,7 +3,7 @@ package lsp
 import (
 	"strings"
 
-	"github.com/coalaura/lugo/ast"
+	"github.com/FRFlo/lugo/ast"
 )
 
 // buildFiveMTrustBoundaryDiagnostics performs a deliberately conservative check
