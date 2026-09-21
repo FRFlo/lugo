@@ -105,16 +105,19 @@ func SetTelemetryEnabled(enabled bool) {
 
 // Close gracefully shuts down telemetry.
 func (t *Telemetry) Close() {
-	t.mu.RLock()
-	enabled := t.Enabled
-	t.mu.RUnlock()
-
-	if !enabled {
+	if t == nil {
 		return
 	}
+
+	// Resources must be released even when telemetry was disabled after init.
+	// Enabled controls event production, not ownership of the providers.
 	ctx := context.Background()
-	_ = t.TracerProvider.Shutdown(ctx)
-	_ = t.PHClient.Close()
+	if t.TracerProvider != nil {
+		_ = t.TracerProvider.Shutdown(ctx)
+	}
+	if t.PHClient != nil {
+		_ = t.PHClient.Close()
+	}
 }
 
 // CapturePanic sends a panic event to PostHog as an exception.

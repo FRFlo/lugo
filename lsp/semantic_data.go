@@ -61,7 +61,9 @@ type ExportData struct {
 }
 
 func NewSemanticDataTable() *SemanticDataTable {
-	return &SemanticDataTable{data: make(map[NodeID]*SemanticData)}
+	// Most resolvers do not attach data during construction. Defer the map until
+	// the first annotation so creating a resolver stays cheap.
+	return &SemanticDataTable{}
 }
 
 func (t *SemanticDataTable) Get(nodeID NodeID) *SemanticData {

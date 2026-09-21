@@ -3,6 +3,7 @@ package lsp
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"slices"
 	"sort"
@@ -222,6 +223,10 @@ func (s *Server) buildDebugExport(params DebugExportParams) (string, error) {
 	}
 
 	for _, doc := range docs {
+		source := debugExportDocumentSource(doc)
+		if s.MaxFileSize > 0 && int64(len(source)) > s.MaxFileSize {
+			return "", fmt.Errorf("document %s exceeds MaxFileSize (%d bytes)", doc.URI, s.MaxFileSize)
+		}
 		payload.Documents = append(payload.Documents, s.exportDebugDocument(doc, selected))
 	}
 
@@ -232,6 +237,9 @@ func (s *Server) buildDebugExport(params DebugExportParams) (string, error) {
 	b, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
 		return "", err
+	}
+	if s.MaxFileSize > 0 && int64(len(b)) > s.MaxFileSize {
+		return "", fmt.Errorf("debug export exceeds MaxFileSize (%d bytes)", s.MaxFileSize)
 	}
 
 	return string(b), nil
@@ -335,15 +343,30 @@ func (s *Server) exportDebugDocument(doc *Document, selected map[string]bool) de
 }
 
 func debugExportDocumentSource(doc *Document) []byte {
+	if doc == nil {
+		return nil
+	}
 	if source := doc.Source(); len(source) > 0 {
 		return source
 	}
-	if doc == nil || doc.Path == "" {
+	if doc.Path == "" {
 		return nil
 	}
 
-	source, err := os.ReadFile(doc.Path)
+	file, err := os.Open(doc.Path)
 	if err != nil {
+		return nil
+	}
+	defer file.Close()
+
+	// Read one byte beyond the configured limit so callers can reject an
+	// oversized export before tokenizing it.
+	limit := int64(DefaultMaxFileSize)
+	if doc.Server != nil && doc.Server.MaxFileSize > 0 {
+		limit = doc.Server.MaxFileSize
+	}
+	source, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil || int64(len(source)) > limit {
 		return nil
 	}
 	return source
@@ -400,7 +423,7 @@ func exportDebugAST(doc *Document, source []byte) []debugExportASTNode {
 			Left:   node.Left,
 			Right:  node.Right,
 			Extra:  node.Extra,
-			Count:  node.Count,
+			Count:  uint16(node.Count),
 			Flags:  node.Flags,
 		}
 		if node.Kind == ast.KindIdent && node.Start <= node.End && node.End <= uint32(len(source)) {

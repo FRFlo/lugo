@@ -34,6 +34,20 @@ func TestNormalizeDebugExportCategories(t *testing.T) {
 	})
 }
 
+func TestBuildDebugExportRejectsOversizedPayload(t *testing.T) {
+	server := NewServer("test-version")
+	server.MaxFileSize = 32
+	server.Documents["file:///workspace/large.lua"] = &Document{
+		Server: server,
+		URI:    "file:///workspace/large.lua",
+		Tree:   parseResolverLua(t, []byte("local oversized = true\n")),
+	}
+
+	if _, err := server.buildDebugExport(DebugExportParams{}); err == nil {
+		t.Fatal("buildDebugExport() error = nil, want MaxFileSize error")
+	}
+}
+
 func TestBuildDebugExport(t *testing.T) {
 	source := []byte("local playerName = GetPlayerName()\nprint(playerName)\n")
 	tree := parseResolverLua(t, source)

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 func main() {
@@ -41,8 +43,14 @@ func main() {
 	}
 }
 
+const (
+	nativeRequestTimeout  = 30 * time.Second
+	maxNativeResponseSize = 64 * 1024 * 1024
+)
+
 func addGameNatives(merged map[string][]nativeRecord, game GameType) error {
-	resp, err := http.Get(game.JSONURL())
+	client := &http.Client{Timeout: nativeRequestTimeout}
+	resp, err := client.Get(game.JSONURL())
 	if err != nil {
 		return err
 	}
@@ -51,9 +59,12 @@ func addGameNatives(merged map[string][]nativeRecord, game GameType) error {
 		return fmt.Errorf("fetch %s: %s", game.JSONURL(), resp.Status)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxNativeResponseSize+1))
 	if err != nil {
 		return err
+	}
+	if int64(len(body)) > maxNativeResponseSize {
+		return errors.New("native response exceeds maximum size")
 	}
 
 	var raw map[string]map[string]NativeDefinition
