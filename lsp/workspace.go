@@ -18,7 +18,12 @@ import (
 	"github.com/coalaura/lugo/semantic"
 )
 
-const embeddedStdlibURIPrefix = "lugo-stdlib/"
+const (
+	embeddedStdlibURIPrefix = "lugo-stdlib/"
+	// builtinFiveMEventsURI is a stable, human-readable virtual document URI.
+	// It is also used by workspace symbols, keeping event navigation consistent.
+	builtinFiveMEventsURI = "builtin://fivem/events"
+)
 
 type IndexJob struct {
 	Uri            string
@@ -62,6 +67,13 @@ func (s *Server) handleDidOpen(req Request) {
 		return
 	}
 
+	if s.documentVersions == nil {
+		s.documentVersions = make(map[string]int)
+	}
+	if version, ok := s.documentVersions[uri]; ok && params.TextDocument.Version <= version {
+		return
+	}
+	s.documentVersions[uri] = params.TextDocument.Version
 	s.OpenFiles[uri] = true
 
 	if s.contentExceedsMaxFileSize(params.TextDocument.Text) {
@@ -97,6 +109,14 @@ func (s *Server) handleDidChange(req Request) {
 
 		return
 	}
+
+	if s.documentVersions == nil {
+		s.documentVersions = make(map[string]int)
+	}
+	if version, ok := s.documentVersions[uri]; ok && params.TextDocument.Version <= version {
+		return
+	}
+	s.documentVersions[uri] = params.TextDocument.Version
 
 	if len(params.ContentChanges) > 0 {
 		if s.contentExceedsMaxFileSize(params.ContentChanges[0].Text) {
@@ -182,6 +202,9 @@ func (s *Server) handleDidChangeWatchedFiles(req Request) {
 		switch change.Type {
 		case 1, 2: // Created, Changed
 			if !s.OpenFiles[uri] {
+				// Files changed outside the editor no longer have a meaningful
+				// LSP document version; discard it before re-indexing the source.
+				delete(s.documentVersions, uri)
 				path := s.uriToPath(uri)
 
 				stat, statErr := os.Stat(path)
@@ -206,6 +229,7 @@ func (s *Server) handleDidChangeWatchedFiles(req Request) {
 				}
 			}
 		case 3: // Deleted
+			delete(s.documentVersions, uri)
 			// If a manifest file is deleted, evict its FiveM resource state before
 			// removing the document from the workspace cache.
 			if strings.HasSuffix(uri, "/fxmanifest.lua") || strings.HasSuffix(uri, "/__resource.lua") {

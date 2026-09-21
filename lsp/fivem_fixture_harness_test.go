@@ -191,6 +191,7 @@ func newFiveMFixtureHarnessWithoutIndex(t testing.TB, fixtureNames ...string) *f
 	s.DiagFiveMUnknownExport = true
 	s.DiagFiveMUnknownResource = true
 	s.DiagFiveMEventDirection = true
+	s.DiagFiveMEventPayload = true
 	s.DiagFiveMUnregisteredNetEvent = true
 	s.DiagFiveMUnknownEvent = true
 	s.FeatureCodeLens = true

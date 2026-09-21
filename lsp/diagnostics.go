@@ -16,6 +16,150 @@ type DepInfo struct {
 	Msg   string
 }
 
+func (s *Server) buildFiveMResourceGraphDiagnostics(doc *Document) []Diagnostic {
+	if s == nil || doc == nil || !doc.IsFiveMManifest || s.FiveMResourceGraph == nil || s.GlobalIndex == nil {
+		return nil
+	}
+	res := s.parseFiveMManifest(doc)
+	if res == nil || res.Manifest == nil {
+		return nil
+	}
+	node := s.FiveMResourceGraph.NodeByRoot(res.RootURI)
+	if node == nil {
+		return nil
+	}
+	identity := normalizeFiveMResourceAlias(res.Name)
+	_, graphDiags := s.GlobalIndex.TopologicalSort()
+	out := make([]Diagnostic, 0, len(res.Manifest.Entries))
+	for _, entry := range res.Manifest.Entries {
+		if entry.LoaderInjected || entry.ReservedKey || (entry.EmittedName != "dependency" && entry.EmittedName != "dependencie") {
+			continue
+		}
+		dep := normalizeFiveMResourceAlias(entry.Value)
+		if dep == "" {
+			continue
+		}
+		if dep == identity {
+			out = append(out, Diagnostic{Range: entry.ValueRange, Severity: SeverityWarning, Code: "fivem-self-dependency", Message: fmt.Sprintf("Resource '%s' depends on itself.", identity)})
+			continue
+		}
+		if target := s.FiveMResourceGraph.ByName[dep]; target == nil {
+			providers := s.FiveMResourceGraph.ByProvide[dep]
+			switch len(providers) {
+			case 0:
+				out = append(out, Diagnostic{Range: entry.ValueRange, Severity: SeverityWarning, Code: "fivem-missing-dependency", Message: fmt.Sprintf("Resource dependency '%s' was not found.", dep)})
+			default:
+				if len(providers) > 1 {
+					out = append(out, Diagnostic{Range: entry.ValueRange, Severity: SeverityWarning, Code: "fivem-ambiguous-dependency", Message: fmt.Sprintf("Resource dependency '%s' is provided by multiple resources.", dep)})
+				}
+			}
+		}
+		for _, graphDiag := range graphDiags {
+			if graphDiag.Code == "fivem-circular-dependency" && strings.Contains(graphDiag.Message, string(identity)) && strings.Contains(graphDiag.Message, dep) {
+				graphDiag.Range = entry.ValueRange
+				out = append(out, graphDiag)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// buildFiveMResourceExportContractDiagnostics validates the declarative export
+// contract without participating in export lookup. Keeping this separate from
+// getFiveMResourceExportDefinitions is intentional: diagnostics must not alter
+// resolution or inference behavior.
+func (s *Server) buildFiveMResourceExportContractDiagnostics(doc *Document) []Diagnostic {
+	if s == nil || doc == nil || s.FiveMResourceGraph == nil {
+		return nil
+	}
+
+	root := s.getDocResourceRoot(doc)
+	res := s.resolveFiveMResourceByRoot(root)
+	if res == nil {
+		return nil
+	}
+
+	declared := make(map[string]bool, len(res.ClientExports)+len(res.ServerExports))
+	for _, name := range res.ClientExports {
+		declared[name] = true
+	}
+	for _, name := range res.ServerExports {
+		declared[name] = true
+	}
+
+	out := make([]Diagnostic, 0, 4)
+	if doc.IsFiveMManifest {
+		seen := make(map[string]bool)
+		if res.Manifest != nil {
+			for _, entry := range res.Manifest.Entries {
+				if entry.LoaderInjected || entry.ReservedKey || entry.Value == "" {
+					continue
+				}
+				if entry.EmittedName != "export" && entry.EmittedName != "client_export" && entry.EmittedName != "server_export" {
+					continue
+				}
+				if seen[entry.Value] {
+					out = append(out, Diagnostic{
+						Range: entry.ValueRange, Severity: SeverityWarning,
+						Code:    "fivem-duplicate-export",
+						Message: fmt.Sprintf("Export '%s' is declared more than once in resource '%s'.", entry.Value, res.Name),
+					})
+				}
+				seen[entry.Value] = true
+
+				if len(s.exportImplementations(res, entry.Value)) == 0 {
+					out = append(out, Diagnostic{
+						Range: entry.ValueRange, Severity: SeverityWarning,
+						Code:    "fivem-export-missing-implementation",
+						Message: fmt.Sprintf("Resource '%s' declares export '%s' but no implementation was found.", res.Name, entry.Value),
+					})
+				}
+			}
+		}
+		return out
+	}
+
+	implementationCounts := make(map[string]int)
+	for _, implementation := range s.exportImplementations(res, "") {
+		implementationCounts[implementation.Name]++
+	}
+	for _, exp := range doc.FiveMLuaExports {
+		if implementationCounts[exp.Name] > 1 {
+			out = append(out, Diagnostic{
+				Range: getNodeRange(doc.Tree, exp.NodeID), Severity: SeverityWarning,
+				Code:    "fivem-duplicate-export",
+				Message: fmt.Sprintf("Export '%s' is implemented more than once in resource '%s'.", exp.Name, res.Name),
+			})
+		}
+		if !declared[exp.Name] {
+			out = append(out, Diagnostic{
+				Range: getNodeRange(doc.Tree, exp.NodeID), Severity: SeverityWarning,
+				Code:    "fivem-export-not-declared",
+				Message: fmt.Sprintf("Resource '%s' implements export '%s' but it is not declared in the manifest.", res.Name, exp.Name),
+			})
+		}
+	}
+	return out
+}
+
+func (s *Server) exportImplementations(res *FiveMResource, name string) []FiveMLuaExport {
+	if s == nil || res == nil {
+		return nil
+	}
+	var out []FiveMLuaExport
+	for _, doc := range s.Documents {
+		if doc != nil && s.getDocResourceRoot(doc) == res.RootURI {
+			for _, exp := range doc.FiveMLuaExports {
+				if name == "" || exp.Name == name {
+					out = append(out, exp)
+				}
+			}
+		}
+	}
+	return out
+}
+
 func (s *Server) publishWorkspaceDiagnostics() {
 	start := time.Now()
 
@@ -26,6 +170,31 @@ func (s *Server) publishWorkspaceDiagnostics() {
 			s.publishDiagnostics(uri)
 
 			diagCount++
+		}
+	}
+
+	// NUI assets are kept out of the Lua parser/index. Publish their contract
+	// diagnostics separately so handler locations remain useful.
+	nuiPublished := make(map[string]bool)
+	for _, luaDoc := range s.Documents {
+		if luaDoc == nil || !strings.EqualFold(filepath.Ext(luaDoc.Path), ".lua") {
+			continue
+		}
+		for _, asset := range s.nuiResourceFiles(luaDoc) {
+			if nuiPublished[asset.uri] {
+				continue
+			}
+			assetDoc := &Document{Server: s, URI: asset.uri, Path: s.uriToPath(asset.uri), Tree: ast.NewTree(asset.src), FiveMProfile: s.getDocumentFiveMProfile(luaDoc), FiveMProfileCached: true}
+			diags := s.buildFiveMNUIContractDiagnostics(assetDoc)
+			if len(diags) == 0 {
+				continue
+			}
+			nuiPublished[asset.uri] = true
+			if s.IsCI {
+				s.printCIDiagnostics(asset.uri, diags)
+			} else {
+				WriteMessage(s.Writer, OutgoingNotification{RPC: "2.0", Method: "textDocument/publishDiagnostics", Params: PublishDiagnosticsParams{URI: asset.uri, Diagnostics: diags}})
+			}
 		}
 	}
 
@@ -58,15 +227,33 @@ func (s *Server) publishDiagnostics(uri string) {
 		if s.IsCI {
 			s.printCIDiagnostics(uri, diags)
 		} else {
+			params := PublishDiagnosticsParams{URI: uri, Diagnostics: diags}
+			if version, ok := s.documentVersions[uri]; ok {
+				params.Version = &version
+			}
 			WriteMessage(s.Writer, OutgoingNotification{
 				RPC:    "2.0",
 				Method: "textDocument/publishDiagnostics",
-				Params: PublishDiagnosticsParams{
-					URI:         uri,
-					Diagnostics: diags,
-				},
+				Params: params,
 			})
 		}
+	}
+
+	applyDiagnosticSuppression := func() {
+		n := 0
+
+		for _, diag := range s.diagBuf {
+			line := diag.Range.Start.Line
+
+			if s.isDiagnosticDisabled(doc, line, diag.Code) {
+				continue
+			}
+
+			s.diagBuf[n] = diag
+			n++
+		}
+
+		s.diagBuf = s.diagBuf[:n]
 	}
 
 	s.diagBuf = s.diagBuf[:0]
@@ -89,6 +276,10 @@ func (s *Server) publishDiagnostics(uri string) {
 	profile := s.getDocumentFiveMProfile(doc)
 	if profile.Kind == FiveMProfileManifest {
 		s.diagBuf = append(s.diagBuf, s.buildFiveMManifestDiagnostics(doc)...)
+		s.diagBuf = append(s.diagBuf, s.buildFiveMResourceGraphDiagnostics(doc)...)
+		s.diagBuf = append(s.diagBuf, s.buildFiveMResourceExportContractDiagnostics(doc)...)
+		s.diagBuf = append(s.diagBuf, s.buildFiveMConvarDiagnostics(doc)...)
+		applyDiagnosticSuppression()
 		emitDiagnostics(s.diagBuf)
 
 		return
@@ -217,6 +408,13 @@ func (s *Server) publishDiagnostics(uri string) {
 		}
 	}
 
+	s.diagBuf = append(s.diagBuf, s.buildFiveMResourceExportContractDiagnostics(doc)...)
+	s.diagBuf = append(s.diagBuf, s.buildFiveMNUIContractDiagnostics(doc)...)
+	s.diagBuf = append(s.diagBuf, s.buildFiveMStateBagDiagnostics(doc)...)
+	s.diagBuf = append(s.diagBuf, s.buildFiveMEntityLifecycleDiagnostics(doc)...)
+	s.diagBuf = append(s.diagBuf, s.buildFiveMCommandDiagnostics(doc)...)
+	s.diagBuf = append(s.diagBuf, s.buildFiveMConvarDiagnostics(doc)...)
+
 	// FiveM-specific event diagnostics (optional)
 	// Run the unknown-event diagnostic check if enabled, before emitting diagnostics
 	if s.DiagFiveMUnknownEvent {
@@ -226,17 +424,25 @@ func (s *Server) publishDiagnostics(uri string) {
 	if s.DiagFiveMEventDirection {
 		s.diagFiveMEventDirection(doc)
 	}
+	if s.DiagFiveMEventPayload {
+		s.diagFiveMEventPayload(doc)
+	}
+	if s.DiagFiveMTrustBoundary {
+		s.buildFiveMTrustBoundaryDiagnostics(doc)
+	}
 	// Run the unregistered net event diagnostic for this doc
 	if s.DiagFiveMUnregisteredNetEvent {
 		s.diagFiveMUnregisteredNetEvent(doc)
 	}
-	// If any event-direction related diagnostics were produced, emit and stop further processing
-	if len(s.diagBuf) > 0 {
-		emitDiagnostics(s.diagBuf)
-		return
+	if s.DiagFiveMPerformance && profile.HasResource() {
+		s.diagBuf = append(s.diagBuf, s.buildFiveMPerformanceDiagnostics(doc)...)
 	}
-
+	if s.DiagFiveMSQL && profile.HasResource() {
+		s.diagBuf = append(s.diagBuf, s.buildFiveMSQLDiagnostics(doc)...)
+	}
+	s.diagBuf = append(s.diagBuf, s.buildFiveMSourceAfterYieldDiagnostics(doc)...)
 	if doc.IsMeta {
+		applyDiagnosticSuppression()
 		emitDiagnostics(s.diagBuf)
 
 		return
@@ -1377,21 +1583,7 @@ func (s *Server) publishDiagnostics(uri string) {
 		}
 	}
 
-	var n int
-
-	for _, diag := range s.diagBuf {
-		line := diag.Range.Start.Line
-
-		if s.isDiagnosticDisabled(doc, line, diag.Code) {
-			continue
-		}
-
-		s.diagBuf[n] = diag
-
-		n++
-	}
-
-	s.diagBuf = s.diagBuf[:n]
+	applyDiagnosticSuppression()
 
 	if s.diagBuf == nil {
 		s.diagBuf = make([]Diagnostic, 0)
@@ -1904,6 +2096,24 @@ func (s *Server) diagFiveMUnregisteredNetEvent(doc *Document) {
 			if d == nil {
 				continue
 			}
+
+			// Directional network triggers can only resolve to registrations in
+			// the receiving runtime. Shared registrations are available to both.
+			registrationEnv := s.getDocumentFiveMProfile(d).Env()
+			allowed := func() bool {
+				switch ev.Kind {
+				case FiveMEventTriggerServer:
+					return registrationEnv == EnvServer || registrationEnv == EnvShared
+				case FiveMEventTriggerClient:
+					return registrationEnv == EnvClient || registrationEnv == EnvShared
+				default:
+					return false
+				}
+			}()
+			if !allowed {
+				continue
+			}
+
 			for _, ev2 := range d.FiveMEvents {
 				if ev2.Name == ev.Name && ev2.Kind == FiveMEventRegisterNet {
 					found = true
@@ -1994,6 +2204,116 @@ func (s *Server) diagFiveMEventDirection(doc *Document) {
 			})
 		}
 	}
+}
+
+// diagFiveMEventPayload validates network trigger payload counts against a
+// matching RegisterNetEvent callback. Registrations without a callable handler,
+// vararg handlers, or conflicting contracts are intentionally left unknown.
+func (s *Server) diagFiveMEventPayload(doc *Document) {
+	if doc == nil || !s.DiagFiveMEventPayload {
+		return
+	}
+	if !s.getDocumentFiveMProfile(doc).HasResource() {
+		return
+	}
+
+	for _, trigger := range doc.FiveMEvents {
+		if trigger.Kind != FiveMEventTriggerServer && trigger.Kind != FiveMEventTriggerClient {
+			continue
+		}
+		payloadCount := 0
+		// TriggerClientEvent has an event target between the name and payload.
+		if trigger.Kind == FiveMEventTriggerClient {
+			payloadCount = -1
+		}
+		// Find the call node containing the event-name argument and count its arguments.
+		var call ast.Node
+		foundCall := false
+		for i := 1; i < len(doc.Tree.Nodes); i++ {
+			candidate := doc.Tree.Nodes[i]
+			if candidate.Kind != ast.KindCallExpr || candidate.Extra >= uint32(len(doc.Tree.ExtraList)) {
+				continue
+			}
+			for j := uint32(0); j < candidate.Count && candidate.Extra+j < uint32(len(doc.Tree.ExtraList)); j++ {
+				if doc.Tree.ExtraList[candidate.Extra+j] == trigger.NodeID {
+					call = candidate
+					foundCall = true
+					break
+				}
+			}
+			if foundCall {
+				break
+			}
+		}
+		if !foundCall {
+			continue
+		}
+		payloadCount += int(call.Count) - 1
+		if payloadCount < 0 {
+			continue
+		}
+
+		contract, ok := s.fiveMEventPayloadContract(trigger)
+		if !ok || payloadCount == contract {
+			continue
+		}
+		s.diagBuf = append(s.diagBuf, Diagnostic{
+			Range:    getNodeRange(doc.Tree, trigger.NodeID),
+			Severity: SeverityWarning,
+			Code:     "fivem-event-payload",
+			Message:  fmt.Sprintf("Event '%s' expected %d payload arguments, got %d", trigger.Name, contract, payloadCount),
+		})
+	}
+}
+
+func (s *Server) fiveMEventPayloadContract(trigger FiveMEventInfo) (int, bool) {
+	contracts := make(map[int]struct{})
+	for _, d := range s.Documents {
+		if d == nil {
+			continue
+		}
+		env := s.getDocumentFiveMProfile(d).Env()
+		if trigger.Kind == FiveMEventTriggerServer && env != EnvServer && env != EnvShared ||
+			trigger.Kind == FiveMEventTriggerClient && env != EnvClient && env != EnvShared {
+			continue
+		}
+		for _, registration := range d.FiveMEvents {
+			if registration.Kind != FiveMEventRegisterNet || registration.Name != trigger.Name || registration.HandlerID == ast.InvalidNode {
+				continue
+			}
+			if int(registration.HandlerID) >= len(d.Tree.Nodes) {
+				continue
+			}
+			handler := d.Tree.Nodes[registration.HandlerID]
+			if handler.Kind != ast.KindFunctionExpr || functionHasVararg(d, registration.HandlerID) {
+				continue
+			}
+			count := int(handler.Count)
+			if count == 0 {
+				if doc := d.GetLuaDoc(registration.HandlerID); doc != nil && len(doc.Params) > 0 {
+					count = len(doc.Params)
+				}
+			}
+			contracts[count] = struct{}{}
+		}
+	}
+	if len(contracts) != 1 {
+		return 0, false
+	}
+	for count := range contracts {
+		return count, true
+	}
+	return 0, false
+}
+
+func functionHasVararg(doc *Document, id ast.NodeID) bool {
+	node := doc.Tree.Nodes[id]
+	for i := uint32(0); i < node.Count && node.Extra+i < uint32(len(doc.Tree.ExtraList)); i++ {
+		if doc.Tree.Nodes[doc.Tree.ExtraList[node.Extra+i]].Kind == ast.KindVararg {
+			return true
+		}
+	}
+	return false
 }
 
 // diagFiveMUnknownEvent scans for AddEventHandler registrations that reference

@@ -205,6 +205,13 @@ func (s *Server) handleCodeAction(req Request) {
 				}
 			}
 		}
+
+		// FiveM fixes are deliberately suggestion-only: never rewrite an event,
+		// export, or manifest path unless the resolver supplied an unambiguous
+		// replacement.  This keeps the generic refactoring actions unchanged.
+		if fix, ok := s.fiveMQuickFix(doc, uri, diag); ok {
+			actions = append(actions, fix)
+		}
 	}
 
 	allFixes := s.getSafeFixesForDocument(doc)
@@ -1604,6 +1611,149 @@ func (s *Server) handleLinkedEditingRange(req Request) {
 			Ranges: ranges,
 		},
 	})
+}
+
+func (s *Server) fiveMQuickFix(doc *Document, uri string, diag Diagnostic) (CodeAction, bool) {
+	if doc == nil || !strings.HasPrefix(diag.Code, "fivem-") {
+		return CodeAction{}, false
+	}
+
+	// Resource typos are already supplied by diagnostics.  Export and event
+	// typos are resolved here only when one close match exists.
+	if diag.Code == "fivem-unknown-export" {
+		nodeID := doc.Tree.NodeAt(doc.Tree.Offset(diag.Range.Start.Line, diag.Range.Start.Character))
+		for nodeID != ast.InvalidNode && int(nodeID) < len(doc.Tree.Nodes) && doc.Tree.Nodes[nodeID].Kind != ast.KindMemberExpr && doc.Tree.Nodes[nodeID].Kind != ast.KindMethodCall {
+			nodeID = doc.Tree.Nodes[nodeID].Parent
+		}
+		if nodeID == ast.InvalidNode {
+			return CodeAction{}, false
+		}
+		res, _ := s.resolveFiveMExportResource(doc, nodeID)
+		if res == nil {
+			return CodeAction{}, false
+		}
+		nameNode := doc.Tree.NodeAt(doc.Tree.Offset(diag.Range.Start.Line, diag.Range.Start.Character))
+		if nameNode == ast.InvalidNode || int(nameNode) >= len(doc.Tree.Nodes) {
+			return CodeAction{}, false
+		}
+		nameNodeData := doc.Tree.Nodes[nameNode]
+		name := string(doc.Source()[nameNodeData.Start:nameNodeData.End])
+		var match string
+		for _, candidate := range append(append([]string{}, res.ClientExports...), res.ServerExports...) {
+			if levenshteinFast(strings.ToLower(name), strings.ToLower(candidate), 2) <= 2 {
+				if match != "" && match != candidate {
+					return CodeAction{}, false
+				}
+				match = candidate
+			}
+		}
+		if match == "" {
+			return CodeAction{}, false
+		}
+		return s.fiveMReplacementAction(uri, diag, match, "Change export to '%s'"), true
+	}
+
+	if diag.Code == "fivem-unknown-event" {
+		name := strings.Trim(diag.Message, "")
+		if i := strings.Index(name, "'"); i >= 0 {
+			name = name[i+1:]
+			if j := strings.Index(name, "'"); j >= 0 {
+				name = name[:j]
+			}
+		}
+		var match string
+		for _, other := range s.Documents {
+			if other == nil {
+				continue
+			}
+			for _, ev := range other.FiveMEvents {
+				if ev.Name == "" || ev.Name == name {
+					continue
+				}
+				if levenshteinFast(strings.ToLower(name), strings.ToLower(ev.Name), 2) <= 2 {
+					if match != "" && match != ev.Name {
+						return CodeAction{}, false
+					}
+					match = ev.Name
+				}
+			}
+		}
+		if match == "" {
+			return CodeAction{}, false
+		}
+		return s.fiveMReplacementAction(uri, diag, match, "Change event to '%s'"), true
+	}
+
+	if diag.Code == "fivem-unregistered-net-event" {
+		name := ""
+		if i := strings.Index(diag.Message, "'"); i >= 0 {
+			rest := diag.Message[i+1:]
+			if j := strings.Index(rest, "'"); j >= 0 {
+				name = rest[:j]
+			}
+		}
+		if name == "" {
+			return CodeAction{}, false
+		}
+		trigger := doc.Tree.NodeAt(doc.Tree.Offset(diag.Range.Start.Line, diag.Range.Start.Character))
+		var kind FiveMEventKind
+		for _, ev := range doc.FiveMEvents {
+			if ev.NodeID == trigger {
+				kind = ev.Kind
+				break
+			}
+		}
+		env := EnvServer
+		if kind == FiveMEventTriggerClient {
+			env = EnvClient
+		}
+		var target *Document
+		for _, other := range s.Documents {
+			if other == nil || other.IsMeta || s.getDocumentFiveMProfile(other).Env() != env {
+				continue
+			}
+			for _, ev := range other.FiveMEvents {
+				if ev.Name == name && ev.Kind == FiveMEventRegisterNet {
+					return CodeAction{}, false
+				}
+			}
+			if target != nil {
+				return CodeAction{}, false
+			}
+			target = other
+		}
+		if target == nil {
+			return CodeAction{}, false
+		}
+		return CodeAction{Title: fmt.Sprintf("Register network event '%s'", name), Kind: "quickfix", Diagnostics: []Diagnostic{diag}, IsPreferred: true, Edit: &WorkspaceEdit{Changes: map[string][]TextEdit{target.URI: {{Range: Range{}, NewText: fmt.Sprintf("RegisterNetEvent('%s')\n", name)}}}}}, true
+	}
+
+	if diag.Code == "fivem-event-direction" {
+		offset := doc.Tree.Offset(diag.Range.Start.Line, diag.Range.Start.Character)
+		id := doc.Tree.NodeAt(offset)
+		for id != ast.InvalidNode && int(id) < len(doc.Tree.Nodes) {
+			n := doc.Tree.Nodes[id]
+			if n.Kind == ast.KindIdent {
+				old := string(doc.Source()[n.Start:n.End])
+				if old == "TriggerServerEvent" || old == "TriggerClientEvent" {
+					return s.fiveMReplacementAction(uri, Diagnostic{Range: getNodeRange(doc.Tree, id)}, "TriggerEvent", "Use '%s' for a local event"), true
+				}
+			}
+			id = n.Parent
+		}
+	}
+
+	// Manifest path diagnostics must carry a checked, relative replacement.
+	if diag.Code == "fivem-manifest-path" || diag.Code == "fivem-manifest-missing-file" {
+		if replacement, ok := diag.Data.(string); ok && replacement != "" && !strings.HasPrefix(replacement, "@") && !strings.Contains(replacement, "..") && !strings.HasPrefix(replacement, "/") {
+			return s.fiveMReplacementAction(uri, diag, replacement, "Correct manifest path to '%s'"), true
+		}
+	}
+	return CodeAction{}, false
+}
+
+func (s *Server) fiveMReplacementAction(uri string, diag Diagnostic, replacement, title string) CodeAction {
+	return CodeAction{Title: fmt.Sprintf(title, replacement), Kind: "quickfix", Diagnostics: []Diagnostic{diag}, IsPreferred: true, Edit: &WorkspaceEdit{Changes: map[string][]TextEdit{uri: {{Range: diag.Range, NewText: replacement}}}}}
 }
 
 func (s *Server) getSafeFixesForDocument(doc *Document) []SafeFix {

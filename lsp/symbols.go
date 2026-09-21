@@ -93,10 +93,34 @@ func (s *Server) handleDefinition(req Request) {
 	}
 
 	offset := doc.Tree.Offset(params.Position.Line, params.Position.Character)
+	if doc.IsFiveMManifest {
+		if res := s.parseFiveMManifest(doc); res != nil && res.Manifest != nil {
+			for _, entry := range res.Manifest.Entries {
+				if entry.ValueRange.Start.Line == params.Position.Line && params.Position.Character >= entry.ValueRange.Start.Character && params.Position.Character <= entry.ValueRange.End.Character {
+					target := s.manifestPathTarget(doc, entry)
+					if _, ok := s.Documents[target]; ok {
+						WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: []Location{{URI: target, Range: Range{Start: Position{}, End: Position{}}}}})
+						return
+					}
+				}
+			}
+		}
+	}
 	if locs := s.getFiveMEventDefinitionLocations(doc, offset); len(locs) > 0 {
 		WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: locs})
 
 		return
+	}
+	// Built-in events have no source file. Return the stable virtual resource
+	// instead of an empty/opaque definition so clients can navigate to it.
+	if event, ok := doc.fiveMEventAtOffset(offset); ok {
+		if _, builtin := EventsBuiltin[event.Name]; builtin {
+			WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: []Location{{
+				URI:   builtinFiveMEventsURI,
+				Range: Range{Start: Position{}, End: Position{}},
+			}}})
+			return
+		}
 	}
 
 	ctx := s.resolveSymbolAt(uri, offset)
@@ -106,10 +130,6 @@ func (s *Server) handleDefinition(req Request) {
 
 		if len(ctx.GlobalDefs) > 0 {
 			for _, def := range ctx.GlobalDefs {
-				if strings.HasPrefix(def.URI, embeddedStdlibURIPrefix) {
-					continue
-				}
-
 				if tDoc, ok := s.Documents[def.URI]; ok {
 					locs = append(locs, Location{
 						URI:   def.URI,
@@ -117,7 +137,7 @@ func (s *Server) handleDefinition(req Request) {
 					})
 				}
 			}
-		} else if ctx.TargetDefID != ast.InvalidNode && !strings.HasPrefix(ctx.TargetURI, embeddedStdlibURIPrefix) {
+		} else if ctx.TargetDefID != ast.InvalidNode && ctx.TargetDoc != nil {
 			locs = append(locs, Location{
 				URI:   ctx.TargetURI,
 				Range: getNodeRange(ctx.TargetDoc.Tree, ctx.TargetDefID),
@@ -1177,7 +1197,7 @@ func (s *Server) handleWorkspaceSymbol(req Request) {
 		}
 
 		builtinLocation := Location{
-			URI: "builtin://fivem/events",
+			URI: builtinFiveMEventsURI,
 			Range: Range{
 				Start: Position{Line: 0, Character: 0},
 				End:   Position{Line: 0, Character: 0},

@@ -41,8 +41,8 @@ func TestFiveMUnregisteredNetEventAllowsCrossResourceRegistration(t *testing.T) 
 
 	h.writeWorkspaceFile("consumer/fxmanifest.lua", "fx_version 'cerulean'\ngame 'gta5'\nserver_script 'server.lua'\n")
 	h.writeWorkspaceFile("consumer/server.lua", "TriggerClientEvent('core:character:appearanceUpdate', -1)\n")
-	h.writeWorkspaceFile("core/fxmanifest.lua", "fx_version 'cerulean'\ngame 'gta5'\nserver_script 'server.lua'\n")
-	h.writeWorkspaceFile("core/server.lua", "RegisterNetEvent('core:character:appearanceUpdate', function() end)\n")
+	h.writeWorkspaceFile("core/fxmanifest.lua", "fx_version 'cerulean'\ngame 'gta5'\nclient_script 'client.lua'\n")
+	h.writeWorkspaceFile("core/client.lua", "RegisterNetEvent('core:character:appearanceUpdate', function() end)\n")
 	h.reindex()
 
 	diags := h.diagnostics("consumer/server.lua")

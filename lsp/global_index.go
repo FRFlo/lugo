@@ -49,7 +49,8 @@ type SymbolEntry struct {
 
 type ResourceScope struct {
 	// Identity
-	URI ResourceURI
+	URI      ResourceURI
+	Identity ResourceURI
 
 	// Symbol Tables
 	Client SymbolTable
@@ -406,22 +407,30 @@ func (idx *GlobalIndex) RegisterFiveMResource(res *FiveMResource) *ResourceScope
 		return nil
 	}
 
-	uri := ResourceURI(res.RootURI)
-	if uri == "" {
-		uri = ResourceURI(normalizeFiveMResourceAlias(res.Name))
+	// Dependency edges use the stable resource identity (the manifest name),
+	// rather than a workspace-specific root URI. This keeps graph diagnostics
+	// consistent across machines and allows aliases to be resolved canonically.
+	rootURI := ResourceURI(res.RootURI)
+	identity := ResourceURI(normalizeFiveMResourceAlias(res.Name))
+	if identity == "" {
+		identity = rootURI
 	}
-	if uri == "" {
+	if rootURI == "" {
+		rootURI = identity
+	}
+	if identity == "" {
 		return nil
 	}
 
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 
-	scope := idx.ensureResourceLocked(uri)
+	scope := idx.ensureResourceLocked(rootURI)
+	scope.Identity = identity
 
 	deps := fiveMResourceDependencies(res)
 	scope.Dependencies = cloneResourceURIs(deps)
-	idx.DepGraph.SetDependencies(uri, deps)
+	idx.DepGraph.SetDependencies(identity, deps)
 	idx.syncResourceEdgesLocked()
 	idx.registerFiveMScriptScopesLocked(scope, res)
 
@@ -553,14 +562,25 @@ func (idx *GlobalIndex) touchLocked(res *ResourceScope) {
 }
 
 func (idx *GlobalIndex) syncResourceEdgesLocked() {
-	for uri, res := range idx.Resources {
+	for _, res := range idx.Resources {
 		res.Dependents = res.Dependents[:0]
-		res.Dependencies = idx.DepGraph.DependencyList(uri)
+		identity := res.Identity
+		if identity == "" {
+			identity = res.URI
+		}
+		res.Dependencies = idx.DepGraph.DependencyList(identity)
 	}
 	for dependent, deps := range idx.DepGraph.Dependencies {
 		for dep := range deps {
-			if res := idx.Resources[dep]; res != nil {
-				res.Dependents = appendUniqueResourceURI(res.Dependents, dependent)
+			for _, res := range idx.Resources {
+				identity := res.Identity
+				if identity == "" {
+					identity = res.URI
+				}
+				if identity == dep {
+					res.Dependents = appendUniqueResourceURI(res.Dependents, dependent)
+					break
+				}
 			}
 		}
 	}

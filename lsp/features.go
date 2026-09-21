@@ -170,7 +170,7 @@ func (s *Server) handleHover(req Request) {
 	if doc != nil {
 		if currID := doc.Tree.NodeAt(offset); currID != ast.InvalidNode {
 			currNode := doc.Tree.Nodes[currID]
-			if currNode.Kind == ast.KindString {
+			if currNode.Kind == ast.KindString || currNode.Kind == ast.KindIdent {
 				parID := currNode.Parent
 				if parID != ast.InvalidNode {
 					if parNode := doc.Tree.Nodes[parID]; parNode.Kind == ast.KindCallExpr || parNode.Kind == ast.KindMethodCall {
@@ -184,6 +184,7 @@ func (s *Server) handleHover(req Request) {
 										switch fname {
 										case "AddEventHandler", "RegisterNetEvent", "TriggerEvent", "TriggerServerEvent", "TriggerClientEvent":
 											eventName := string(doc.Source()[currNode.Start:currNode.End])
+											canonicalName := normalizeFiveMEventName(eventName)
 											kindLabel := ""
 											switch fname {
 											case "AddEventHandler":
@@ -197,14 +198,9 @@ func (s *Server) handleHover(req Request) {
 											case "TriggerClientEvent":
 												kindLabel = "client trigger"
 											}
-											hoverText := "```lua\n" + eventName + " — " + kindLabel + "\n```"
-											if be, ok := EventsBuiltin[eventName]; ok {
-												if be.Description != "" {
-													hoverText += "\n\n" + be.Description
-												}
-												if be.Payload != "" {
-													hoverText += "\nPayload: " + be.Payload
-												}
+											hoverText := "```lua\n" + canonicalName + " — " + kindLabel + "\n```"
+											if be, ok := lookupFiveMBuiltinEvent(canonicalName); ok {
+												hoverText += "\n\n" + builtinEventDocumentation(be)
 											}
 											WriteMessage(s.Writer, Response{
 												RPC: "2.0",
@@ -421,6 +417,11 @@ func (s *Server) handleHover(req Request) {
 
 			var docBuilder strings.Builder
 
+			nativeMeta, isNative := fiveMNativeMetadataFor(ctx.TargetDoc, ctx.TargetDefID)
+			if isNative {
+				docBuilder.WriteString("**Native** `" + nativeMeta.Namespace + "` · **" + nativeMeta.Context + "**\n\n")
+			}
+
 			if luadoc.IsDeprecated {
 				docBuilder.WriteString("**@deprecated**")
 
@@ -432,7 +433,13 @@ func (s *Server) handleHover(req Request) {
 			}
 
 			if luadoc.Description != "" {
-				docBuilder.WriteString(luadoc.Description + "\n\n")
+				if isNative {
+					nativeDoc := fiveMNativeDocumentation(nativeMeta)
+					nativeHeader := "**Native** `" + nativeMeta.Namespace + "` · **" + nativeMeta.Context + "**"
+					docBuilder.WriteString(strings.TrimPrefix(nativeDoc, nativeHeader) + "\n\n")
+				} else {
+					docBuilder.WriteString(luadoc.Description + "\n\n")
+				}
 			}
 
 			if len(luadoc.Generics) > 0 {
@@ -677,6 +684,16 @@ func (s *Server) handleCompletion(req Request) {
 		})
 	}
 
+	if doc.IsFiveMManifest {
+		for _, item := range s.manifestPathCompletions(doc, offset) {
+			items = append(items, item)
+		}
+		if len(items) > 0 {
+			WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: CompletionList{Items: items}})
+			return
+		}
+	}
+
 	if callName, ok := fiveMEventCompletionCall(doc, offset); ok {
 		addFiveMEventCompletions := func() {
 			addEvent := func(name, detail, sortText string) {
@@ -685,6 +702,14 @@ func (s *Server) handleCompletion(req Request) {
 				}
 
 				addCompletion(name, FieldCompletion, detail, false, sortText, name, PlainTextTextFormat)
+				if builtin, ok := lookupFiveMBuiltinEvent(name); ok {
+					for i := range items {
+						if items[i].Label == name {
+							items[i].Documentation = &MarkupContent{Kind: "markdown", Value: builtinEventDocumentation(builtin)}
+							break
+						}
+					}
+				}
 			}
 
 			builtinAllowed := func(subset string) bool {
@@ -756,6 +781,14 @@ func (s *Server) handleCompletion(req Request) {
 		}
 
 		addFiveMEventCompletions()
+		for _, adapter := range s.FrameworkAdapters {
+			for _, symbol := range adapter.Symbols {
+				if symbol.Kind != "event" && symbol.Kind != "export" {
+					continue
+				}
+				addCompletion(symbol.Name, FieldCompletion, symbol.Detail, false, "1", symbol.Name, PlainTextTextFormat)
+			}
+		}
 
 		// Attach Data to enable completionItem/resolve.
 		for i := range items {
@@ -1433,13 +1466,25 @@ func (s *Server) handleCompletion(req Request) {
 					}
 
 					isDep, _ := symDoc.HasDeprecatedTag(sym.NodeID)
+					detail := "global"
+					if nativeMeta, ok := fiveMNativeMetadataFor(symDoc, sym.NodeID); ok {
+						detail = fiveMNativeDetail(nativeMeta)
+					}
 
 					sortGroup := "2"
 					if sym.URI == uri {
 						sortGroup = "1"
 					}
 
-					addCompletion(label, kind, "global", isDep, sortGroup, insertText, insertFormat)
+					addCompletion(label, kind, detail, isDep, sortGroup, insertText, insertFormat)
+					if nativeMeta, ok := fiveMNativeMetadataFor(symDoc, sym.NodeID); ok {
+						for i := len(items) - 1; i >= 0; i-- {
+							if items[i].Label == label {
+								items[i].Documentation = &MarkupContent{Kind: "markdown", Value: fiveMNativeDocumentation(nativeMeta)}
+								break
+							}
+						}
+					}
 
 					return true
 				}
@@ -1464,6 +1509,12 @@ func (s *Server) handleCompletion(req Request) {
 
 		for _, kw := range luaKeywords {
 			addCompletion(kw, KeywordCompletion, "keyword", false, "3", kw, PlainTextTextFormat)
+		}
+
+		// Framework packs are opt-in metadata. Keep them out of the resolver and
+		// only offer their conservative names alongside ordinary globals.
+		for _, adapter := range adapterCompletions(s.FrameworkAdapters) {
+			addCompletion(adapter.Label, adapter.Kind, adapter.Detail, false, "2", adapter.Label, PlainTextTextFormat)
 		}
 
 		currID := doc.Tree.NodeAt(offset)
@@ -1815,13 +1866,23 @@ func (s *Server) handleSignatureHelp(req Request) {
 		}
 
 		var funcDoc *MarkupContent
-
-		if luadoc.Description != "" {
+		if nativeMeta, ok := fiveMNativeMetadataFor(tDoc, def.NodeID); ok {
+			funcDoc = &MarkupContent{Kind: "markdown", Value: fiveMNativeDocumentation(nativeMeta)}
+		} else if luadoc.Description != "" {
 			funcDoc = new(MarkupContent{Kind: "markdown", Value: luadoc.Description})
 		}
 
+		label := ctx.DisplayName + "(" + strings.Join(labels, ", ") + ")"
+		if len(luadoc.Returns) > 0 {
+			returnTypes := make([]string, 0, len(luadoc.Returns))
+			for _, ret := range luadoc.Returns {
+				returnTypes = append(returnTypes, ret.Type)
+			}
+			label += ": " + strings.Join(returnTypes, ", ")
+		}
+
 		signatures = append(signatures, SignatureInformation{
-			Label:         ctx.DisplayName + "(" + strings.Join(labels, ", ") + ")",
+			Label:         label,
 			Documentation: funcDoc,
 			Parameters:    paramsInfo,
 		})
@@ -3015,6 +3076,16 @@ func (s *Server) handleDocumentLink(req Request) {
 	}
 
 	var links []DocumentLink
+	if doc.IsFiveMManifest {
+		if res := s.parseFiveMManifest(doc); res != nil && res.Manifest != nil {
+			for _, entry := range res.Manifest.Entries {
+				target := s.manifestPathTarget(doc, entry)
+				if target != "" {
+					links = append(links, DocumentLink{Range: entry.ValueRange, Target: target, Tooltip: "Open " + entry.Value})
+				}
+			}
+		}
+	}
 
 	for id := range doc.Tree.Nodes {
 		node := &doc.Tree.Nodes[id]

@@ -196,16 +196,30 @@ type ExecuteCommandOptions struct {
 type CIConfig struct {
 	WorkspaceFolders []string              `json:"workspaceFolders"`
 	Settings         InitializationOptions `json:"settings"`
+	CIPolicy         CIPolicy              `json:"ciPolicy,omitempty"`
+}
+
+// CIPolicy controls CI diagnostic output and failure thresholds.
+type CIPolicy struct {
+	FailOnSeverity string   `json:"failOnSeverity,omitempty"`
+	IncludeCodes   []string `json:"includeCodes,omitempty"`
+	ExcludeCodes   []string `json:"excludeCodes,omitempty"`
+	MaxDiagnostics int      `json:"maxDiagnostics,omitempty"`
+	MaxErrors      int      `json:"maxErrors,omitempty"`
+	MaxWarnings    int      `json:"maxWarnings,omitempty"`
+	SARIFPath      string   `json:"sarifPath,omitempty"`
+	BaselinePath   string   `json:"baselinePath,omitempty"`
 }
 
 // InitializationOptions represents the custom configuration passed by the client during initialization.
 type InitializationOptions struct {
-	TelemetryEnabled bool              `json:"telemetryEnabled"`
-	LibraryPaths     []string          `json:"libraryPaths,omitempty"`
-	IgnoreGlobs      []string          `json:"ignoreGlobs,omitempty"`
-	KnownGlobals     []string          `json:"knownGlobals,omitempty"`
-	BannedSymbols    map[string]string `json:"bannedSymbols,omitempty"`
-	MaxFileSizeMB    int               `json:"maxFileSizeMB"`
+	TelemetryEnabled  bool                     `json:"telemetryEnabled"`
+	LibraryPaths      []string                 `json:"libraryPaths,omitempty"`
+	IgnoreGlobs       []string                 `json:"ignoreGlobs,omitempty"`
+	KnownGlobals      []string                 `json:"knownGlobals,omitempty"`
+	FrameworkAdapters []FrameworkAdapterConfig `json:"frameworkAdapters,omitempty"`
+	BannedSymbols     map[string]string        `json:"bannedSymbols,omitempty"`
+	MaxFileSizeMB     int                      `json:"maxFileSizeMB"`
 
 	ParserMaxErrors int `json:"parserMaxErrors"`
 
@@ -253,10 +267,15 @@ type InitializationOptions struct {
 	// DiagFiveMUnknownExport enables diagnostics for unknown export lookups.
 	DiagFiveMUnknownExport bool `json:"diagFiveMUnknownExport"`
 	// DiagFiveMUnknownResource enables diagnostics for exports addressing unknown resources.
-	DiagFiveMUnknownResource      bool `json:"diagFiveMUnknownResource"`
-	DiagFiveMEventDirection       bool `json:"diagFiveMEventDirection"`
-	DiagFiveMUnregisteredNetEvent bool `json:"diagFiveMUnregisteredNetEvent"`
-	DiagFiveMUnknownEvent         bool `json:"diagFiveMUnknownEvent"`
+	DiagFiveMUnknownResource      bool                      `json:"diagFiveMUnknownResource"`
+	DiagFiveMEventDirection       bool                      `json:"diagFiveMEventDirection"`
+	DiagFiveMEventPayload         bool                      `json:"diagFiveMEventPayload"`
+	DiagFiveMUnregisteredNetEvent bool                      `json:"diagFiveMUnregisteredNetEvent"`
+	DiagFiveMUnknownEvent         bool                      `json:"diagFiveMUnknownEvent"`
+	DiagFiveMTrustBoundary        bool                      `json:"diagFiveMTrustBoundary"`
+	DiagFiveMPerformance          bool                      `json:"diagFiveMPerformance"`
+	DiagFiveMSQL                  bool                      `json:"diagFiveMSQL"`
+	SQLAdapters                   []FiveMSQLAdapterMetadata `json:"sqlAdapters,omitempty"`
 }
 
 // defaultInitializationOptions mirrors the extension defaults. Standalone
@@ -309,8 +328,12 @@ func defaultInitializationOptions() InitializationOptions {
 		DiagFiveMUnknownExport:        true,
 		DiagFiveMUnknownResource:      true,
 		DiagFiveMEventDirection:       true,
+		DiagFiveMEventPayload:         true,
 		DiagFiveMUnregisteredNetEvent: true,
 		DiagFiveMUnknownEvent:         true,
+		DiagFiveMTrustBoundary:        true,
+		DiagFiveMPerformance:          true,
+		DiagFiveMSQL:                  true,
 	}
 }
 
@@ -488,6 +511,7 @@ type DiagnosticRelatedInformation struct {
 // PublishDiagnosticsParams represents parameters for the publishDiagnostics notification.
 type PublishDiagnosticsParams struct {
 	URI         string       `json:"uri"`
+	Version     *int         `json:"version,omitempty"`
 	Diagnostics []Diagnostic `json:"diagnostics"`
 }
 

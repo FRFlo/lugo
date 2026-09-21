@@ -396,9 +396,47 @@ func NewFiveMResourceGraph() *FiveMResourceGraph {
 
 type FiveMBuiltinEvent struct {
 	Name        string
-	Subset      string
+	Subset      string // Host execution subset (CLIENT, SERVER, or SHARED).
+	Profile     string // Resource profile in which the host event is available.
+	Direction   string // Direction from the host runtime to resource code.
 	Description string
 	Payload     string
+}
+
+func (e FiveMBuiltinEvent) metadata() (profile, direction string) {
+	profile = e.Profile
+	if profile == "" {
+		profile = e.Subset
+	}
+	direction = e.Direction
+	if direction == "" {
+		direction = "host → resource"
+	}
+	return profile, direction
+}
+
+func normalizeFiveMEventName(name string) string {
+	name = strings.TrimSpace(name)
+	if len(name) >= 2 {
+		if (name[0] == '"' && name[len(name)-1] == '"') || (name[0] == '\'' && name[len(name)-1] == '\'') {
+			name = name[1 : len(name)-1]
+		}
+	}
+	return name
+}
+
+func lookupFiveMBuiltinEvent(name string) (FiveMBuiltinEvent, bool) {
+	event, ok := EventsBuiltin[normalizeFiveMEventName(name)]
+	return event, ok
+}
+
+func builtinEventDocumentation(event FiveMBuiltinEvent) string {
+	profile, direction := event.metadata()
+	text := event.Description
+	if event.Payload != "" {
+		text += "\nPayload: " + event.Payload
+	}
+	return text + "\nProfile: " + profile + "\nDirection: " + direction
 }
 
 var EventsBuiltin = map[string]FiveMBuiltinEvent{
@@ -477,6 +515,60 @@ var EventsBuiltin = map[string]FiveMBuiltinEvent{
 		Description: "Fires when the game session is fully initialized.",
 		Payload:     "()",
 	},
+	"playerEnteredScope": {
+		Subset:      "SERVER",
+		Description: "Fires when a player enters another player's scope.",
+		Payload:     "(for: number, player: number)",
+	},
+	"playerLeftScope": {
+		Subset:      "SERVER",
+		Description: "Fires when a player leaves another player's scope.",
+		Payload:     "(for: number, player: number)",
+	},
+	"populationPedCreating": {
+		Subset:      "CLIENT",
+		Description: "Fires before a population ped is created.",
+		Payload:     "(handle: number)",
+	},
+	"onClientResourceStart": {
+		Subset:      "CLIENT",
+		Description: "Fires when a client resource starts.",
+		Payload:     "(resourceName: string)",
+	},
+	"onClientResourceStop": {
+		Subset:      "CLIENT",
+		Description: "Fires when a client resource stops.",
+		Payload:     "(resourceName: string)",
+	},
+	"onServerResourceStart": {
+		Subset:      "SERVER",
+		Description: "Fires when a server resource starts.",
+		Payload:     "(resourceName: string)",
+	},
+	"onServerResourceStop": {
+		Subset:      "SERVER",
+		Description: "Fires when a server resource stops.",
+		Payload:     "(resourceName: string)",
+	},
+	"chatMessage": {
+		Subset:      "SERVER",
+		Description: "Fires when a chat message is received.",
+		Payload:     "(source: number, name: string, message: string)",
+	},
+	"rconCommand": {
+		Subset:      "SERVER",
+		Description: "Fires when an RCON command is executed.",
+		Payload:     "(commandName: string, args: table)",
+	},
+}
+
+func init() {
+	for name, event := range EventsBuiltin {
+		if event.Name == "" {
+			event.Name = name
+			EventsBuiltin[name] = event
+		}
+	}
 }
 
 func (g *FiveMResourceGraph) Clear() {
@@ -1449,6 +1541,9 @@ func (s *Server) registerFiveMManifestResource(res *FiveMResource) *FiveMResourc
 	if active == nil {
 		return nil
 	}
+	if s.GlobalIndex != nil {
+		s.GlobalIndex.RegisterFiveMResource(active)
+	}
 
 	// FiveMResourceGraph is the single source of truth; no local map rebuild needed
 
@@ -1700,47 +1795,61 @@ func (s *Server) classifyDocumentEnv(res *FiveMResource, doc *Document) FileEnv 
 		relPath = ""
 	}
 
-	var env = EnvUnknown
+	var (
+		sharedGlobs = res.SharedGlobs
+		clientGlobs = res.ClientGlobs
+		serverGlobs = res.ServerGlobs
+	)
 
-	for _, glob := range res.SharedGlobs {
+	// `file` packages assets (including Lua files), but does not make them
+	// executable. Read manifest entries directly so the compatibility globs
+	// above can continue to describe all shared files.
+	if res.Manifest != nil {
+		sharedGlobs = nil
+		clientGlobs = nil
+		serverGlobs = nil
+		for _, entry := range res.Manifest.Entries {
+			switch entry.EmittedName {
+			case "client_script":
+				clientGlobs = append(clientGlobs, entry.Value)
+			case "server_script":
+				serverGlobs = append(serverGlobs, entry.Value)
+			case "shared_script":
+				sharedGlobs = append(sharedGlobs, entry.Value)
+			}
+		}
+	}
+
+	for _, glob := range sharedGlobs {
 		if matchGlob(glob, relPath) {
-			env = EnvShared
+			return EnvShared
+		}
+	}
+
+	var isClient, isServer bool
+	for _, glob := range clientGlobs {
+		if matchGlob(glob, relPath) {
+			isClient = true
+			break
+		}
+	}
+	for _, glob := range serverGlobs {
+		if matchGlob(glob, relPath) {
+			isServer = true
 			break
 		}
 	}
 
-	if env == EnvUnknown {
-		var (
-			isClient bool
-			isServer bool
-		)
-
-		for _, glob := range res.ClientGlobs {
-			if matchGlob(glob, relPath) {
-				isClient = true
-
-				break
-			}
-		}
-
-		for _, glob := range res.ServerGlobs {
-			if matchGlob(glob, relPath) {
-				isServer = true
-
-				break
-			}
-		}
-
-		if isClient && isServer {
-			env = EnvShared
-		} else if isClient {
-			env = EnvClient
-		} else if isServer {
-			env = EnvServer
-		}
+	if isClient && isServer {
+		return EnvShared
 	}
-
-	return env
+	if isClient {
+		return EnvClient
+	}
+	if isServer {
+		return EnvServer
+	}
+	return EnvUnknown
 }
 
 func fiveMResourceNameFromRoot(root string) string {

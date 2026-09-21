@@ -17,6 +17,11 @@ var (
 	tagOverload   = []byte("@overload")
 	tagSee        = []byte("@see")
 	tagExport     = []byte("@export")
+	tagEnum       = []byte("@enum")
+	tagModule     = []byte("@module")
+	tagNoDiscard  = []byte("@nodiscard")
+	tagAsync      = []byte("@async")
+	tagPackage    = []byte("@package")
 
 	kwPublic    = []byte("public ")
 	kwPrivate   = []byte("private ")
@@ -61,6 +66,16 @@ type LuaDocAlias struct {
 	Desc string
 }
 
+type LuaDocEnum struct {
+	Name string
+	Desc string
+}
+
+type LuaDocModule struct {
+	Name string
+	Desc string
+}
+
 type LuaDocGeneric struct {
 	Name   string
 	Parent string
@@ -72,6 +87,8 @@ type LuaDoc struct {
 	Class         *LuaDocClass
 	Type          *LuaDocType
 	Alias         *LuaDocAlias
+	Enum          *LuaDocEnum
+	Module        *LuaDocModule
 	Export        string
 	Generics      []LuaDocGeneric
 	Params        []LuaDocParam
@@ -80,6 +97,9 @@ type LuaDoc struct {
 	Overloads     []string
 	See           []string
 	IsDeprecated  bool
+	IsNoDiscard   bool
+	IsAsync       bool
+	IsPackage     bool
 }
 
 // findTypeEnd safely scans past complex types with spaces like 'fun(a: string): number'
@@ -377,6 +397,20 @@ func formatAlerts(text string) string {
 	return sb.String()
 }
 
+func extractNameDesc(data []byte) (name, descBytes []byte) {
+	data = bytes.TrimSpace(data)
+
+	nameEnd := 0
+	for nameEnd < len(data) && data[nameEnd] != ' ' && data[nameEnd] != '\t' {
+		nameEnd++
+	}
+	if nameEnd == 0 {
+		return nil, data
+	}
+
+	return data[:nameEnd], bytes.TrimSpace(data[nameEnd:])
+}
+
 func extractNameParent(data []byte) (name, parent, descBytes []byte) {
 	data = bytes.TrimSpace(data)
 
@@ -523,6 +557,29 @@ func parseLuaDoc(comments []byte, enableAlerts bool) LuaDoc {
 			if len(name) > 0 {
 				doc.Class = &LuaDocClass{Name: string(name), Parent: string(parent), Desc: string(desc)}
 			}
+		} else if after, ok := bytes.CutPrefix(line, tagEnum); ok {
+			activeTag = ""
+
+			name, desc := extractNameDesc(after)
+			if len(name) > 0 {
+				doc.Enum = &LuaDocEnum{Name: string(name), Desc: string(desc)}
+			}
+		} else if after, ok := bytes.CutPrefix(line, tagModule); ok {
+			activeTag = ""
+
+			name, desc := extractNameDesc(after)
+			if len(name) > 0 {
+				doc.Module = &LuaDocModule{Name: string(name), Desc: string(desc)}
+			}
+		} else if bytes.HasPrefix(line, tagNoDiscard) {
+			activeTag = ""
+			doc.IsNoDiscard = true
+		} else if bytes.HasPrefix(line, tagAsync) {
+			activeTag = ""
+			doc.IsAsync = true
+		} else if bytes.HasPrefix(line, tagPackage) {
+			activeTag = ""
+			doc.IsPackage = true
 		} else if after, ok := bytes.CutPrefix(line, tagType); ok {
 			activeTag = ""
 

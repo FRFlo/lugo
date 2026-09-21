@@ -58,6 +58,7 @@ type Server struct {
 	// Workspace State
 	Documents          map[string]*Document
 	OpenFiles          map[string]bool
+	documentVersions   map[string]int
 	activeURIs         map[string]bool
 	visitedDirs        map[string]bool
 	FiveMResourceGraph *FiveMResourceGraph
@@ -70,6 +71,7 @@ type Server struct {
 	TableAliasSources map[uint64]map[string]uint64 // class hash → source URI → table receiver hash
 	KnownGlobals      map[string]bool
 	KnownGlobalGlobs  []string
+	FrameworkAdapters []FrameworkAdapter
 
 	// Feature Toggles
 	IsIndexing               bool
@@ -117,8 +119,13 @@ type Server struct {
 	DiagFiveMUnknownExport        bool
 	DiagFiveMUnknownResource      bool
 	DiagFiveMEventDirection       bool
+	DiagFiveMEventPayload         bool
 	DiagFiveMUnregisteredNetEvent bool
 	DiagFiveMUnknownEvent         bool
+	DiagFiveMTrustBoundary        bool
+	DiagFiveMPerformance          bool
+	DiagFiveMSQL                  bool
+	SQLAdapters                   []FiveMSQLAdapterMetadata
 
 	// CI Fields
 	IsCI              bool
@@ -226,6 +233,7 @@ func NewServer(version string) *Server {
 		// Workspace State
 		Documents:          make(map[string]*Document),
 		OpenFiles:          make(map[string]bool),
+		documentVersions:   make(map[string]int),
 		IsIndexing:         true,
 		FiveMResourceGraph: NewFiveMResourceGraph(),
 		uriCache:           make(map[string]string, 1024),
@@ -335,8 +343,18 @@ func (s *Server) applyInitializationOptions(opts InitializationOptions) (needsRe
 		needsReindex = true
 	}
 
-	if s.setKnownGlobals(opts.KnownGlobals) {
+	selectedAdapters := selectFrameworkAdapters(opts.FrameworkAdapters)
+	adapterGlobals := make([]string, 0)
+	for _, adapter := range selectedAdapters {
+		adapterGlobals = append(adapterGlobals, adapter.KnownGlobals...)
+	}
+	knownGlobals := append(slices.Clone(opts.KnownGlobals), adapterGlobals...)
+	if s.setKnownGlobals(knownGlobals) {
 		needsReindex = true
+	}
+	if !frameworkAdaptersEqual(s.FrameworkAdapters, selectedAdapters) {
+		s.FrameworkAdapters = selectedAdapters
+		needsRepublish = true
 	}
 
 	if !maps.Equal(s.BannedSymbols, opts.BannedSymbols) {
@@ -398,8 +416,18 @@ func (s *Server) applyInitializationOptions(opts InitializationOptions) (needsRe
 	setCfg(&s.DiagFiveMUnknownExport, opts.DiagFiveMUnknownExport, &needsRepublish)
 	setCfg(&s.DiagFiveMUnknownResource, opts.DiagFiveMUnknownResource, &needsRepublish)
 	setCfg(&s.DiagFiveMEventDirection, opts.DiagFiveMEventDirection, &needsRepublish)
+	setCfg(&s.DiagFiveMEventPayload, opts.DiagFiveMEventPayload, &needsRepublish)
 	setCfg(&s.DiagFiveMUnregisteredNetEvent, opts.DiagFiveMUnregisteredNetEvent, &needsRepublish)
 	setCfg(&s.DiagFiveMUnknownEvent, opts.DiagFiveMUnknownEvent, &needsRepublish)
+	setCfg(&s.DiagFiveMTrustBoundary, opts.DiagFiveMTrustBoundary, &needsRepublish)
+	setCfg(&s.DiagFiveMPerformance, opts.DiagFiveMPerformance, &needsRepublish)
+	setCfg(&s.DiagFiveMSQL, opts.DiagFiveMSQL, &needsRepublish)
+	if !slices.EqualFunc(s.SQLAdapters, opts.SQLAdapters, func(a, b FiveMSQLAdapterMetadata) bool {
+		return a.Name == b.Name && slices.Equal(a.Calls, b.Calls) && slices.Equal(a.SyncCalls, b.SyncCalls)
+	}) {
+		s.SQLAdapters = append(s.SQLAdapters[:0], opts.SQLAdapters...)
+		needsRepublish = true
+	}
 
 	return needsReindex, needsRepublish
 }
@@ -710,6 +738,7 @@ func (s *Server) handleInitialize(req Request) {
 			FoldingRangeProvider:            true,
 			SelectionRangeProvider:          true,
 			CallHierarchyProvider:           true,
+			LinkedEditingRangeProvider:      true,
 			DocumentHighlightProvider:       true,
 			DocumentFormattingProvider:      true,
 			DocumentRangeFormattingProvider: true,
@@ -719,7 +748,7 @@ func (s *Server) handleInitialize(req Request) {
 			OffsetEncoding:                  []string{s.positionEncoding},
 			WorkDoneProgress:                true,
 			CodeActionProvider: map[string]any{
-				"codeActionKinds": []string{"quickfix", "refactor.rewrite"},
+				"codeActionKinds": []string{"quickfix", "refactor.rewrite", "source.fixAll"},
 				"resolveProvider": true,
 			},
 			CodeLensProvider: &CodeLensOptions{
@@ -946,6 +975,39 @@ func (s *Server) computeRequirePathUpdates(renames []FileRename) WorkspaceEdit {
 	}
 
 	for uri, doc := range s.Documents {
+		if doc.IsFiveMManifest {
+			if res := s.parseFiveMManifest(doc); res != nil && res.Manifest != nil {
+				manifestDir := filepath.Dir(s.uriToPath(uri))
+				for _, entry := range res.Manifest.Entries {
+					if entry.Value == "" || strings.HasPrefix(entry.Value, "@") || strings.ContainsAny(entry.Value, "*?") || !isFiveMManifestPathDirective(entry.EmittedName) {
+						continue
+					}
+					resolved := filepath.Clean(filepath.Join(manifestDir, filepath.FromSlash(entry.Value)))
+					for _, pm := range pathMappings {
+						if filepath.Clean(pm.oldPath) != resolved {
+							continue
+						}
+						rel, err := filepath.Rel(manifestDir, pm.newPath)
+						if err != nil {
+							continue
+						}
+						newValue := filepath.ToSlash(rel)
+						start := doc.Tree.Offset(entry.ValueRange.Start.Line, entry.ValueRange.Start.Character)
+						end := doc.Tree.Offset(entry.ValueRange.End.Line, entry.ValueRange.End.Character)
+						if end <= start || end > uint32(len(doc.Source())) {
+							continue
+						}
+						raw := doc.Source()[start:end]
+						quote := "\""
+						if len(raw) > 0 && raw[0] == '\'' {
+							quote = "'"
+						}
+						changes[uri] = append(changes[uri], TextEdit{Range: entry.ValueRange, NewText: quote + newValue + quote})
+						break
+					}
+				}
+			}
+		}
 		if doc.Tree == nil {
 			continue
 		}
