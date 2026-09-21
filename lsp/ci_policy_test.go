@@ -2,6 +2,7 @@ package lsp
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -53,7 +54,8 @@ func TestCIGitHubAnnotationEscapesControlAndDelimiterCharacters(t *testing.T) {
 		Message:  "100% failed,\nnext\rline",
 	}})
 
-	want := "::error file=a%2Cb%3Ac,line=1,col=1::100%25 failed, next%0Dline"
+	path := s.uriToPath("file:///a,b:c")
+	want := fmt.Sprintf("::error file=%s,line=1,col=1::100%%25 failed, next%%0Dline", ciEscape(path, true))
 	if !strings.Contains(output.String(), want) || strings.Contains(output.String(), "\nnext") {
 		t.Fatalf("annotation was not safely escaped: %q", output.String())
 	}

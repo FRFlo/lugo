@@ -15,7 +15,7 @@ SH
 chmod +x "$tmp/bin/go"
 
 output=$(PATH="$tmp/bin:$PATH" bash "$gate" race)
-grep -Fxq 'CGO_ENABLED=1 CC= args=test -v -race ./...' <<<"$output"
+grep -Fxq 'CGO_ENABLED=1 CC= args=test -count=1 -v -race ./...' <<<"$output"
 
 if bash "$gate" invalid >"$tmp/invalid.out" 2>&1; then
   echo 'quality gate accepted an invalid mode' >&2

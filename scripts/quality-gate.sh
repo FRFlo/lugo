@@ -29,11 +29,11 @@ check_format() {
 }
 
 check_coverage() {
-  go test -cover ./...
+  go test -count=1 -cover ./...
 }
 
 check_race() {
-  CGO_ENABLED=1 go test -v -race ./...
+  CGO_ENABLED=1 go test -count=1 -v -race ./...
 }
 
 check_benchmarks() {
