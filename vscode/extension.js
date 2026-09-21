@@ -4,6 +4,34 @@ const path = require("node:path");
 const vscode = require("vscode");
 const { LanguageClient, ErrorAction, CloseAction } = require("vscode-languageclient/node");
 const { PostHog } = require("posthog-node");
+const { discoverResources, renderResource } = require("./fivem_resources");
+
+class FiveMResourceItem extends vscode.TreeItem {
+	constructor(resource) {
+		super(resource.name, vscode.TreeItemCollapsibleState.None);
+		this.description = `${resource.profile} · ${resource.diagnostics} diagnostics`;
+		this.tooltip = renderResource(resource);
+		this.resource = resource;
+		this.command = { command: "vscode.open", title: "Open manifest", arguments: [vscode.Uri.file(resource.manifestPath)] };
+		this.iconPath = new vscode.ThemeIcon(resource.diagnostics ? "warning" : "server-process");
+	}
+}
+
+class FiveMResourceProvider {
+	constructor() {
+		this.resources = [];
+		this.onDidChangeTreeData = new vscode.EventEmitter();
+	}
+	refresh() {
+		const diagnostics = vscode.languages.getDiagnostics().map(([uri, values]) => ({ path: uri.fsPath, count: values.length }));
+		this.resources = discoverResources((vscode.workspace.workspaceFolders || []).map(folder => folder.uri.fsPath), diagnostics);
+		this.onDidChangeTreeData.fire();
+		return this.resources;
+	}
+	getTreeItem(resource) { return new FiveMResourceItem(resource); }
+	getChildren() { return this.resources; }
+	dispose() { this.onDidChangeTreeData.dispose(); }
+}
 
 const posthogClient = new PostHog(
 	"phc_AtCceYjFoZzdnFgfKNMGArJGbLMyFzzqvjBx7SQCou6k",
@@ -244,6 +272,25 @@ async function addToIgnoredGlobs(folderUri) {
 }
 
 async function activate(context) {
+	const resourceProvider = new FiveMResourceProvider();
+	const resourceView = vscode.window.createTreeView("lugo.fivemResources", { treeDataProvider: resourceProvider, showCollapseAll: false });
+	const resourceStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+	resourceStatus.command = "lugo.fivem.refresh";
+	resourceStatus.tooltip = "Refresh FiveM resources";
+	const refreshResources = () => {
+		const resources = resourceProvider.refresh();
+		const diagnostics = resources.reduce((total, resource) => total + resource.diagnostics, 0);
+		resourceStatus.text = `$(server) FiveM: ${resources.length} resources · ${diagnostics} diagnostics`;
+		resourceStatus.show();
+	};
+	context.subscriptions.push(resourceProvider, resourceView, resourceStatus);
+	context.subscriptions.push(vscode.commands.registerCommand("lugo.fivem.refresh", refreshResources));
+	context.subscriptions.push(vscode.languages.onDidChangeDiagnostics(refreshResources));
+	context.subscriptions.push(vscode.workspace.onDidCreateFiles(refreshResources));
+	context.subscriptions.push(vscode.workspace.onDidDeleteFiles(refreshResources));
+	context.subscriptions.push(vscode.workspace.onDidRenameFiles(refreshResources));
+	refreshResources();
+
 	const telemetryEnabled = vscode.workspace.getConfiguration("lugo").get("telemetry.enabled") !== false;
 	if (telemetryEnabled) {
 		posthogClient.capture({

@@ -1,8 +1,8 @@
 {
-    "name": "lugo-vscode-fivem-enhanced",
+    "name": "lugo-vscode",
     "displayName": "Lugo - Lua LSP (FiveM Enhanced)",
     "description": "A high-performance, zero-allocation Lua 5.4 parser and Language Server (LSP) with FiveM enhanced support.",
-    "publisher": "frflo",
+    "publisher": "coalaura",
     "icon": "logo.png",
     "version": "1.0.0",
     "galleryBanner": {
@@ -11,7 +11,7 @@
     },
     "repository": {
         "type": "git",
-        "url": "https://github.com/frflo/lugo.git"
+        "url": "https://github.com/coalaura/lugo.git"
     },
     "engines": {
         "vscode": "^1.80.0"
@@ -21,11 +21,15 @@
         "Linters"
     ],
     "activationEvents": [
-        "workspaceContains:**/*.lua"
+        "onLanguage:lua",
+        "workspaceContains:**/*.lua",
+        "workspaceContains:**/fxmanifest.lua",
+        "workspaceContains:**/__resource.lua"
     ],
     "main": "./extension.js",
     "scripts": {
-        "build": "esbuild ./extension.js --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --target=node18"
+        "build": "esbuild ./extension.js --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --target=node18",
+        "test": "node package_identity_test.js && node fivem_resources_test.js"
     },
     "contributes": {
         "languages": [
@@ -34,7 +38,14 @@
                 "extensions": [
                     ".lua"
                 ],
+                "aliases": ["Lua"],
                 "configuration": "./language-configuration.json"
+            }
+        ],
+        "snippets": [
+            {
+                "language": "lua",
+                "path": "./snippets/fivem.json"
             }
         ],
         "commands": [
@@ -65,9 +76,29 @@
             {
                 "command": "lugo.addToIgnoredGlobs",
                 "title": "Lugo: Add to Ignored Globs"
+            },
+            {
+                "command": "lugo.fivem.refresh",
+                "title": "Lugo: Refresh FiveM Resources"
             }
         ],
+        "views": {
+            "explorer": [
+                {
+                    "id": "lugo.fivemResources",
+                    "name": "FiveM Resources",
+                    "when": "workspaceFolderCount > 0"
+                }
+            ]
+        },
         "menus": {
+            "view/title": [
+                {
+                    "command": "lugo.fivem.refresh",
+                    "when": "view == lugo.fivemResources",
+                    "group": "navigation@1"
+                }
+            ],
             "explorer/context": [
                 {
                     "command": "lugo.addToLibraryPaths",
