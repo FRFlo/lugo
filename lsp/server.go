@@ -136,6 +136,36 @@ type Server struct {
 	sharedDepBuf     []byte
 }
 
+const (
+	maxReusableBufferCapacity = 64 * 1024
+	maxReusableParserCapacity = 16 * 1024
+	maxReusableASTCapacity    = 64 * 1024
+)
+
+func trimReusableSlice[T any](buf []T, maxCap int) []T {
+	if cap(buf) > maxCap {
+		return nil
+	}
+	return buf[:0]
+}
+
+// trimSharedBuffers releases request-local backing arrays that grew well beyond
+// normal requests, while retaining ordinary capacities for allocation-free reuse.
+func (s *Server) trimSharedBuffers() {
+	if s == nil {
+		return
+	}
+	s.diagBuf = trimReusableSlice(s.diagBuf, maxReusableBufferCapacity)
+	s.semTokensBuf = trimReusableSlice(s.semTokensBuf, maxReusableBufferCapacity)
+	s.semDataBuf = trimReusableSlice(s.semDataBuf, maxReusableBufferCapacity)
+	s.actualReadsBuf = trimReusableSlice(s.actualReadsBuf, maxReusableBufferCapacity)
+	s.sharedCommentBuf = trimReusableSlice(s.sharedCommentBuf, maxReusableBufferCapacity)
+	s.sharedDepBuf = trimReusableSlice(s.sharedDepBuf, maxReusableBufferCapacity)
+	if s.sharedParser != nil {
+		s.sharedParser.TrimOversized(maxReusableParserCapacity)
+	}
+}
+
 // evictClosedDocumentCaches drops memory-heavy caches for documents that are closed
 // or not currently opened. This keeps AST + Resolver in memory for cross-document
 // features while freeing large in-memory caches tied to the source bytes.
@@ -174,8 +204,11 @@ func evictClosedDocumentCaches(s *Server) {
 		// Tree owns Source; free the underlying source buffer
 		if doc.Tree != nil {
 			doc.Tree.Source = nil
+			doc.Tree.TrimOversized(maxReusableASTCapacity)
 		}
-		// Do not modify doc.Resolver or doc.Tree themselves
+		if doc.Resolver != nil {
+			doc.Resolver.TrimOversized(maxReusableASTCapacity)
+		}
 	}
 }
 
@@ -400,6 +433,7 @@ func (s *Server) setLibraryPaths(paths []string) bool {
 }
 
 func (s *Server) handleMessage(req Request) {
+	defer s.trimSharedBuffers()
 	defer func() {
 		if r := recover(); r != nil {
 			stack := debug.Stack()
