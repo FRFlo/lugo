@@ -4,26 +4,43 @@ import (
 	"testing"
 )
 
+func TestFiveMEntityLifecycleDiagnosticsAreDeterministic(t *testing.T) {
+	s, root := newFiveMProfileTestServer(t)
+	doc := addFiveMTestDocument(t, s, root+"/client.lua", `local first = NetworkGetEntityFromNetworkId(1)
+local second = NetworkGetEntityFromNetworkId(2)
+NetworkRequestControlOfEntity(second)
+NetworkRequestControlOfEntity(first)
+`)
+	diags := assertFiveMDiagnosticsDeterministic(t, func() []Diagnostic {
+		return s.buildFiveMEntityLifecycleDiagnostics(doc)
+	})
+	if len(diags) != 2 {
+		t.Fatalf("diagnostics = %#v, want 2", diags)
+	}
+}
+
 func TestFiveMEntityLifecycleDiagnostics(t *testing.T) {
 	tests := []struct {
 		name   string
 		source string
 		codes  []string
 	}{
-		{"use before existence check", `local entity = NetworkGetEntityFromNetworkId(42)
+		{"control before existence check", `local entity = NetworkGetEntityFromNetworkId(42)
 NetworkRequestControlOfEntity(entity)
-`, []string{"fivem-entity-use-before-existence-check", "fivem-entity-missing-cleanup"}},
+`, []string{"fivem-entity-use-before-existence-check"}},
 		{"checked and deleted", `local entity = NetworkGetEntityFromNetworkId(42)
 if DoesEntityExist(entity) then
  NetworkRequestControlOfEntity(entity)
  DeleteEntity(entity)
 end
 `, nil},
-		{"missing cleanup", `local entity = NetworkGetEntityFromNetworkId(42)
+		{"network entity does not require deletion", `local entity = NetworkGetEntityFromNetworkId(42)
 if DoesEntityExist(entity) then
  print(entity)
 end
-`, []string{"fivem-entity-missing-cleanup"}},
+`, nil},
+		{"network entity lookup alone does not recommend deletion", `local entity = NetworkGetEntityFromNetworkId(42)
+`, nil},
 		{"dynamic network id ignored", `local entity = NetworkGetEntityFromNetworkId(netId)
 NetworkRequestControlOfEntity(entity)
 `, nil},

@@ -15,6 +15,7 @@ func (s *Server) buildFiveMSourceAfterYieldDiagnostics(doc *Document) []Diagnost
 		return nil
 	}
 
+	facts := newFiveMASTFacts(doc)
 	var out []Diagnostic
 	for _, event := range doc.FiveMEvents {
 		if event.Kind != FiveMEventAddHandler && event.Kind != FiveMEventRegisterNet {
@@ -26,12 +27,7 @@ func (s *Server) buildFiveMSourceAfterYieldDiagnostics(doc *Document) []Diagnost
 
 		refs := append([]ast.NodeID(nil), doc.Resolver.GlobalRefs...)
 		if fiveMHandlerHasSourceParameter(doc, event.HandlerID) {
-			for id := ast.NodeID(1); int(id) < len(doc.Tree.Nodes); id++ {
-				node := doc.Tree.Nodes[id]
-				if node.Kind == ast.KindIdent && node.Start < node.End && node.End <= uint32(len(doc.Source())) && string(doc.Source()[node.Start:node.End]) == "source" {
-					refs = append(refs, id)
-				}
-			}
+			refs = append(refs, facts.sourceIdentifiers...)
 		}
 		seen := make(map[ast.NodeID]struct{}, len(refs))
 		for _, refID := range refs {
@@ -39,31 +35,27 @@ func (s *Server) buildFiveMSourceAfterYieldDiagnostics(doc *Document) []Diagnost
 				continue
 			}
 			seen[refID] = struct{}{}
+			if int(refID) >= len(doc.Tree.Nodes) {
+				continue
+			}
 			ref := doc.Tree.Nodes[refID]
-			if !isDescendantOfNode(doc.Tree, refID, event.HandlerID) || (ref.Kind != ast.KindIdent || string(doc.Source()[ref.Start:ref.End]) != "source") {
+			if ref.Kind != ast.KindIdent || ref.Start >= ref.End || ref.End > uint32(len(doc.Source())) || string(doc.Source()[ref.Start:ref.End]) != "source" || facts.nearestFunction[refID] != event.HandlerID {
 				continue
 			}
 			if !fiveMSourceReferenceInHandler(doc, refID, event.HandlerID) {
 				continue
 			}
-			if nearestFunction(doc.Tree, refID) != event.HandlerID {
-				continue
-			}
-
-			for nodeID := ast.NodeID(1); int(nodeID) < len(doc.Tree.Nodes); nodeID++ {
-				node := doc.Tree.Nodes[nodeID]
-				if node.Start >= ref.Start || node.End > ref.Start || !isDescendantOfNode(doc.Tree, nodeID, event.HandlerID) || nearestFunction(doc.Tree, nodeID) != event.HandlerID {
+			for _, call := range facts.yieldCallsByFunction[event.HandlerID] {
+				if call.end > ref.Start {
 					continue
 				}
-				if isFiveMYieldCall(doc, nodeID) {
-					out = append(out, Diagnostic{
-						Range:    getNodeRange(doc.Tree, refID),
-						Severity: SeverityWarning,
-						Code:     "fivem-source-after-yield",
-						Message:  "Capture 'source' in a local before Wait/await; the server event source is not reliable after yielding.",
-					})
-					break
-				}
+				out = append(out, Diagnostic{
+					Range:    getNodeRange(doc.Tree, refID),
+					Severity: SeverityWarning,
+					Code:     "fivem-source-after-yield",
+					Message:  "Capture 'source' in a local before Wait/await; the server event source is not reliable after yielding.",
+				})
+				break
 			}
 		}
 	}
@@ -87,27 +79,6 @@ func fiveMHandlerHasSourceParameter(doc *Document, handler ast.NodeID) bool {
 		}
 	}
 	return false
-}
-
-func isDescendantOfNode(tree *ast.Tree, id, ancestor ast.NodeID) bool {
-	for id != ast.InvalidNode && int(id) < len(tree.Nodes) {
-		if id == ancestor {
-			return true
-		}
-		id = tree.Nodes[id].Parent
-	}
-	return false
-}
-
-func nearestFunction(tree *ast.Tree, id ast.NodeID) ast.NodeID {
-	for id != ast.InvalidNode && int(id) < len(tree.Nodes) {
-		node := tree.Nodes[id]
-		if node.Kind == ast.KindFunctionExpr || node.Kind == ast.KindFunctionStmt {
-			return id
-		}
-		id = node.Parent
-	}
-	return ast.InvalidNode
 }
 
 func isFiveMYieldCall(doc *Document, id ast.NodeID) bool {

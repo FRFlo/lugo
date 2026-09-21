@@ -3,8 +3,10 @@ package lsp
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coalaura/lugo/ast"
@@ -14,6 +16,119 @@ import (
 type DepInfo struct {
 	IsDep bool
 	Msg   string
+}
+
+// workspaceDiagnosticFacts is an immutable snapshot used only while a
+// workspace diagnostic publication is in progress. Cross-file FiveM checks
+// otherwise re-scan every document for every diagnostic, which becomes O(D²).
+type workspaceDiagnosticFacts struct {
+	commands []fiveMCommandUse
+	mappings []fiveMKeyMapping
+	aces     map[string]bool
+	convars  fiveMConvarFacts
+	nui      map[string]nuiResourceFacts
+}
+
+var workspaceDiagnosticFactCaches sync.Map // map[*Server]*workspaceDiagnosticFacts
+
+func (s *Server) beginWorkspaceDiagnosticFacts() *workspaceDiagnosticFacts {
+	facts := &workspaceDiagnosticFacts{
+		convars: s.collectFiveMConvars(),
+		nui:     s.collectFiveMNUIResourceFacts(),
+	}
+	facts.commands, facts.mappings, facts.aces = s.collectFiveMCommands()
+	workspaceDiagnosticFactCaches.Store(s, facts)
+	return facts
+}
+
+func (s *Server) workspaceDiagnosticFacts() *workspaceDiagnosticFacts {
+	facts, _ := workspaceDiagnosticFactCaches.Load(s)
+	if facts == nil {
+		return nil
+	}
+	return facts.(*workspaceDiagnosticFacts)
+}
+
+func (s *Server) endWorkspaceDiagnosticFacts(facts *workspaceDiagnosticFacts) {
+	workspaceDiagnosticFactCaches.CompareAndDelete(s, facts)
+}
+
+// buildFiveMAssetInventoryDiagnostics validates local manifest asset paths
+// against the resource's filesystem. Cross-resource @ paths are deliberately
+// left to the cross-resource include resolver.
+func (s *Server) buildFiveMAssetInventoryDiagnostics(doc *Document) []Diagnostic {
+	if s == nil || doc == nil || !doc.IsFiveMManifest {
+		return nil
+	}
+
+	res := s.parseFiveMManifest(doc)
+	if res == nil || res.Manifest == nil {
+		return nil
+	}
+
+	root := s.uriToPath(res.RootURI)
+	if root == "" {
+		root = res.RootURI
+	}
+	paths := make([]string, 0)
+	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err == nil {
+			paths = append(paths, filepath.ToSlash(rel))
+		}
+		return nil
+	}); err != nil {
+		return nil
+	}
+	inventory := NewFiveMAssetInventory(paths)
+
+	out := make([]Diagnostic, 0)
+	for _, entry := range res.Manifest.Entries {
+		if entry.LoaderInjected || entry.ReservedKey {
+			continue
+		}
+
+		asset := &FiveMResource{}
+		switch entry.EmittedName {
+		case "ui_page":
+			asset.UIPage = entry.Value
+		case "client_script":
+			asset.ClientGlobs = []string{entry.Value}
+		case "server_script":
+			asset.ServerGlobs = []string{entry.Value}
+		case "shared_script", "file":
+			asset.SharedGlobs = []string{entry.Value}
+		default:
+			continue
+		}
+
+		for _, issue := range inventory.Validate(asset) {
+			var code, message string
+			switch issue.Kind {
+			case FiveMAssetIssueMissing:
+				code = "fivem-asset-missing"
+				message = fmt.Sprintf("Asset %q was not found in this resource.", issue.Path)
+			case FiveMAssetIssueEmptyGlob:
+				code = "fivem-asset-empty-glob"
+				if issue.Path == "" {
+					message = "Asset path is empty."
+				} else {
+					message = fmt.Sprintf("Asset glob %q matches no files in this resource.", issue.Path)
+				}
+			case FiveMAssetIssuePathTraversal:
+				code = "fivem-asset-path-traversal"
+				message = fmt.Sprintf("Asset path %q must not traverse outside the resource.", issue.Path)
+			case FiveMAssetIssueCaseMismatch:
+				code = "fivem-asset-case-mismatch"
+				message = fmt.Sprintf("Asset path %q differs from the filesystem only by letter case.", issue.Path)
+			}
+			out = append(out, Diagnostic{Range: entry.ValueRange, Severity: SeverityWarning, Code: code, Message: message})
+		}
+	}
+	return out
 }
 
 func (s *Server) buildFiveMResourceGraphDiagnostics(doc *Document) []Diagnostic {
@@ -162,6 +277,8 @@ func (s *Server) exportImplementations(res *FiveMResource, name string) []FiveML
 
 func (s *Server) publishWorkspaceDiagnostics() {
 	start := time.Now()
+	facts := s.beginWorkspaceDiagnosticFacts()
+	defer s.endWorkspaceDiagnosticFacts(facts)
 
 	var diagCount int
 
@@ -175,26 +292,51 @@ func (s *Server) publishWorkspaceDiagnostics() {
 
 	// NUI assets are kept out of the Lua parser/index. Publish their contract
 	// diagnostics separately so handler locations remain useful.
-	nuiPublished := make(map[string]bool)
-	for _, luaDoc := range s.Documents {
-		if luaDoc == nil || !strings.EqualFold(filepath.Ext(luaDoc.Path), ".lua") {
-			continue
-		}
-		for _, asset := range s.nuiResourceFiles(luaDoc) {
-			if nuiPublished[asset.uri] {
+	nuiSeen := make(map[string]bool)
+	var nuiState *nuiDiagnosticState
+	if !s.IsCI {
+		nuiState = s.nuiDiagnosticState()
+		nuiState.mu.Lock()
+		defer func() {
+			empty := len(nuiState.published) == 0
+			nuiState.mu.Unlock()
+			if empty {
+				nuiDiagnosticStates.CompareAndDelete(s, nuiState)
+			}
+		}()
+	}
+	for _, resource := range facts.nui {
+		for _, asset := range resource.files {
+			if nuiSeen[asset.uri] {
 				continue
 			}
-			assetDoc := &Document{Server: s, URI: asset.uri, Path: s.uriToPath(asset.uri), Tree: ast.NewTree(asset.src), FiveMProfile: s.getDocumentFiveMProfile(luaDoc), FiveMProfileCached: true}
+			nuiSeen[asset.uri] = true
+			assetDoc := &Document{Server: s, URI: asset.uri, Path: s.uriToPath(asset.uri), Tree: ast.NewTree(asset.src), FiveMProfile: resource.profile, FiveMProfileCached: true}
 			diags := s.buildFiveMNUIContractDiagnostics(assetDoc)
-			if len(diags) == 0 {
+			if s.IsCI {
+				if len(diags) != 0 {
+					s.printCIDiagnostics(asset.uri, diags)
+				}
 				continue
 			}
-			nuiPublished[asset.uri] = true
-			if s.IsCI {
-				s.printCIDiagnostics(asset.uri, diags)
-			} else {
-				WriteMessage(s.Writer, OutgoingNotification{RPC: "2.0", Method: "textDocument/publishDiagnostics", Params: PublishDiagnosticsParams{URI: asset.uri, Diagnostics: diags}})
+			if len(diags) == 0 {
+				if _, published := nuiState.published[asset.uri]; published {
+					WriteMessage(s.Writer, OutgoingNotification{RPC: "2.0", Method: "textDocument/publishDiagnostics", Params: PublishDiagnosticsParams{URI: asset.uri, Diagnostics: []Diagnostic{}}})
+					delete(nuiState.published, asset.uri)
+				}
+				continue
 			}
+			nuiState.published[asset.uri] = struct{}{}
+			WriteMessage(s.Writer, OutgoingNotification{RPC: "2.0", Method: "textDocument/publishDiagnostics", Params: PublishDiagnosticsParams{URI: asset.uri, Diagnostics: diags}})
+		}
+	}
+	if !s.IsCI {
+		for assetURI := range nuiState.published {
+			if nuiSeen[assetURI] {
+				continue
+			}
+			WriteMessage(s.Writer, OutgoingNotification{RPC: "2.0", Method: "textDocument/publishDiagnostics", Params: PublishDiagnosticsParams{URI: assetURI, Diagnostics: []Diagnostic{}}})
+			delete(nuiState.published, assetURI)
 		}
 	}
 
@@ -276,6 +418,7 @@ func (s *Server) publishDiagnostics(uri string) {
 	profile := s.getDocumentFiveMProfile(doc)
 	if profile.Kind == FiveMProfileManifest {
 		s.diagBuf = append(s.diagBuf, s.buildFiveMManifestDiagnostics(doc)...)
+		s.diagBuf = append(s.diagBuf, s.buildFiveMAssetInventoryDiagnostics(doc)...)
 		s.diagBuf = append(s.diagBuf, s.buildFiveMResourceGraphDiagnostics(doc)...)
 		s.diagBuf = append(s.diagBuf, s.buildFiveMResourceExportContractDiagnostics(doc)...)
 		s.diagBuf = append(s.diagBuf, s.buildFiveMConvarDiagnostics(doc)...)

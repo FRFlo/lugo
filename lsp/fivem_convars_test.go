@@ -33,7 +33,7 @@ GetConvar("mode", "three")
 SetConvarReplicated("replicated", "x")
 `)
 	h.reindex()
-	server := h.diagnostics("server.lua")
+	server := assertFiveMDiagnosticsDeterministic(t, func() []Diagnostic { return h.diagnostics("server.lua") })
 	if !hasDiagnosticCode(server, "fivem-convar-conflict") {
 		t.Fatal("expected conflicting convar declaration diagnostic")
 	}

@@ -15,6 +15,7 @@ func (s *Server) buildFiveMTrustBoundaryDiagnostics(doc *Document) {
 		return
 	}
 	source := string(doc.Source())
+	facts := newFiveMASTFacts(doc)
 	for _, event := range doc.FiveMEvents {
 		if event.Kind != FiveMEventRegisterNet && event.Kind != FiveMEventAddHandler {
 			continue
@@ -41,12 +42,12 @@ func (s *Server) buildFiveMTrustBoundaryDiagnostics(doc *Document) {
 		}
 
 		for _, param := range params {
-			for id := ast.NodeID(1); int(id) < len(doc.Tree.Nodes); id++ {
+			for _, id := range facts.identifiersByFunction[handler] {
 				node := doc.Tree.Nodes[id]
-				if node.Kind != ast.KindIdent || node.Start < h.Start || node.End > h.End || node.End <= node.Start || string(doc.Source()[node.Start:node.End]) != param || nearestFunction(doc.Tree, id) != handler {
+				if node.Start < h.Start || node.End > h.End || node.End <= node.Start || string(doc.Source()[node.Start:node.End]) != param {
 					continue
 				}
-				call := enclosingFiveMCall(doc.Tree, id)
+				call := facts.enclosingCall[id]
 				if call == ast.InvalidNode || !fiveMSensitiveEventSink(doc, call) {
 					continue
 				}
@@ -73,16 +74,6 @@ func fiveMHandlerParameterNames(doc *Document, handler ast.NodeID) []string {
 		}
 	}
 	return out
-}
-
-func enclosingFiveMCall(tree *ast.Tree, id ast.NodeID) ast.NodeID {
-	for id != ast.InvalidNode && int(id) < len(tree.Nodes) {
-		if tree.Nodes[id].Kind == ast.KindCallExpr || tree.Nodes[id].Kind == ast.KindMethodCall {
-			return id
-		}
-		id = tree.Nodes[id].Parent
-	}
-	return ast.InvalidNode
 }
 
 func fiveMSensitiveEventSink(doc *Document, id ast.NodeID) bool {

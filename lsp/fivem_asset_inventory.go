@@ -55,29 +55,42 @@ func fiveMAssetIsGlob(path string) bool {
 // matcher is user-friendly and case-insensitive, which is not appropriate for
 // filesystem asset validation.
 func fiveMAssetMatchGlob(pattern, candidate string) bool {
-	if pattern == "" {
-		return candidate == ""
-	}
-	if pattern[0] == '*' {
-		if len(pattern) > 1 && pattern[1] == '*' {
-			for i := 0; i <= len(candidate); i++ {
-				if fiveMAssetMatchGlob(pattern[2:], candidate[i:]) {
-					return true
-				}
+	// A row records whether a pattern suffix matches each candidate suffix.
+	// Keeping only three rows bounds memory by the candidate length while the
+	// bottom-up evaluation visits each state once.
+	rowAfter := make([]bool, len(candidate)+1)
+	rowAfter[len(candidate)] = true
+	rowTwoAfter := make([]bool, len(candidate)+1)
+	row := make([]bool, len(candidate)+1)
+
+	for patternIndex := len(pattern) - 1; patternIndex >= 0; patternIndex-- {
+		switch pattern[patternIndex] {
+		case '*':
+			rowToSkip := rowAfter
+			matchAny := false
+			if patternIndex+1 < len(pattern) && pattern[patternIndex+1] == '*' {
+				rowToSkip = rowTwoAfter
+				matchAny = true
 			}
-			return false
-		}
-		for i := 0; i <= len(candidate) && (i == 0 || candidate[i-1] != '/'); i++ {
-			if fiveMAssetMatchGlob(pattern[1:], candidate[i:]) {
-				return true
+			row[len(candidate)] = rowToSkip[len(candidate)]
+			for candidateIndex := len(candidate) - 1; candidateIndex >= 0; candidateIndex-- {
+				row[candidateIndex] = rowToSkip[candidateIndex] ||
+					(matchAny || candidate[candidateIndex] != '/') && row[candidateIndex+1]
+			}
+		case '?':
+			row[len(candidate)] = false
+			for candidateIndex := len(candidate) - 1; candidateIndex >= 0; candidateIndex-- {
+				row[candidateIndex] = candidate[candidateIndex] != '/' && rowAfter[candidateIndex+1]
+			}
+		default:
+			row[len(candidate)] = false
+			for candidateIndex := len(candidate) - 1; candidateIndex >= 0; candidateIndex-- {
+				row[candidateIndex] = pattern[patternIndex] == candidate[candidateIndex] && rowAfter[candidateIndex+1]
 			}
 		}
-		return false
+		row, rowTwoAfter, rowAfter = rowTwoAfter, rowAfter, row
 	}
-	if pattern[0] == '?' {
-		return len(candidate) > 0 && candidate[0] != '/' && fiveMAssetMatchGlob(pattern[1:], candidate[1:])
-	}
-	return len(candidate) > 0 && pattern[0] == candidate[0] && fiveMAssetMatchGlob(pattern[1:], candidate[1:])
+	return rowAfter[0]
 }
 
 func (inventory FiveMAssetInventory) Validate(res *FiveMResource) []FiveMAssetIssue {

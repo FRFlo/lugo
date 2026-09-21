@@ -7,17 +7,17 @@ import (
 )
 
 // buildFiveMEntityLifecycleDiagnostics performs deliberately conservative checks
-// for entities obtained from a literal network id. Dynamic ids and control-flow
-// that cannot be established from source order are ignored.
+// for entities obtained from a literal network id. Looking up an entity by network
+// id establishes neither ownership nor responsibility for its lifetime, so this
+// check never suggests deleting it. Dynamic ids and control-flow that cannot be
+// established from source order are ignored.
 func (s *Server) buildFiveMEntityLifecycleDiagnostics(doc *Document) []Diagnostic {
 	if doc == nil || doc.Tree == nil {
 		return nil
 	}
 	type entityState struct {
 		name     string
-		acquire  ast.NodeID
 		exists   bool
-		cleaned  bool
 		firstUse ast.NodeID
 	}
 	states := make(map[string]*entityState)
@@ -38,7 +38,7 @@ func (s *Server) buildFiveMEntityLifecycleDiagnostics(doc *Document) []Diagnosti
 				continue
 			}
 			if variable := lifecycleAssignedName(doc, id); variable != "" {
-				states[variable] = &entityState{name: variable, acquire: id}
+				states[variable] = &entityState{name: variable}
 			}
 			continue
 		}
@@ -50,16 +50,12 @@ func (s *Server) buildFiveMEntityLifecycleDiagnostics(doc *Document) []Diagnosti
 			}
 			continue
 		}
-		if name != "NetworkRequestControlOfEntity" && name != "DeleteEntity" {
+		if name != "NetworkRequestControlOfEntity" {
 			continue
 		}
 		argName := lifecycleEntityArgument(doc, n)
 		state := states[argName]
 		if state == nil {
-			continue
-		}
-		if name == "DeleteEntity" {
-			state.cleaned = true
 			continue
 		}
 		if !state.exists {
@@ -69,11 +65,7 @@ func (s *Server) buildFiveMEntityLifecycleDiagnostics(doc *Document) []Diagnosti
 			}
 		}
 	}
-	for _, state := range states {
-		if !state.cleaned {
-			diags = append(diags, Diagnostic{Range: getNodeRange(doc.Tree, state.acquire), Severity: SeverityWarning, Code: "fivem-entity-missing-cleanup", Message: fmt.Sprintf("Entity '%s' acquired from a network id is not cleaned up with DeleteEntity.", state.name)})
-		}
-	}
+	sortFiveMDiagnostics(diags)
 	return diags
 }
 

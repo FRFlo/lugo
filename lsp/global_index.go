@@ -68,13 +68,14 @@ type ResourceScope struct {
 }
 
 type GlobalIndex struct {
-	mu          sync.RWMutex
-	Resources   map[ResourceURI]*ResourceScope
-	HashIndex   map[GlobalKey][]*SymbolEntry
-	DepGraph    *DependencyGraph
-	MaxMemory   uint64
-	memoryUsage uint64
-	clock       uint64
+	mu                 sync.RWMutex
+	Resources          map[ResourceURI]*ResourceScope
+	HashIndex          map[GlobalKey][]*SymbolEntry
+	DepGraph           *DependencyGraph
+	resourceIdentities map[ResourceURI]map[ResourceURI]*ResourceScope
+	MaxMemory          uint64
+	memoryUsage        uint64
+	clock              uint64
 }
 
 func NewGlobalIndex(maxMemory ...uint64) *GlobalIndex {
@@ -84,10 +85,11 @@ func NewGlobalIndex(maxMemory ...uint64) *GlobalIndex {
 	}
 
 	return &GlobalIndex{
-		Resources: make(map[ResourceURI]*ResourceScope),
-		HashIndex: make(map[GlobalKey][]*SymbolEntry),
-		DepGraph:  NewDependencyGraph(),
-		MaxMemory: limit,
+		Resources:          make(map[ResourceURI]*ResourceScope),
+		HashIndex:          make(map[GlobalKey][]*SymbolEntry),
+		DepGraph:           NewDependencyGraph(),
+		resourceIdentities: make(map[ResourceURI]map[ResourceURI]*ResourceScope),
+		MaxMemory:          limit,
 	}
 }
 
@@ -122,6 +124,9 @@ func (idx *GlobalIndex) ensureResourceLocked(uri ResourceURI) *ResourceScope {
 	if idx.DepGraph == nil {
 		idx.DepGraph = NewDependencyGraph()
 	}
+	if idx.resourceIdentities == nil {
+		idx.resourceIdentities = make(map[ResourceURI]map[ResourceURI]*ResourceScope)
+	}
 	if idx.MaxMemory == 0 {
 		idx.MaxMemory = DefaultGlobalIndexMaxMemory
 	}
@@ -131,6 +136,7 @@ func (idx *GlobalIndex) ensureResourceLocked(uri ResourceURI) *ResourceScope {
 		res = NewResourceScope(uri)
 		idx.Resources[uri] = res
 	}
+	idx.addResourceIdentityLocked(res, resourceIdentity(res))
 	idx.DepGraph.AddResource(uri)
 	idx.touchLocked(res)
 
@@ -426,12 +432,26 @@ func (idx *GlobalIndex) RegisterFiveMResource(res *FiveMResource) *ResourceScope
 	defer idx.mu.Unlock()
 
 	scope := idx.ensureResourceLocked(rootURI)
-	scope.Identity = identity
+	previousIdentity := resourceIdentity(scope)
+	if previousIdentity != identity {
+		idx.removeResourceIdentityLocked(scope, previousIdentity)
+		scope.Identity = identity
+		idx.addResourceIdentityLocked(scope, identity)
+	}
 
+	// Update only graph vertices affected by this resource. Rebuilding every
+	// scope here made registering N resources quadratic while holding idx.mu.
+	previousDeps := idx.DepGraph.DependencyList(identity)
 	deps := fiveMResourceDependencies(res)
-	scope.Dependencies = cloneResourceURIs(deps)
 	idx.DepGraph.SetDependencies(identity, deps)
-	idx.syncResourceEdgesLocked()
+	idx.refreshResourceEdgesLocked(previousIdentity)
+	idx.refreshResourceEdgesLocked(identity)
+	for _, dep := range previousDeps {
+		idx.refreshResourceEdgesLocked(dep)
+	}
+	for _, dep := range deps {
+		idx.refreshResourceEdgesLocked(dep)
+	}
 	idx.registerFiveMScriptScopesLocked(scope, res)
 
 	return scope
@@ -514,6 +534,7 @@ func (idx *GlobalIndex) PruneResource(uri ResourceURI) bool {
 		delete(idx.DepGraph.Dependencies, uri)
 		delete(idx.DepGraph.Dependents, uri)
 	}
+	idx.removeResourceIdentityLocked(res, resourceIdentity(res))
 	delete(idx.Resources, uri)
 	idx.syncResourceEdgesLocked()
 	return true
@@ -561,32 +582,60 @@ func (idx *GlobalIndex) touchLocked(res *ResourceScope) {
 	res.lastAccess = idx.clock
 }
 
+func resourceIdentity(res *ResourceScope) ResourceURI {
+	if res == nil || res.Identity == "" {
+		if res == nil {
+			return ""
+		}
+		return res.URI
+	}
+	return res.Identity
+}
+
+func (idx *GlobalIndex) addResourceIdentityLocked(res *ResourceScope, identity ResourceURI) {
+	if res == nil || identity == "" {
+		return
+	}
+	if idx.resourceIdentities == nil {
+		idx.resourceIdentities = make(map[ResourceURI]map[ResourceURI]*ResourceScope)
+	}
+	scopes := idx.resourceIdentities[identity]
+	if scopes == nil {
+		scopes = make(map[ResourceURI]*ResourceScope)
+		idx.resourceIdentities[identity] = scopes
+	}
+	scopes[res.URI] = res
+}
+
+func (idx *GlobalIndex) removeResourceIdentityLocked(res *ResourceScope, identity ResourceURI) {
+	if res == nil || identity == "" {
+		return
+	}
+	scopes := idx.resourceIdentities[identity]
+	delete(scopes, res.URI)
+	if len(scopes) == 0 {
+		delete(idx.resourceIdentities, identity)
+	}
+}
+
+func (idx *GlobalIndex) refreshResourceEdgesLocked(identity ResourceURI) {
+	if identity == "" {
+		return
+	}
+	for _, scope := range idx.resourceIdentities[identity] {
+		scope.Dependencies = idx.DepGraph.DependencyList(identity)
+		scope.Dependents = idx.DepGraph.DependentList(identity)
+	}
+}
+
 func (idx *GlobalIndex) syncResourceEdgesLocked() {
+	// This full reconciliation is retained for callers that construct resource
+	// scopes directly. RegisterFiveMResource uses the incremental path above.
 	for _, res := range idx.Resources {
-		res.Dependents = res.Dependents[:0]
-		identity := res.Identity
-		if identity == "" {
-			identity = res.URI
-		}
-		res.Dependencies = idx.DepGraph.DependencyList(identity)
+		idx.addResourceIdentityLocked(res, resourceIdentity(res))
 	}
-	for dependent, deps := range idx.DepGraph.Dependencies {
-		for dep := range deps {
-			for _, res := range idx.Resources {
-				identity := res.Identity
-				if identity == "" {
-					identity = res.URI
-				}
-				if identity == dep {
-					res.Dependents = appendUniqueResourceURI(res.Dependents, dependent)
-					break
-				}
-			}
-		}
-	}
-	for _, res := range idx.Resources {
-		sortResourceURIs(res.Dependencies)
-		sortResourceURIs(res.Dependents)
+	for identity := range idx.resourceIdentities {
+		idx.refreshResourceEdgesLocked(identity)
 	}
 }
 
@@ -839,6 +888,19 @@ func (graph *DependencyGraph) DependencyList(uri ResourceURI) []ResourceURI {
 	sortResourceURIs(deps)
 
 	return deps
+}
+
+func (graph *DependencyGraph) DependentList(uri ResourceURI) []ResourceURI {
+	if graph == nil {
+		return nil
+	}
+	dependents := make([]ResourceURI, 0, len(graph.Dependents[uri]))
+	for dependent := range graph.Dependents[uri] {
+		dependents = append(dependents, dependent)
+	}
+	sortResourceURIs(dependents)
+
+	return dependents
 }
 
 func (graph *DependencyGraph) TopologicalSort() ([]ResourceURI, []Diagnostic) {

@@ -2,6 +2,7 @@ package lsp
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/coalaura/lugo/ast"
@@ -24,6 +25,11 @@ type fiveMConvarUse struct {
 	def      string
 	doc      *Document
 	node     ast.NodeID
+}
+
+type fiveMConvarFacts struct {
+	known map[string][]fiveMConvar
+	uses  []fiveMConvarUse
 }
 
 func convarLiteral(doc *Document, id ast.NodeID) (string, string, bool) {
@@ -54,18 +60,13 @@ func convarCall(doc *Document, id ast.NodeID) (string, ast.Node, bool) {
 	return string(doc.Source()[left.Start:left.End]), n, true
 }
 
-func (s *Server) buildFiveMConvarDiagnostics(doc *Document) []Diagnostic {
-	if s == nil || doc == nil || doc.Tree == nil {
-		return nil
-	}
+func (s *Server) collectFiveMConvars() fiveMConvarFacts {
 	known := make(map[string][]fiveMConvar)
 	var uses []fiveMConvarUse
-	var out []Diagnostic
-	for _, other := range s.Documents {
+	for _, other := range sortedFiveMDocuments(s.Documents) {
 		if other == nil || other.Tree == nil {
 			continue
 		}
-		profile := s.getDocumentFiveMProfile(other)
 		for id := ast.NodeID(1); int(id) < len(other.Tree.Nodes); id++ {
 			name, call, ok := convarCall(other, id)
 			if !ok {
@@ -80,9 +81,6 @@ func (s *Server) buildFiveMConvarDiagnostics(doc *Document) []Diagnostic {
 				value, typ, _ := convarLiteral(other, callArgument(other, call, 1))
 				entry := fiveMConvar{name: nameValue, typeName: typ, def: value, doc: other, node: callArgument(other, call, 0)}
 				known[strings.ToLower(nameValue)] = append(known[strings.ToLower(nameValue)], entry)
-				if other == doc && profile.Kind != FiveMProfilePlainLua && profile.Kind != FiveMProfileServer {
-					out = append(out, Diagnostic{Range: getNodeRange(other.Tree, entry.node), Severity: SeverityWarning, Code: "fivem-convar-scope", Message: fmt.Sprintf("%s may only be used from a server script.", name)})
-				}
 			case "GetConvar", "GetConvarBool", "GetConvarInt", "GetConvarFloat":
 				nameValue, _, ok := convarLiteral(other, callArgument(other, call, 0))
 				if !ok || nameValue == "" {
@@ -132,6 +130,36 @@ func (s *Server) buildFiveMConvarDiagnostics(doc *Document) []Diagnostic {
 			}
 		}
 	}
+	return fiveMConvarFacts{known: known, uses: uses}
+}
+
+func (s *Server) buildFiveMConvarDiagnostics(doc *Document) []Diagnostic {
+	if s == nil || doc == nil || doc.Tree == nil {
+		return nil
+	}
+	var out []Diagnostic
+	profile := s.getDocumentFiveMProfile(doc)
+	if profile.Kind != FiveMProfilePlainLua && profile.Kind != FiveMProfileServer {
+		for id := ast.NodeID(1); int(id) < len(doc.Tree.Nodes); id++ {
+			name, call, ok := convarCall(doc, id)
+			if !ok || (name != "SetConvar" && name != "SetConvarReplicated" && name != "SetConvarServerInfo") {
+				continue
+			}
+			nameValue, nameType, ok := convarLiteral(doc, callArgument(doc, call, 0))
+			if ok && nameValue != "" && nameType == "string" {
+				out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, callArgument(doc, call, 0)), Severity: SeverityWarning, Code: "fivem-convar-scope", Message: fmt.Sprintf("%s may only be used from a server script.", name)})
+			}
+		}
+	}
+	facts := s.workspaceDiagnosticFacts()
+	var known map[string][]fiveMConvar
+	var uses []fiveMConvarUse
+	if facts != nil {
+		known, uses = facts.convars.known, facts.convars.uses
+	} else {
+		localFacts := s.collectFiveMConvars()
+		known, uses = localFacts.known, localFacts.uses
+	}
 	for _, use := range uses {
 		if use.doc != doc {
 			continue
@@ -153,7 +181,13 @@ func (s *Server) buildFiveMConvarDiagnostics(doc *Document) []Diagnostic {
 		}
 	}
 	// Conflicts between declarations/writes are reported at the later write.
-	for name, entries := range known {
+	names := make([]string, 0, len(known))
+	for name := range known {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		entries := known[name]
 		if len(entries) < 2 {
 			continue
 		}
@@ -167,5 +201,6 @@ func (s *Server) buildFiveMConvarDiagnostics(doc *Document) []Diagnostic {
 			}
 		}
 	}
+	sortFiveMDiagnostics(out)
 	return out
 }

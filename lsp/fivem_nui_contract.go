@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // NUI contract checks deliberately only consider literal names.  NUI code is
@@ -19,6 +20,32 @@ type nuiContractFile struct {
 	uri   string
 	src   []byte
 	names []nuiContractName
+}
+
+type nuiDiagnosticState struct {
+	mu        sync.Mutex
+	published map[string]struct{}
+}
+
+type nuiResourceFacts struct {
+	profile   FiveMExecutionProfile
+	files     []nuiContractFile
+	callbacks map[string]bool
+	messages  map[string]bool
+}
+
+// NUI assets are not Documents, so retain the URIs that received standalone
+// diagnostics in order to explicitly clear them after they become clean or
+// are removed from disk.
+var nuiDiagnosticStates sync.Map // map[*Server]*nuiDiagnosticState
+
+func (s *Server) nuiDiagnosticState() *nuiDiagnosticState {
+	if state, ok := nuiDiagnosticStates.Load(s); ok {
+		return state.(*nuiDiagnosticState)
+	}
+	state := &nuiDiagnosticState{published: make(map[string]struct{})}
+	actual, _ := nuiDiagnosticStates.LoadOrStore(s, state)
+	return actual.(*nuiDiagnosticState)
 }
 
 var (
@@ -64,6 +91,47 @@ func (s *Server) nuiResourceFiles(doc *Document) []nuiContractFile {
 	return out
 }
 
+func (s *Server) collectFiveMNUIResourceFacts() map[string]nuiResourceFacts {
+	resources := make(map[string]nuiResourceFacts)
+	// Only Lua documents identify a resource for NUI asset discovery, matching
+	// the standalone NUI publication behavior.
+	for _, doc := range sortedFiveMDocuments(s.Documents) {
+		if !strings.EqualFold(filepath.Ext(doc.Path), ".lua") {
+			continue
+		}
+		root := s.getDocResourceRoot(doc)
+		if root == "" {
+			continue
+		}
+		if _, ok := resources[root]; ok {
+			continue
+		}
+		resources[root] = nuiResourceFacts{
+			profile:   s.getDocumentFiveMProfile(doc),
+			files:     s.nuiResourceFiles(doc),
+			callbacks: make(map[string]bool),
+			messages:  make(map[string]bool),
+		}
+	}
+	// Open NUI assets can be Documents too, so include every document in the
+	// resource when collecting Lua-side contract references.
+	for _, doc := range sortedFiveMDocuments(s.Documents) {
+		root := s.getDocResourceRoot(doc)
+		resource, ok := resources[root]
+		if !ok {
+			continue
+		}
+		for _, m := range nuiCallbackLuaRE.FindAllSubmatchIndex(doc.Source(), -1) {
+			resource.callbacks[string(doc.Source()[m[2]:m[3]])] = true
+		}
+		for _, m := range nuiMessageRE.FindAllSubmatchIndex(doc.Source(), -1) {
+			resource.messages[string(doc.Source()[m[4]:m[5]])] = true
+		}
+		resources[root] = resource
+	}
+	return resources
+}
+
 func nuiJSNames(src []byte, html bool) []nuiContractName {
 	var out []nuiContractName
 	for _, m := range nuiCallbackJSRE.FindAllSubmatchIndex(src, -1) {
@@ -80,21 +148,31 @@ func (s *Server) buildFiveMNUIContractDiagnostics(doc *Document) []Diagnostic {
 	if s == nil || doc == nil || s.getDocumentFiveMProfile(doc).ResourceRoot == "" {
 		return nil
 	}
-	files := s.nuiResourceFiles(doc)
+	root := s.getDocResourceRoot(doc)
+	var files []nuiContractFile
+	callbacks, messages := map[string]bool{}, map[string]bool{}
+	if facts := s.workspaceDiagnosticFacts(); facts != nil {
+		resource, ok := facts.nui[root]
+		if !ok {
+			return nil
+		}
+		files, callbacks, messages = resource.files, resource.callbacks, resource.messages
+	} else {
+		files = s.nuiResourceFiles(doc)
+		for _, d := range s.Documents {
+			if d == nil || s.getDocResourceRoot(d) != root {
+				continue
+			}
+			for _, m := range nuiCallbackLuaRE.FindAllSubmatchIndex(d.Source(), -1) {
+				callbacks[string(d.Source()[m[2]:m[3]])] = true
+			}
+			for _, m := range nuiMessageRE.FindAllSubmatchIndex(d.Source(), -1) {
+				messages[string(d.Source()[m[4]:m[5]])] = true
+			}
+		}
+	}
 	if len(files) == 0 {
 		return nil
-	}
-	callbacks, messages := map[string]bool{}, map[string]bool{}
-	for _, d := range s.Documents {
-		if d == nil || s.getDocResourceRoot(d) != s.getDocResourceRoot(doc) {
-			continue
-		}
-		for _, m := range nuiCallbackLuaRE.FindAllSubmatchIndex(d.Source(), -1) {
-			callbacks[string(d.Source()[m[2]:m[3]])] = true
-		}
-		for _, m := range nuiMessageRE.FindAllSubmatchIndex(d.Source(), -1) {
-			messages[string(d.Source()[m[4]:m[5]])] = true
-		}
 	}
 	var out []Diagnostic
 	// Diagnostics for the current Lua document are missing contracts.

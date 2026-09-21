@@ -2,6 +2,7 @@ package lsp
 
 import (
 	"slices"
+	"strconv"
 	"testing"
 
 	"github.com/coalaura/lugo/ast"
@@ -290,6 +291,81 @@ func TestScopePartitioning(t *testing.T) {
 	}
 	if got := res.ScriptScopes["shared.lua"]; got != GlobalIndexScopeShared {
 		t.Fatalf("shared.lua scope = %q, want shared", got)
+	}
+}
+
+func TestRegisterFiveMResourceUpdatesResourceEdgesIncrementally(t *testing.T) {
+	const resourceCount = 64
+	idx := NewGlobalIndex()
+
+	// Register in reverse dependency order so each target is initially absent.
+	// Later registrations must update only the affected reverse edges.
+	for i := resourceCount - 1; i >= 0; i-- {
+		name := ResourceURI("resource-" + strconv.Itoa(i))
+		resource := &FiveMResource{Name: string(name), RootURI: string(name)}
+		if i > 0 {
+			resource.Dependencies = []string{"resource-" + strconv.Itoa(i-1)}
+		}
+		idx.RegisterFiveMResource(resource)
+	}
+
+	for i := 0; i < resourceCount; i++ {
+		name := ResourceURI("resource-" + strconv.Itoa(i))
+		scope := idx.Resources[name]
+		if scope == nil {
+			t.Fatalf("missing scope for %q", name)
+		}
+		if i > 0 && !slices.Equal(scope.Dependencies, []ResourceURI{ResourceURI("resource-" + strconv.Itoa(i-1))}) {
+			t.Fatalf("%q dependencies = %#v", name, scope.Dependencies)
+		}
+		if i+1 < resourceCount && !slices.Equal(scope.Dependents, []ResourceURI{ResourceURI("resource-" + strconv.Itoa(i+1))}) {
+			t.Fatalf("%q dependents = %#v", name, scope.Dependents)
+		}
+	}
+
+	first, firstDiagnostics := idx.TopologicalSort()
+	second, secondDiagnostics := idx.TopologicalSort()
+	if len(firstDiagnostics) != 0 || len(secondDiagnostics) != 0 {
+		t.Fatalf("topological sort diagnostics = %#v, %#v; want none", firstDiagnostics, secondDiagnostics)
+	}
+	if !slices.Equal(first, second) {
+		t.Fatalf("topological sort was not deterministic: %#v then %#v", first, second)
+	}
+	for i, resource := range first {
+		if want := ResourceURI("resource-" + strconv.Itoa(i)); resource != want {
+			t.Fatalf("topological order = %#v, want ascending resources", first)
+		}
+	}
+
+	idx.RegisterFiveMResource(&FiveMResource{Name: "resource-1", RootURI: "resource-1", Dependencies: []string{"resource-3"}})
+	if got := idx.Resources["resource-0"].Dependents; len(got) != 0 {
+		t.Fatalf("resource-0 dependents after re-register = %#v, want none", got)
+	}
+	if got := idx.Resources["resource-3"].Dependents; !slices.Contains(got, ResourceURI("resource-1")) {
+		t.Fatalf("resource-3 dependents after re-register = %#v, want resource-1", got)
+	}
+}
+
+func BenchmarkRegisterFiveMResourceScaling(b *testing.B) {
+	for _, resourceCount := range []int{10, 100, 1000} {
+		b.Run(strconv.Itoa(resourceCount), func(b *testing.B) {
+			resources := make([]*FiveMResource, resourceCount)
+			for i := range resources {
+				name := "resource-" + strconv.Itoa(i)
+				resources[i] = &FiveMResource{Name: name, RootURI: name}
+				if i > 0 {
+					resources[i].Dependencies = []string{"resource-" + strconv.Itoa(i-1)}
+				}
+			}
+
+			b.ReportAllocs()
+			for b.Loop() {
+				idx := NewGlobalIndex()
+				for _, resource := range resources {
+					idx.RegisterFiveMResource(resource)
+				}
+			}
+		})
 	}
 }
 

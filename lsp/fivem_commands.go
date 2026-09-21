@@ -2,6 +2,7 @@ package lsp
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/coalaura/lugo/ast"
@@ -53,11 +54,49 @@ func fiveMCommandArg(doc *Document, call ast.Node, index uint32) (string, ast.No
 	return value, id, ok && value != ""
 }
 
-func (s *Server) collectFiveMCommands() (map[string]fiveMCommandUse, []fiveMKeyMapping, map[string]bool) {
-	commands := make(map[string]fiveMCommandUse)
+func sortedFiveMDocuments(documents map[string]*Document) []*Document {
+	docs := make([]*Document, 0, len(documents))
+	for _, doc := range documents {
+		if doc != nil {
+			docs = append(docs, doc)
+		}
+	}
+	sort.Slice(docs, func(i, j int) bool {
+		if docs[i].URI != docs[j].URI {
+			return docs[i].URI < docs[j].URI
+		}
+		return docs[i].Path < docs[j].Path
+	})
+	return docs
+}
+
+func sortFiveMDiagnostics(diags []Diagnostic) {
+	sort.SliceStable(diags, func(i, j int) bool {
+		a, b := diags[i], diags[j]
+		if a.Range.Start.Line != b.Range.Start.Line {
+			return a.Range.Start.Line < b.Range.Start.Line
+		}
+		if a.Range.Start.Character != b.Range.Start.Character {
+			return a.Range.Start.Character < b.Range.Start.Character
+		}
+		if a.Range.End.Line != b.Range.End.Line {
+			return a.Range.End.Line < b.Range.End.Line
+		}
+		if a.Range.End.Character != b.Range.End.Character {
+			return a.Range.End.Character < b.Range.End.Character
+		}
+		if a.Code != b.Code {
+			return a.Code < b.Code
+		}
+		return a.Message < b.Message
+	})
+}
+
+func (s *Server) collectFiveMCommands() ([]fiveMCommandUse, []fiveMKeyMapping, map[string]bool) {
+	var commands []fiveMCommandUse
 	var mappings []fiveMKeyMapping
 	aces := make(map[string]bool)
-	for _, doc := range s.Documents {
+	for _, doc := range sortedFiveMDocuments(s.Documents) {
 		if doc == nil || doc.Tree == nil {
 			continue
 		}
@@ -74,7 +113,7 @@ func (s *Server) collectFiveMCommands() (map[string]fiveMCommandUse, []fiveMKeyM
 				if arg != ast.InvalidNode && int(arg) < len(doc.Tree.Nodes) {
 					restricted = doc.Tree.Nodes[arg].Kind == ast.KindTrue
 				}
-				commands[command] = fiveMCommandUse{name: command, doc: doc, node: node, restricted: restricted}
+				commands = append(commands, fiveMCommandUse{name: command, doc: doc, node: node, restricted: restricted})
 			case "RegisterKeyMapping":
 				command, node, ok := fiveMCommandArg(doc, call, 0)
 				if !ok {
@@ -105,21 +144,30 @@ func (s *Server) buildFiveMCommandDiagnostics(doc *Document) []Diagnostic {
 	if s == nil || doc == nil || doc.Tree == nil {
 		return nil
 	}
-	commands, mappings, aces := s.collectFiveMCommands()
+	var commands []fiveMCommandUse
+	var mappings []fiveMKeyMapping
+	var aces map[string]bool
+	if facts := s.workspaceDiagnosticFacts(); facts != nil {
+		commands, mappings, aces = facts.commands, facts.mappings, facts.aces
+	} else {
+		commands, mappings, aces = s.collectFiveMCommands()
+	}
 	var out []Diagnostic
 	// Mark ACE declarations after collecting all files, then report restricted
 	// commands without an explicit ACE declaration. This is intentionally a
 	// warning: ACE configuration is commonly kept outside the resource.
-	for name, command := range commands {
-		if command.doc == doc && command.restricted && !aces[name] {
-			out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, command.node), Severity: SeverityWarning, Code: "fivem-command-missing-ace", Message: fmt.Sprintf("Command '%s' is restricted but has no documented ACE permission.", name)})
+	declared := make(map[string]bool, len(commands))
+	for _, command := range commands {
+		declared[command.name] = true
+		if command.doc == doc && command.restricted && !aces[command.name] {
+			out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, command.node), Severity: SeverityWarning, Code: "fivem-command-missing-ace", Message: fmt.Sprintf("Command '%s' is restricted but has no documented ACE permission.", command.name)})
 		}
 	}
 	for _, mapping := range mappings {
 		if mapping.doc != doc || mapping.node == ast.InvalidNode || int(mapping.node) >= len(doc.Tree.Nodes) {
 			continue
 		}
-		if _, ok := commands[mapping.command]; !ok {
+		if !declared[mapping.command] {
 			out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, mapping.node), Severity: SeverityWarning, Code: "fivem-command-missing-declaration", Message: fmt.Sprintf("Key mapping references undeclared command '%s'.", mapping.command)})
 		}
 	}
@@ -147,9 +195,10 @@ func (s *Server) buildFiveMCommandDiagnostics(doc *Document) []Diagnostic {
 		if len(invoked) == 0 {
 			continue
 		}
-		if _, declared := commands[invoked[0]]; !declared {
+		if !declared[invoked[0]] {
 			out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, node), Severity: SeverityWarning, Code: "fivem-command-missing-declaration", Message: fmt.Sprintf("ExecuteCommand invokes undeclared command '%s'.", invoked[0])})
 		}
 	}
+	sortFiveMDiagnostics(out)
 	return out
 }

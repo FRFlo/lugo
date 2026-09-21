@@ -14,57 +14,39 @@ func (s *Server) buildFiveMPerformanceDiagnostics(doc *Document) []Diagnostic {
 	if doc == nil || doc.Tree == nil {
 		return nil
 	}
+	facts := newFiveMASTFacts(doc)
 	var out []Diagnostic
 	registers := 0
+	firstRegister := ast.InvalidNode
 	for id := ast.NodeID(1); int(id) < len(doc.Tree.Nodes); id++ {
 		n := doc.Tree.Nodes[id]
 		if n.Kind == ast.KindCallExpr || n.Kind == ast.KindMethodCall {
-			name := performanceNodeCallName(doc, id)
+			name := facts.callNames[id]
 			if name == "RegisterNetEvent" {
 				registers++
+				if firstRegister == ast.InvalidNode {
+					firstRegister = id
+				}
 			}
 			if performanceSQLCall(name) {
 				out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, id), Severity: SeverityWarning, Code: "fivem-performance-sync-sql", Message: "Low-confidence performance warning: synchronous SQL-like work may block the FiveM thread."})
 			}
 		}
-		if n.Kind != ast.KindWhile && n.Kind != ast.KindRepeat && n.Kind != ast.KindForNum && n.Kind != ast.KindForIn {
+		loop, ok := facts.loops[id]
+		if !ok {
 			continue
 		}
-		waitZero, yield := false, false
-		lookup := false
-		for child := ast.NodeID(1); int(child) < len(doc.Tree.Nodes); child++ {
-			if child == id || !performanceInside(doc.Tree, child, id) {
-				continue
-			}
-			cn := doc.Tree.Nodes[child]
-			if cn.Kind != ast.KindCallExpr && cn.Kind != ast.KindMethodCall {
-				continue
-			}
-			name := performanceNodeCallName(doc, child)
-			switch {
-			case name == "Wait" || strings.HasSuffix(name, ".Wait"):
-				arg := callArgument(doc, cn, 0)
-				if arg != ast.InvalidNode && doc.Tree.Nodes[arg].Kind == ast.KindNumber && string(doc.Source()[doc.Tree.Nodes[arg].Start:doc.Tree.Nodes[arg].End]) == "0" {
-					waitZero = true
-				}
-				yield = true
-			case name == "coroutine.yield" || strings.HasSuffix(name, ".yield"):
-				yield = true
-			case performanceLookupCall(name):
-				lookup = true
-			}
-		}
-		if waitZero {
+		if loop.waitZero {
 			out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, id), Severity: SeverityWarning, Code: "fivem-performance-wait-zero", Message: "Low-confidence performance warning: this tight loop calls Wait(0); verify that per-frame work is necessary."})
-		} else if !yield && performanceUnboundedLoop(doc, id) {
+		} else if !loop.yield && performanceUnboundedLoop(doc, id) {
 			out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, id), Severity: SeverityWarning, Code: "fivem-performance-no-yield", Message: "Low-confidence performance warning: this loop has no obvious yield and may block the FiveM thread."})
 		}
-		if lookup {
+		if loop.lookup {
 			out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, id), Severity: SeverityWarning, Code: "fivem-performance-repeated-lookup", Message: "Low-confidence performance warning: repeated native/entity lookup inside a loop may be expensive; consider caching or reducing its frequency."})
 		}
 	}
 	if registers > 10 {
-		out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, firstPerformanceCall(doc, "RegisterNetEvent")), Severity: SeverityWarning, Code: "fivem-performance-many-handlers", Message: fmt.Sprintf("Low-confidence performance warning: %d RegisterNetEvent handlers are declared in this file; review handler count and event work.", registers)})
+		out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, firstRegister), Severity: SeverityWarning, Code: "fivem-performance-many-handlers", Message: fmt.Sprintf("Low-confidence performance warning: %d RegisterNetEvent handlers are declared in this file; review handler count and event work.", registers)})
 	}
 	return out
 }
@@ -79,16 +61,6 @@ func performanceUnboundedLoop(doc *Document, id ast.NodeID) bool {
 	}
 	src := strings.ToLower(string(doc.Source()[n.Start:n.End]))
 	return strings.Contains(src, "while true") || strings.Contains(src, "while(true)")
-}
-
-func performanceInside(tree *ast.Tree, child, parent ast.NodeID) bool {
-	for child != ast.InvalidNode {
-		child = tree.Nodes[child].Parent
-		if child == parent {
-			return true
-		}
-	}
-	return false
 }
 
 func performanceNodeCallName(doc *Document, id ast.NodeID) string {
@@ -127,14 +99,4 @@ func performanceLookupCall(name string) bool {
 func performanceSQLCall(name string) bool {
 	lower := strings.ToLower(name)
 	return strings.Contains(lower, "sync") && (strings.Contains(lower, "mysql") || strings.Contains(lower, "sql") || strings.Contains(lower, "query") || strings.Contains(lower, "execute"))
-}
-
-func firstPerformanceCall(doc *Document, wanted string) ast.NodeID {
-	for id := ast.NodeID(1); int(id) < len(doc.Tree.Nodes); id++ {
-		n := doc.Tree.Nodes[id]
-		if (n.Kind == ast.KindCallExpr || n.Kind == ast.KindMethodCall) && performanceNodeCallName(doc, id) == wanted {
-			return id
-		}
-	}
-	return ast.InvalidNode
 }
