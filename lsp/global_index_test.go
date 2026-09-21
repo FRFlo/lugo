@@ -333,3 +333,15 @@ func TestEviction(t *testing.T) {
 		t.Fatalf("symbol entry after eviction = %+v, want retained boolean metadata", entry)
 	}
 }
+
+func TestGlobalIndexRemovesEmptyHashBucketOnReplacement(t *testing.T) {
+	idx := NewGlobalIndex()
+	key := GlobalKey{PropHash: 42}
+	first := &SymbolEntry{Key: key, NodeID: ast.NodeID(1)}
+	idx.AddSymbol("resource", GlobalIndexScopeShared, "value", first)
+	second := &SymbolEntry{Key: key, NodeID: ast.NodeID(2)}
+	idx.AddSymbol("resource", GlobalIndexScopeShared, "value", second)
+	if got := idx.LookupByHash(key); len(got) != 1 || got[0].NodeID != second.NodeID {
+		t.Fatalf("LookupByHash() = %#v, want only replacement", got)
+	}
+}

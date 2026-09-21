@@ -152,7 +152,12 @@ func (idx *GlobalIndex) AddSymbol(resource ResourceURI, scope GlobalIndexScope, 
 	}
 	table := res.tableForScope(scope)
 	if previous != nil && previous != entry && entry.Key != (GlobalKey{}) && previous.Key == entry.Key {
-		idx.HashIndex[entry.Key] = removeSymbolEntry(idx.HashIndex[entry.Key], previous)
+		entries := removeSymbolEntry(idx.HashIndex[entry.Key], previous)
+		if len(entries) == 0 {
+			delete(idx.HashIndex, entry.Key)
+		} else {
+			idx.HashIndex[entry.Key] = entries
+		}
 	}
 	table[name] = entry
 	if entry.Key != (GlobalKey{}) {
@@ -472,6 +477,37 @@ func (idx *GlobalIndex) EvictSource(uri ResourceURI) bool {
 	defer idx.mu.Unlock()
 
 	return idx.evictSourceLocked(uri)
+}
+
+// PruneResource releases a document's source and removes its empty index scope.
+// Resource scopes that still contain symbols or participate in the dependency
+// graph are retained: FiveM resources can outlive any one document.
+func (idx *GlobalIndex) PruneResource(uri ResourceURI) bool {
+	if idx == nil || uri == "" {
+		return false
+	}
+
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+
+	res := idx.Resources[uri]
+	if res == nil {
+		return false
+	}
+	idx.evictSourceLocked(uri)
+	if len(res.Client) != 0 || len(res.Server) != 0 || len(res.Shared) != 0 {
+		return false
+	}
+	if idx.DepGraph != nil {
+		if len(idx.DepGraph.Dependencies[uri]) != 0 || len(idx.DepGraph.Dependents[uri]) != 0 {
+			return false
+		}
+		delete(idx.DepGraph.Dependencies, uri)
+		delete(idx.DepGraph.Dependents, uri)
+	}
+	delete(idx.Resources, uri)
+	idx.syncResourceEdgesLocked()
+	return true
 }
 
 func (idx *GlobalIndex) evictSourceLocked(uri ResourceURI) bool {
