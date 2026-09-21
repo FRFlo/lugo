@@ -127,7 +127,16 @@ jobs:
           -buildvcs=false \
           -ldflags "-s -w -X 'main.Version=${{ github.ref_name }}' $LDFLAGS" \
           -o "$OUT_RELEASE" .
-          
+
+        MCP_EXT=".exe"
+        [[ "$GOOS" != "windows" ]] && MCP_EXT=""
+        OUT_MCP="build/lugo-mcp_${{ github.ref_name }}_${{ matrix.goos }}_${{ matrix.goarch }}${MCP_EXT}"
+        go build \
+          -trimpath \
+          -buildvcs=false \
+          -ldflags "-s -w $LDFLAGS" \
+          -o "$OUT_MCP" ./cmd/lugo-mcp
+
         cp "$OUT_RELEASE" "$OUT_EXT"
 
     - name: Upload Release Artifact

@@ -1,0 +1,8 @@
+<!doctype html>
+<html><body><script>
+  window.addEventListener('message', function (event) {
+    if (event.data && event.data.action === 'lugo-runtime-smoke') {
+      document.body.dataset.smoke = 'ready';
+    }
+  });
+</script></body></html>

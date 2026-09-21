@@ -22,5 +22,17 @@ jobs:
     - name: Generate Go native bundles
       run: go generate ./lsp
 
+    - name: Check formatting and diff cleanliness
+      run: bash ./scripts/quality-gate.sh format
+
+    - name: Run package coverage
+      run: bash ./scripts/quality-gate.sh coverage
+
+    - name: Run lexer/parser benchmark allocation gate
+      run: bash ./scripts/quality-gate.sh benchmark
+
+    - name: Build MCP server
+      run: go build -trimpath -buildvcs=false ./cmd/lugo-mcp
+
     - name: Run Tests
       run: go test -v -race ./...
