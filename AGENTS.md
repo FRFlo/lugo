@@ -115,26 +115,19 @@ cd vscode && npm install && npm run build
 | **Zig cross-compilation** | Enables CGO static builds across 6 platforms without native toolchains |
 
 <!-- gitnexus:start -->
-
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **lugo** (2364 symbols, 8164 relationships, 197 execution flows). Use the
-GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **lugo** (2405 symbols, 8183 relationships, 201 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
 ## Always Do
 
-- **MUST run impact analysis before editing any symbol.** Before modifying a function, class, or method, run
-  `gitnexus_impact({target: "symbolName", direction: "upstream"})` and report the blast radius (direct callers, affected
-  processes, risk level) to the user.
-- **MUST run `gitnexus_detect_changes()` before committing** to verify your changes only affect expected symbols and
-  execution flows.
+- **MUST run impact analysis before editing any symbol.** Before modifying a function, class, or method, run `gitnexus_impact({target: "symbolName", direction: "upstream"})` and report the blast radius (direct callers, affected processes, risk level) to the user.
+- **MUST run `gitnexus_detect_changes()` before committing** to verify your changes only affect expected symbols and execution flows.
 - **MUST warn the user** if impact analysis returns HIGH or CRITICAL risk before proceeding with edits.
-- When exploring unfamiliar code, use `gitnexus_query({query: "concept"})` to find execution flows instead of grepping.
-  It returns process-grouped results ranked by relevance.
-- When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use
-  `gitnexus_context({name: "symbolName"})`.
+- When exploring unfamiliar code, use `gitnexus_query({query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
+- When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `gitnexus_context({name: "symbolName"})`.
 
 ## When Debugging
 
@@ -145,10 +138,8 @@ GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 ## When Refactoring
 
-- **Renaming**: MUST use `gitnexus_rename({symbol_name: "old", new_name: "new", dry_run: true})` first. Review the
-  preview — graph edits are safe, text_search edits need manual review. Then run with `dry_run: false`.
-- **Extracting/Splitting**: MUST run `gitnexus_context({name: "target"})` to see all incoming/outgoing refs, then
-  `gitnexus_impact({target: "target", direction: "upstream"})` to find all external callers before moving code.
+- **Renaming**: MUST use `gitnexus_rename({symbol_name: "old", new_name: "new", dry_run: true})` first. Review the preview — graph edits are safe, text_search edits need manual review. Then run with `dry_run: false`.
+- **Extracting/Splitting**: MUST run `gitnexus_context({name: "target"})` to see all incoming/outgoing refs, then `gitnexus_impact({target: "target", direction: "upstream"})` to find all external callers before moving code.
 - After any refactor: run `gitnexus_detect_changes({scope: "all"})` to verify only expected files changed.
 
 ## Never Do
@@ -160,36 +151,35 @@ GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 ## Tools Quick Reference
 
-| Tool             | When to use                   | Command                                                                 |
-|------------------|-------------------------------|-------------------------------------------------------------------------|
-| `query`          | Find code by concept          | `gitnexus_query({query: "auth validation"})`                            |
-| `context`        | 360-degree view of one symbol | `gitnexus_context({name: "validateUser"})`                              |
-| `impact`         | Blast radius before editing   | `gitnexus_impact({target: "X", direction: "upstream"})`                 |
-| `detect_changes` | Pre-commit scope check        | `gitnexus_detect_changes({scope: "staged"})`                            |
-| `rename`         | Safe multi-file rename        | `gitnexus_rename({symbol_name: "old", new_name: "new", dry_run: true})` |
-| `cypher`         | Custom graph queries          | `gitnexus_cypher({query: "MATCH ..."})`                                 |
+| Tool | When to use | Command |
+|------|-------------|---------|
+| `query` | Find code by concept | `gitnexus_query({query: "auth validation"})` |
+| `context` | 360-degree view of one symbol | `gitnexus_context({name: "validateUser"})` |
+| `impact` | Blast radius before editing | `gitnexus_impact({target: "X", direction: "upstream"})` |
+| `detect_changes` | Pre-commit scope check | `gitnexus_detect_changes({scope: "staged"})` |
+| `rename` | Safe multi-file rename | `gitnexus_rename({symbol_name: "old", new_name: "new", dry_run: true})` |
+| `cypher` | Custom graph queries | `gitnexus_cypher({query: "MATCH ..."})` |
 
 ## Impact Risk Levels
 
-| Depth | Meaning                               | Action                |
-|-------|---------------------------------------|-----------------------|
-| d=1   | WILL BREAK — direct callers/importers | MUST update these     |
-| d=2   | LIKELY AFFECTED — indirect deps       | Should test           |
-| d=3   | MAY NEED TESTING — transitive         | Test if critical path |
+| Depth | Meaning | Action |
+|-------|---------|--------|
+| d=1 | WILL BREAK — direct callers/importers | MUST update these |
+| d=2 | LIKELY AFFECTED — indirect deps | Should test |
+| d=3 | MAY NEED TESTING — transitive | Test if critical path |
 
 ## Resources
 
-| Resource                              | Use for                                  |
-|---------------------------------------|------------------------------------------|
-| `gitnexus://repo/lugo/context`        | Codebase overview, check index freshness |
-| `gitnexus://repo/lugo/clusters`       | All functional areas                     |
-| `gitnexus://repo/lugo/processes`      | All execution flows                      |
-| `gitnexus://repo/lugo/process/{name}` | Step-by-step execution trace             |
+| Resource | Use for |
+|----------|---------|
+| `gitnexus://repo/lugo/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/lugo/clusters` | All functional areas |
+| `gitnexus://repo/lugo/processes` | All execution flows |
+| `gitnexus://repo/lugo/process/{name}` | Step-by-step execution trace |
 
 ## Self-Check Before Finishing
 
 Before completing any code modification task, verify:
-
 1. `gitnexus_impact` was run for all modified symbols
 2. No HIGH/CRITICAL risk warnings were ignored
 3. `gitnexus_detect_changes()` confirms changes match expected scope
@@ -209,20 +199,19 @@ If the index previously included embeddings, preserve them by adding `--embeddin
 npx gitnexus analyze --embeddings
 ```
 
-To check whether embeddings exist, inspect `.gitnexus/meta.json` — the `stats.embeddings` field shows the count (0 means
-no embeddings). **Running analyze without `--embeddings` will delete any previously generated embeddings.**
+To check whether embeddings exist, inspect `.gitnexus/meta.json` — the `stats.embeddings` field shows the count (0 means no embeddings). **Running analyze without `--embeddings` will delete any previously generated embeddings.**
 
 > Claude Code users: A PostToolUse hook handles this automatically after `git commit` and `git merge`.
 
 ## CLI
 
-| Task                                         | Read this skill file                                        |
-|----------------------------------------------|-------------------------------------------------------------|
-| Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md`       |
-| Blast radius / "What breaks if I change X?"  | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
-| Trace bugs / "Why is X failing?"             | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md`       |
-| Rename / extract / split / refactor          | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md`     |
-| Tools, resources, schema reference           | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md`           |
-| Index, status, clean, wiki CLI commands      | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md`             |
+| Task | Read this skill file |
+|------|---------------------|
+| Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md` |
+| Blast radius / "What breaks if I change X?" | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
+| Trace bugs / "Why is X failing?" | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md` |
+| Rename / extract / split / refactor | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
+| Tools, resources, schema reference | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` |
+| Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
 
 <!-- gitnexus:end -->
