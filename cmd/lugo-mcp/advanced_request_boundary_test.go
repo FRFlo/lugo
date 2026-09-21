@@ -55,6 +55,23 @@ func TestLSPRequestAdvancedRejectsUnsafePathParams(t *testing.T) {
 	}
 }
 
+func TestLSPRequestAdvancedRejectsSymlinkedURI(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "outside.lua"), []byte("return 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	s := &server{root: root}
+	uri := "file://" + filepath.ToSlash(filepath.Join(root, "escape", "outside.lua"))
+	_, err := s.lspRequest(context.Background(), advancedRequest(uri, "textDocument/hover", nil))
+	if err == nil || !strings.Contains(err.Error(), "workspace") {
+		t.Fatalf("symlinked URI error = %v, want workspace boundary error", err)
+	}
+}
+
 func TestLSPRequestAdvancedAllowsSupportedReadOnlyMethod(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "main.lua"), []byte("local value = 1\nreturn value\n"), 0o644); err != nil {

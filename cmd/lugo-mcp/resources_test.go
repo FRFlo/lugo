@@ -74,4 +74,15 @@ func TestMCPResourceTemplatesAndURIs(t *testing.T) {
 	if len(result.Contents) != 1 || result.Contents[0].Text != "return 42\n" {
 		t.Fatalf("unexpected document resource: %+v", result.Contents)
 	}
+
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "outside.lua"), []byte("return 0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, err := session.ReadResource(ctx, &mcp.ReadResourceParams{URI: "lugo://workspace/document/escape/outside.lua"}); err == nil {
+		t.Fatal("symlinked document resource unexpectedly succeeded")
+	}
 }

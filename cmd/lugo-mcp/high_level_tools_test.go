@@ -77,7 +77,13 @@ func TestWorkspaceStatusExposesFreshnessAndDetectsChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &server{workspace: workspace, root: root}
+	s, err := newServer(workspace, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("return 0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	result, err := s.workspaceStatus(context.Background(), highLevelRequest(t, map[string]any{}))
 	if err != nil {
 		t.Fatal(err)
@@ -91,8 +97,8 @@ func TestWorkspaceStatusExposesFreshnessAndDetectsChanges(t *testing.T) {
 	if err := json.Unmarshal(result.StructuredContent.(json.RawMessage), &before); err != nil {
 		t.Fatal(err)
 	}
-	if before.Revision == "" || before.SourceHash == "" || before.IndexedAt == "" || !before.Fresh {
-		t.Fatalf("initial freshness = %+v", before)
+	if before.Revision == "" || before.SourceHash == "" || before.IndexedAt == "" || before.Fresh || before.Revision == before.SourceHash {
+		t.Fatalf("creation freshness = %+v", before)
 	}
 	if err := os.WriteFile(path, []byte("return 2\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -115,26 +121,34 @@ func TestWorkspaceStatusExposesFreshnessAndDetectsChanges(t *testing.T) {
 
 func TestReindexValidatesSelectiveRelativePaths(t *testing.T) {
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "main.lua"), []byte("return 1\n"), 0o644); err != nil {
+	path := filepath.Join(root, "main.lua")
+	if err := os.WriteFile(path, []byte("return 1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	workspace, err := newTestWorkspace(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &server{workspace: workspace, root: root}
+	s, err := newServer(workspace, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("return 2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	result, err := s.reindex(context.Background(), highLevelRequest(t, map[string]any{"paths": []string{"main.lua"}}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var got struct {
-		Paths    []string `json:"paths"`
-		Revision string   `json:"revision"`
+		Paths      []string `json:"paths"`
+		Revision   string   `json:"revision"`
+		SourceHash string   `json:"sourceHash"`
 	}
 	if err := json.Unmarshal(result.StructuredContent.(json.RawMessage), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Revision == "" || len(got.Paths) != 1 || got.Paths[0] != "main.lua" {
+	if got.Revision == "" || got.Revision != got.SourceHash || len(got.Paths) != 1 || got.Paths[0] != "main.lua" {
 		t.Fatalf("reindex = %+v", got)
 	}
 	if _, err := s.reindex(context.Background(), highLevelRequest(t, map[string]any{"paths": []string{"../outside.lua"}})); err == nil {

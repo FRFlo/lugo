@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/coalaura/plain"
@@ -48,6 +49,119 @@ func NewMCPWorkspace(root string) (*Server, error) {
 // MCPDocumentURI converts a workspace path to the URI used by LSP methods.
 func (s *Server) MCPDocumentURI(path string) string {
 	return s.pathToURI(path)
+}
+
+// MCPFiveMContracts returns the literal FiveM runtime surfaces discovered by
+// the existing parser and asset scanners. It is read-only and deliberately
+// avoids invoking diagnostics or changing resolver state.
+func (s *Server) MCPFiveMContracts() FiveMContractSnapshot {
+	if s == nil {
+		return FiveMContractSnapshot{}
+	}
+	s.mcpMu.Lock()
+	defer s.mcpMu.Unlock()
+
+	uris := make([]string, 0, len(s.Documents))
+	for uri := range s.Documents {
+		uris = append(uris, uri)
+	}
+	sort.Strings(uris)
+	snapshot := FiveMContractSnapshot{}
+	eventSources, eventTargets := []FiveMContractSymbol{}, []FiveMContractSymbol{}
+	convarSources, convarTargets := []FiveMContractSymbol{}, []FiveMContractSymbol{}
+	nuiRoots := make(map[string]bool)
+	for _, uri := range uris {
+		doc := s.Documents[uri]
+		if doc == nil {
+			continue
+		}
+		events := fiveMEventContractSymbols(doc)
+		snapshot.Symbols = append(snapshot.Symbols, events...)
+		for _, symbol := range events {
+			if symbol.Direction == FiveMContractLuaToHost {
+				eventSources = append(eventSources, symbol)
+			} else {
+				eventTargets = append(eventTargets, symbol)
+			}
+		}
+		exports := fiveMExportContractSymbols(doc)
+		snapshot.Symbols = append(snapshot.Symbols, exports...)
+		convars := fiveMConvarContractSymbols(doc)
+		snapshot.Symbols = append(snapshot.Symbols, convars...)
+		for _, symbol := range convars {
+			if symbol.Direction == FiveMContractLuaToHost {
+				convarSources = append(convarSources, symbol)
+			} else {
+				convarTargets = append(convarTargets, symbol)
+			}
+		}
+		if doc.IsFiveMManifest {
+			if resource := s.parseFiveMManifest(doc); resource != nil && resource.Manifest != nil {
+				for _, entry := range resource.Manifest.Entries {
+					snapshot.Manifests = append(snapshot.Manifests, FiveMContractManifest{Name: entry.NormalizedName, Value: entry.Value, Location: FiveMContractLocation{URI: entry.SourceURI, Range: entry.ValueRange}})
+				}
+			}
+		}
+		if root := s.getDocResourceRoot(doc); root != "" && !nuiRoots[root] {
+			nuiRoots[root] = true
+			snapshot.Links = append(snapshot.Links, s.fiveMNUIContractLinks(doc)...)
+		}
+	}
+	snapshot.Links = append(snapshot.Links, linkFiveMContractSymbols(eventSources, eventTargets, FiveMContractConfidenceHigh)...)
+	snapshot.Links = append(snapshot.Links, linkFiveMContractSymbols(convarSources, convarTargets, FiveMContractConfidenceHigh)...)
+	sort.Slice(snapshot.Symbols, func(i, j int) bool { return fiveMContractSymbolLess(snapshot.Symbols[i], snapshot.Symbols[j]) })
+	sort.Slice(snapshot.Links, func(i, j int) bool {
+		left, right := snapshot.Links[i], snapshot.Links[j]
+		if fiveMContractSymbolLess(left.From, right.From) {
+			return true
+		}
+		if fiveMContractSymbolLess(right.From, left.From) {
+			return false
+		}
+		if fiveMContractSymbolLess(left.To, right.To) {
+			return true
+		}
+		if fiveMContractSymbolLess(right.To, left.To) {
+			return false
+		}
+		return left.Confidence < right.Confidence
+	})
+	sort.Slice(snapshot.Manifests, func(i, j int) bool {
+		left, right := snapshot.Manifests[i], snapshot.Manifests[j]
+		if left.Location.URI != right.Location.URI {
+			return left.Location.URI < right.Location.URI
+		}
+		if left.Location.Range.Start.Line != right.Location.Range.Start.Line {
+			return left.Location.Range.Start.Line < right.Location.Range.Start.Line
+		}
+		if left.Location.Range.Start.Character != right.Location.Range.Start.Character {
+			return left.Location.Range.Start.Character < right.Location.Range.Start.Character
+		}
+		if left.Name != right.Name {
+			return left.Name < right.Name
+		}
+		return left.Value < right.Value
+	})
+	return snapshot
+}
+
+func fiveMContractSymbolLess(left, right FiveMContractSymbol) bool {
+	if left.Location.URI != right.Location.URI {
+		return left.Location.URI < right.Location.URI
+	}
+	if left.Location.Range.Start.Line != right.Location.Range.Start.Line {
+		return left.Location.Range.Start.Line < right.Location.Range.Start.Line
+	}
+	if left.Location.Range.Start.Character != right.Location.Range.Start.Character {
+		return left.Location.Range.Start.Character < right.Location.Range.Start.Character
+	}
+	if left.Kind != right.Kind {
+		return left.Kind < right.Kind
+	}
+	if left.Name != right.Name {
+		return left.Name < right.Name
+	}
+	return left.Direction < right.Direction
 }
 
 // MCPDiagnostics computes diagnostics for one indexed document and returns

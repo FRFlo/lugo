@@ -29,6 +29,10 @@ type server struct {
 	workspace *lsp.Server
 	root      string
 
+	// workspaceMu protects direct reads of LSP workspace maps while reindexing
+	// replaces the index. The LSP serializes requests internally, but summary
+	// reads those maps directly.
+	workspaceMu sync.RWMutex
 	freshnessMu sync.Mutex
 	freshness   workspaceFreshness
 }
@@ -79,6 +83,32 @@ type symbolContextArgs struct {
 	Character int    `json:"character"`
 }
 
+type fiveMContractOutput struct {
+	Symbols   []fiveMContractSymbolOutput   `json:"symbols"`
+	Links     []fiveMContractLinkOutput     `json:"links"`
+	Manifests []fiveMContractManifestOutput `json:"manifests"`
+}
+
+type fiveMContractSymbolOutput struct {
+	Name      string       `json:"name"`
+	Kind      string       `json:"kind"`
+	Location  lsp.Location `json:"location"`
+	Profile   string       `json:"profile"`
+	Direction string       `json:"direction"`
+}
+
+type fiveMContractLinkOutput struct {
+	From       fiveMContractSymbolOutput `json:"from"`
+	To         fiveMContractSymbolOutput `json:"to"`
+	Confidence string                    `json:"confidence"`
+}
+
+type fiveMContractManifestOutput struct {
+	Name     string       `json:"name"`
+	Value    string       `json:"value"`
+	Location lsp.Location `json:"location"`
+}
+
 type workspaceEditArgs struct {
 	Edits        []workspaceFileEdits      `json:"edits"`
 	Changes      map[string][]lsp.TextEdit `json:"changes,omitempty"`
@@ -91,6 +121,12 @@ type workspaceFileEdits struct {
 	ExpectedHash string         `json:"expectedHash,omitempty"`
 	Hash         string         `json:"hash,omitempty"`
 	Edits        []lsp.TextEdit `json:"edits"`
+}
+
+type locatedEdit struct {
+	newText    string
+	start, end int
+	index      int
 }
 
 func main() {
@@ -108,7 +144,10 @@ func main() {
 		log.Fatal(err)
 	}
 
-	s := &server{workspace: workspace, root: abs}
+	s, err := newServer(workspace, abs)
+	if err != nil {
+		log.Fatal(err)
+	}
 	mcpServer := mcp.NewServer(&mcp.Implementation{Name: "lugo-mcp", Version: "0.1.0"}, nil)
 	s.registerTools(mcpServer)
 	s.registerResources(mcpServer)
@@ -202,6 +241,12 @@ func (s *server) registerTools(m *mcp.Server) {
 		InputSchema:  fivemListSchema,
 		OutputSchema: fivemOutputSchema,
 	}, s.fivemExports)
+	m.AddTool(&mcp.Tool{
+		Name:         "lugo_fivem_contracts",
+		Description:  "Return deterministic, read-only FiveM event, export, NUI, convar, and manifest contracts with source locations.",
+		InputSchema:  schema(`{"type":"object"}`),
+		OutputSchema: schema(`{"type":"object","required":["symbols","links","manifests"],"properties":{"symbols":{"type":"array","items":{"type":"object"}},"links":{"type":"array","items":{"type":"object"}},"manifests":{"type":"array","items":{"type":"object"}}}}`),
+	}, s.fivemContracts)
 	m.AddTool(&mcp.Tool{
 		Name:         "lugo_validate_workspace_edit",
 		Description:  "Validate a proposed workspace edit without changing files. Checks workspace-relative paths, source hashes, ranges, and overlaps.",
@@ -409,7 +454,9 @@ func (s *server) diagnostics(_ context.Context, req *mcp.CallToolRequest) (*mcp.
 	if err != nil {
 		return nil, err
 	}
+	s.workspaceMu.RLock()
 	result, err := s.workspace.MCPDiagnostics(s.workspace.MCPDocumentURI(path))
+	s.workspaceMu.RUnlock()
 	if err != nil {
 		return nil, err
 	}
@@ -435,7 +482,10 @@ func (s *server) reindex(_ context.Context, req *mcp.CallToolRequest) (*mcp.Call
 	// The LSP workspace currently exposes an atomic workspace refresh. Keep the
 	// requested paths in the response so clients can use the same contract for
 	// selective refreshes without making this operation mutate source files.
-	if _, err := s.workspace.MCPRequest("lugo/reindex", json.RawMessage(`{}`)); err != nil {
+	s.workspaceMu.Lock()
+	_, err := s.workspace.MCPRequest("lugo/reindex", json.RawMessage(`{}`))
+	s.workspaceMu.Unlock()
+	if err != nil {
 		return nil, err
 	}
 	freshness, err := s.captureFreshness()
@@ -627,7 +677,13 @@ func (s *server) fivemEvents(_ context.Context, req *mcp.CallToolRequest) (*mcp.
 		}
 	}
 	sort.Slice(result, func(i, j int) bool {
-		return result[i]["resource"].(string)+result[i]["name"].(string) < result[j]["resource"].(string)+result[j]["name"].(string)
+		for _, key := range []string{"resource", "name", "kind", "uri"} {
+			left, right := fmt.Sprint(result[i][key]), fmt.Sprint(result[j][key])
+			if left != right {
+				return left < right
+			}
+		}
+		return false
 	})
 	data, err := marshalFivemList(result, args, func(item map[string]any) map[string]any {
 		return map[string]any{"resource": item["resource"], "name": item["name"], "kind": item["kind"]}
@@ -636,6 +692,46 @@ func (s *server) fivemEvents(_ context.Context, req *mcp.CallToolRequest) (*mcp.
 		return nil, err
 	}
 	return structuredResult(string(data)), nil
+}
+
+func (s *server) fivemContracts(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	snapshot := s.workspace.MCPFiveMContracts()
+	result := fiveMContractOutput{
+		Symbols:   make([]fiveMContractSymbolOutput, len(snapshot.Symbols)),
+		Links:     make([]fiveMContractLinkOutput, len(snapshot.Links)),
+		Manifests: make([]fiveMContractManifestOutput, len(snapshot.Manifests)),
+	}
+	for i, symbol := range snapshot.Symbols {
+		result.Symbols[i] = contractSymbolOutput(symbol)
+	}
+	for i, link := range snapshot.Links {
+		result.Links[i] = fiveMContractLinkOutput{From: contractSymbolOutput(link.From), To: contractSymbolOutput(link.To), Confidence: contractConfidence(link.Confidence)}
+	}
+	for i, manifest := range snapshot.Manifests {
+		result.Manifests[i] = fiveMContractManifestOutput{Name: manifest.Name, Value: manifest.Value, Location: lsp.Location{URI: manifest.Location.URI, Range: manifest.Location.Range}}
+	}
+	data, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return structuredResult(string(data)), nil
+}
+
+func contractSymbolOutput(symbol lsp.FiveMContractSymbol) fiveMContractSymbolOutput {
+	return fiveMContractSymbolOutput{Name: symbol.Name, Kind: string(symbol.Kind), Location: lsp.Location{URI: symbol.Location.URI, Range: symbol.Location.Range}, Profile: symbol.Profile.String(), Direction: string(symbol.Direction)}
+}
+
+func contractConfidence(confidence lsp.FiveMContractConfidence) string {
+	switch confidence {
+	case lsp.FiveMContractConfidenceLow:
+		return "low"
+	case lsp.FiveMContractConfidenceMedium:
+		return "medium"
+	case lsp.FiveMContractConfidenceHigh:
+		return "high"
+	default:
+		return "unknown"
+	}
 }
 
 func (s *server) fivemExports(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -704,17 +800,33 @@ func marshalFivemList(items []map[string]any, args fivemArgs, compact func(map[s
 	}, "", "  ")
 }
 
+// newServer records the source revision that was indexed by NewMCPWorkspace.
+// Status queries must never establish the indexed revision: by then files may
+// already have changed on disk.
+func newServer(workspace *lsp.Server, root string) (*server, error) {
+	s := &server{workspace: workspace, root: root}
+	if _, err := s.captureFreshness(); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
 func (s *server) currentFreshness() (workspaceFreshness, error) {
-	s.freshnessMu.Lock()
-	defer s.freshnessMu.Unlock()
+	// Hashing walks and reads workspace files, so do it before taking the
+	// freshness mutex. This keeps status snapshots responsive during slow I/O.
 	current, err := workspaceSourceHash(s.root)
 	if err != nil {
 		return workspaceFreshness{}, err
 	}
+	s.freshnessMu.Lock()
 	if s.freshness.IndexedAt == "" {
-		s.freshness = workspaceFreshness{Revision: current, SourceHash: current, IndexedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+		// Keep direct server construction backward compatible for embedders. The
+		// command path always uses newServer, which captures at creation time.
+		s.freshness = workspaceFreshness{Revision: current, IndexedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 	}
-	return workspaceFreshness{Revision: s.freshness.Revision, SourceHash: current, IndexedAt: s.freshness.IndexedAt}, nil
+	indexed := s.freshness
+	s.freshnessMu.Unlock()
+	return workspaceFreshness{Revision: indexed.Revision, SourceHash: current, IndexedAt: indexed.IndexedAt}, nil
 }
 
 func (s *server) captureFreshness() (workspaceFreshness, error) {
@@ -759,6 +871,8 @@ func workspaceSourceHash(root string) (string, error) {
 }
 
 func (s *server) summary() (map[string]any, error) {
+	s.workspaceMu.RLock()
+	defer s.workspaceMu.RUnlock()
 	documents := make([]string, 0, len(s.workspace.Documents))
 	for uri := range s.workspace.Documents {
 		documents = append(documents, uri)
@@ -820,13 +934,8 @@ func (s *server) validateAdvancedURI(value string) error {
 	if len(path) >= 3 && path[0] == filepath.Separator && path[2] == ':' {
 		path = path[1:]
 	}
-	path, err = filepath.Abs(path)
-	if err != nil {
-		return fmt.Errorf("unsafe path parameter: %w", err)
-	}
-	rel, err := filepath.Rel(s.root, filepath.Clean(path))
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("path escapes workspace root")
+	if _, err := s.confinedPath(path); err != nil {
+		return err
 	}
 	return nil
 }
@@ -835,12 +944,33 @@ func (s *server) safePath(name string) (string, error) {
 	if filepath.IsAbs(name) || strings.TrimSpace(name) == "" {
 		return "", fmt.Errorf("path must be a non-empty workspace-relative path")
 	}
-	path := filepath.Join(s.root, filepath.Clean(name))
-	rel, err := filepath.Rel(s.root, path)
+	return s.confinedPath(filepath.Join(s.root, filepath.Clean(name)))
+}
+
+// confinedPath resolves both the workspace root and target before comparing
+// them. Lexical checks alone permit a workspace symlink to point outside it.
+func (s *server) confinedPath(path string) (string, error) {
+	root, err := filepath.EvalSymlinks(s.root)
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve workspace root: %w", err)
+	}
+	root, err = filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve workspace root: %w", err)
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve path in workspace: %w", err)
+	}
+	resolved, err = filepath.Abs(resolved)
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve path in workspace: %w", err)
+	}
+	rel, err := filepath.Rel(root, resolved)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("path escapes workspace root")
 	}
-	return path, nil
+	return resolved, nil
 }
 
 // validateEdits is deliberately read-only. It validates and applies proposed
@@ -889,44 +1019,42 @@ func (s *server) validateEdits(_ context.Context, req *mcp.CallToolRequest) (*mc
 		if expected == "" {
 			expected = file.Hash
 		}
-		if expected != "" && expected != hash {
+		if expected == "" {
+			errorsFound = append(errorsFound, fmt.Sprintf("%s: source hash is required for preview", file.Path))
+			continue
+		}
+		if expected != hash {
 			errorsFound = append(errorsFound, fmt.Sprintf("%s: source is stale (expected hash %s, current hash %s)", file.Path, expected, hash))
 			continue
 		}
-		type locatedEdit struct {
-			edit       lsp.TextEdit
-			start, end int
+		positions := make([]lsp.Position, 0, len(file.Edits)*2)
+		for _, edit := range file.Edits {
+			positions = append(positions, edit.Range.Start, edit.Range.End)
+		}
+		offsets, err := sourceOffsets(source, positions)
+		if err != nil {
+			errorsFound = append(errorsFound, fmt.Sprintf("%s: invalid edit range: %v", file.Path, err))
+			continue
 		}
 		located := make([]locatedEdit, 0, len(file.Edits))
-		for _, edit := range file.Edits {
-			start, startErr := sourceOffset(source, edit.Range.Start)
-			end, endErr := sourceOffset(source, edit.Range.End)
-			if startErr != nil || endErr != nil {
-				errText := startErr
-				if errText == nil {
-					errText = endErr
-				}
-				errorsFound = append(errorsFound, fmt.Sprintf("%s: invalid edit range: %v", file.Path, errText))
-				located = nil
-				break
-			}
+		for i, edit := range file.Edits {
+			start, end := offsets[i*2], offsets[i*2+1]
 			if end < start {
 				errorsFound = append(errorsFound, fmt.Sprintf("%s: edit range ends before it starts", file.Path))
 				located = nil
 				break
 			}
-			located = append(located, locatedEdit{edit: edit, start: start, end: end})
+			located = append(located, locatedEdit{newText: edit.NewText, start: start, end: end, index: i})
 		}
-		if located == nil && len(file.Edits) != 0 {
+		if located == nil {
 			continue
 		}
-		for i := 0; i < len(located); i++ {
-			for j := i + 1; j < len(located); j++ {
-				if located[j].start < located[i].start {
-					located[i], located[j] = located[j], located[i]
-				}
+		sort.Slice(located, func(i, j int) bool {
+			if located[i].start != located[j].start {
+				return located[i].start < located[j].start
 			}
-		}
+			return located[i].index < located[j].index
+		})
 		for i := 1; i < len(located); i++ {
 			if located[i].start < located[i-1].end {
 				errorsFound = append(errorsFound, fmt.Sprintf("%s: overlapping edits", file.Path))
@@ -937,11 +1065,7 @@ func (s *server) validateEdits(_ context.Context, req *mcp.CallToolRequest) (*mc
 		if located == nil {
 			continue
 		}
-		preview := append([]byte(nil), source...)
-		for i := len(located) - 1; i >= 0; i-- {
-			e := located[i]
-			preview = append(preview[:e.start], append([]byte(e.edit.NewText), preview[e.end:]...)...)
-		}
+		preview := renderEdits(source, located)
 		entry["valid"] = true
 		entry["preview"] = string(preview)
 		entry["editCount"] = len(located)
@@ -961,41 +1085,72 @@ func sourceHash(source []byte) string {
 	return hex.EncodeToString(hash[:])
 }
 
-func sourceOffset(source []byte, position lsp.Position) (int, error) {
-	line := uint32(0)
-	start := 0
-	for start < len(source) && line < position.Line {
-		if source[start] == '\n' {
-			line++
+func sourceOffsets(source []byte, positions []lsp.Position) ([]int, error) {
+	lineStarts := []int{0}
+	for offset, b := range source {
+		if b == '\n' {
+			lineStarts = append(lineStarts, offset+1)
 		}
-		start++
 	}
-	if line != position.Line {
-		return 0, fmt.Errorf("line %d is outside source", position.Line)
+	type requestedOffset struct {
+		position lsp.Position
+		index    int
 	}
-	end := start
-	for end < len(source) && source[end] != '\n' {
-		end++
+	requested := make([]requestedOffset, len(positions))
+	for i, position := range positions {
+		if int(position.Line) >= len(lineStarts) {
+			return nil, fmt.Errorf("line %d is outside source", position.Line)
+		}
+		requested[i] = requestedOffset{position: position, index: i}
 	}
+	sort.Slice(requested, func(i, j int) bool {
+		if requested[i].position.Line != requested[j].position.Line {
+			return requested[i].position.Line < requested[j].position.Line
+		}
+		return requested[i].position.Character < requested[j].position.Character
+	})
+	offsets := make([]int, len(positions))
+	line := uint32(^uint32(0))
+	offset := 0
 	units := uint32(0)
-	for offset := start; offset < end; {
-		runeValue, size := utf8.DecodeRune(source[offset:end])
-		if runeValue == utf8.RuneError && size == 1 {
-			return 0, fmt.Errorf("invalid UTF-8 source")
+	for _, request := range requested {
+		if request.position.Line != line {
+			line = request.position.Line
+			offset = lineStarts[line]
+			units = 0
 		}
-		if units == position.Character {
-			return offset, nil
-		}
-		units += 1
-		if runeValue > 0xffff {
+		for offset < len(source) && source[offset] != '\n' && units < request.position.Character {
+			runeValue, size := utf8.DecodeRune(source[offset:])
+			if runeValue == utf8.RuneError && size == 1 {
+				return nil, fmt.Errorf("invalid UTF-8 source")
+			}
 			units++
+			if runeValue > 0xffff {
+				units++
+			}
+			offset += size
 		}
-		offset += size
+		if units != request.position.Character {
+			return nil, fmt.Errorf("character %d is outside line %d", request.position.Character, request.position.Line)
+		}
+		offsets[request.index] = offset
 	}
-	if units == position.Character {
-		return end, nil
+	return offsets, nil
+}
+
+func renderEdits(source []byte, edits []locatedEdit) []byte {
+	size := len(source)
+	for _, edit := range edits {
+		size += len(edit.newText) - (edit.end - edit.start)
 	}
-	return 0, fmt.Errorf("character %d is outside line %d", position.Character, position.Line)
+	preview := make([]byte, 0, size)
+	last := 0
+	for _, edit := range edits {
+		preview = append(preview, source[last:edit.start]...)
+		preview = append(preview, edit.newText...)
+		last = edit.end
+	}
+	return append(preview, source[last:]...)
 }
 
 func textResult(text string) *mcp.CallToolResult {

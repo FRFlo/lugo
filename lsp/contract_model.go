@@ -1,5 +1,23 @@
 package lsp
 
+// FiveMContractSnapshot is a read-only view of literal FiveM runtime
+// surfaces. It intentionally does not participate in diagnostics or resolver
+// state.
+type FiveMContractSnapshot struct {
+	Symbols   []FiveMContractSymbol
+	Links     []FiveMContractLink
+	Manifests []FiveMContractManifest
+}
+
+// FiveMContractManifest is a literal manifest declaration retained alongside
+// contracts because manifests configure the runtime surface without being a
+// Lua symbol themselves.
+type FiveMContractManifest struct {
+	Name     string
+	Value    string
+	Location FiveMContractLocation
+}
+
 // FiveMContractKind identifies the runtime surface represented by a contract.
 type FiveMContractKind string
 

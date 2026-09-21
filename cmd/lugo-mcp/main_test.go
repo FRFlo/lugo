@@ -73,6 +73,20 @@ func TestMCPToolsOverInMemoryTransport(t *testing.T) {
 	}
 }
 
+func TestSafePathRejectsSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "outside.lua"), []byte("return 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, err := (&server{root: root}).safePath("escape/outside.lua"); err == nil {
+		t.Fatal("symlinked path unexpectedly accepted")
+	}
+}
+
 func newTestWorkspace(root string) (*lsp.Server, error) {
 	return lsp.NewMCPWorkspace(root)
 }

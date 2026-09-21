@@ -51,7 +51,7 @@ func TestMCPInMemoryTransportCoversRegisteredSurface(t *testing.T) {
 		"lugo_code_lens": true, "lugo_document_links": true, "lugo_prepare_call_hierarchy": true,
 		"lugo_diagnostics": true, "lugo_lsp_request_advanced": true, "lugo_workspace": true,
 		"lugo_symbol_context": true, "lugo_workspace_status": true, "lugo_fivem_resources": true,
-		"lugo_fivem_events": true, "lugo_fivem_exports": true, "lugo_validate_workspace_edit": true,
+		"lugo_fivem_events": true, "lugo_fivem_exports": true, "lugo_fivem_contracts": true, "lugo_validate_workspace_edit": true,
 		"lugo_preview_workspace_edit": true, "lugo_reindex": true,
 	}
 	gotTools := map[string]bool{}
@@ -152,6 +152,81 @@ func TestMCPInMemoryTransportCoversRegisteredSurface(t *testing.T) {
 	prompt, err := session.GetPrompt(ctx, &mcp.GetPromptParams{Name: "lugo_fivem_review", Arguments: map[string]string{"path": "main.lua"}})
 	if err != nil || len(prompt.Messages) != 1 || !strings.Contains(prompt.Messages[0].Content.(*mcp.TextContent).Text, "lugo_diagnostics") {
 		t.Fatalf("prompt = %+v, err = %v", prompt, err)
+	}
+}
+
+func TestMCPFiveMContractsReturnsDeterministicStructuredConsumerResult(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"fxmanifest.lua": "fx_version 'cerulean'\ngame 'gta5'\nclient_script 'client.lua'\nserver_script 'server.lua'\nui_page 'web/index.html'\nfiles { 'web/app.js' }\nexport 'manifest_ping'\nserver_export 'manifest_server_ping'\n",
+		"client.lua":     "RegisterNetEvent('weather:update')\nTriggerServerEvent('weather:request')\nexports('client_ping', function() end)\nRegisterNUICallback('save', function() end)\nSendNUIMessage({ action = 'open_menu' })\nSetConvar('weather_mode', 'rain')\nGetConvar('weather_mode', 'clear')\n",
+		"server.lua":     "RegisterNetEvent('weather:request')\nTriggerClientEvent('weather:update', -1)\nexports('server_ping', function() end)\n",
+		"web/index.html": "<script src=\"app.js\"></script>\n",
+		"web/app.js":     "fetch('https://resource/save'); window.addEventListener('message', e => e.data.action === 'open_menu');\n",
+	}
+	for name, source := range files {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(source), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	workspace, err := newTestWorkspace(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	impl := mcp.NewServer(&mcp.Implementation{Name: "lugo-mcp-contracts", Version: "1"}, nil)
+	s := &server{workspace: workspace, root: root}
+	s.registerTools(impl)
+	ctx := context.Background()
+	t1, t2 := mcp.NewInMemoryTransports()
+	if _, err := impl.Connect(ctx, t1, nil); err != nil {
+		t.Fatal(err)
+	}
+	session, err := mcp.NewClient(&mcp.Implementation{Name: "consumer", Version: "1"}, nil).Connect(ctx, t2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "lugo_fivem_contracts", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	structured, err := json.Marshal(result.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Symbols   []struct{ Name, Kind string } `json:"symbols"`
+		Links     []struct{ Confidence string } `json:"links"`
+		Manifests []struct {
+			Name, Value string
+		} `json:"manifests"`
+	}
+	if err := json.Unmarshal(structured, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Symbols) == 0 || len(got.Links) == 0 || len(got.Manifests) == 0 {
+		t.Fatalf("contracts = %s, want symbols, links, and manifests", structured)
+	}
+	if !strings.Contains(string(structured), `"weather:update"`) || !strings.Contains(string(structured), `"client_ping"`) || !strings.Contains(string(structured), `"open_menu"`) || !strings.Contains(string(structured), `"weather_mode"`) || !strings.Contains(string(structured), `"ui_page"`) {
+		t.Fatalf("contracts omitted a FiveM surface: %s", structured)
+	}
+	if got.Links[0].Confidence != "high" {
+		t.Fatalf("link confidence = %q, want high", got.Links[0].Confidence)
+	}
+	second, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "lugo_fivem_contracts", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondStructured, err := json.Marshal(second.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(structured) != string(secondStructured) {
+		t.Fatalf("contract output is not deterministic:\nfirst: %s\nsecond: %s", structured, secondStructured)
 	}
 }
 
