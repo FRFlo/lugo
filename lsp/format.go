@@ -3,6 +3,7 @@ package lsp
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/coalaura/lugo/lexer"
@@ -13,6 +14,19 @@ type Formatter struct {
 	IndentSize  int
 	UseTabs     bool
 	Opinionated bool
+}
+
+const (
+	minFormatTabSize = 1
+	maxFormatTabSize = 16
+)
+
+func validateFormattingOptions(options FormattingOptions) error {
+	if options.TabSize < minFormatTabSize || options.TabSize > maxFormatTabSize {
+		return fmt.Errorf("tabSize must be between %d and %d", minFormatTabSize, maxFormatTabSize)
+	}
+
+	return nil
 }
 
 const (
@@ -58,6 +72,10 @@ func (s *Server) formatDocument(uri string, options FormattingOptions, formatRan
 
 	start := time.Now()
 
+	if validateFormattingOptions(options) != nil {
+		return nil
+	}
+
 	formatter := NewFormatter(options.TabSize, !options.InsertSpaces, s.FormatOpinionated)
 
 	edits := formatter.Format(doc, formatRange)
@@ -81,6 +99,11 @@ func (s *Server) handleFormatting(req Request) {
 		return
 	}
 
+	if err := validateFormattingOptions(params.Options); err != nil {
+		WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Error: ResponseError{Code: -32602, Message: err.Error()}})
+		return
+	}
+
 	changes := s.formatDocument(s.normalizeURI(params.TextDocument.URI), params.Options, nil)
 
 	WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: changes})
@@ -97,6 +120,11 @@ func (s *Server) handleRangeFormatting(req Request) {
 
 	err := json.Unmarshal(req.Params, &params)
 	if err != nil {
+		return
+	}
+
+	if err := validateFormattingOptions(params.Options); err != nil {
+		WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Error: ResponseError{Code: -32602, Message: err.Error()}})
 		return
 	}
 

@@ -6,41 +6,57 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
 )
 
 var contentLengthPrefix = []byte("Content-Length: ")
 
+const maxMessageSize = 100 * 1024 * 1024
+
 // ReadMessage reads a JSON-RPC message from a buffered reader.
 // It parses the Content-Length header and returns the raw message body.
 func ReadMessage(r *bufio.Reader) ([]byte, error) {
-	var length int
+	var length uint64
+	var foundLength bool
 
 	for {
-		line, err := r.ReadBytes('\n')
+		line, err := r.ReadSlice('\n')
+		if err == bufio.ErrBufferFull {
+			return nil, fmt.Errorf("header line too long")
+		}
 		if err != nil {
 			return nil, err
 		}
 
-		if len(line) <= 2 && line[0] == '\r' {
+		if bytes.Equal(line, []byte("\r\n")) || bytes.Equal(line, []byte("\n")) {
 			break
 		}
 
 		if bytes.HasPrefix(line, contentLengthPrefix) {
 			valBytes := bytes.TrimSpace(line[len(contentLengthPrefix):])
-
+			if len(valBytes) == 0 {
+				return nil, fmt.Errorf("invalid content length")
+			}
 			for _, b := range valBytes {
-				if b >= '0' && b <= '9' {
-					length = length*10 + int(b-'0')
+				if b < '0' || b > '9' {
+					return nil, fmt.Errorf("invalid content length")
 				}
 			}
+
+			parsed, err := strconv.ParseUint(string(valBytes), 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("invalid content length: %w", err)
+			}
+			length = parsed
+			foundLength = true
 		}
 	}
 
-	if length == 0 {
+	if !foundLength || length == 0 {
 		return nil, fmt.Errorf("missing content length")
 	}
 
-	if length > 100*1024*1024 { // 100MB hard limit
+	if length > maxMessageSize { // 100MB hard limit
 		return nil, fmt.Errorf("message too large: %d bytes", length)
 	}
 
