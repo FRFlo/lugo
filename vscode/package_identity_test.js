@@ -48,10 +48,10 @@ test('exposes every FiveM diagnostic and adapter option', () => {
 });
 
 test('uses the canonical Lugo package and repository identity', () => {
-  assert.equal(manifest.name, 'lugo-vscode');
+  assert.equal(manifest.name, 'lugo-vscode-fivem-enhanced');
   assert.equal(manifest.publisher, 'FRFlo');
   assert.equal(manifest.repository.url, 'https://github.com/FRFlo/lugo.git');
-  assert.equal(`${manifest.publisher}.${manifest.name}`, 'FRFlo.lugo-vscode');
+  assert.equal(`${manifest.publisher}.${manifest.name}`, 'FRFlo.lugo-vscode-fivem-enhanced');
 });
 
 function test(name, fn) {

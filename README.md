@@ -6,7 +6,7 @@ A ridiculously fast, zero-allocation Lua 5.4 parser and Language Server (LSP) wr
 
 Lugo is built from the ground up for maximum performance. By iterating over source code using a flat-array/arena architecture (`[]Node`) and storing only byte offsets, it heavily eliminates pointer allocations, heap strings and garbage collection pressure.
 
-[**Install from the VS Code Marketplace**](https://marketplace.visualstudio.com/items?itemName=FRFlo.lugo-vscode)
+[**Install from the VS Code Marketplace**](https://marketplace.visualstudio.com/items?itemName=FRFlo.lugo-vscode-fivem-enhanced)
 
 ## Why Lugo?
 
@@ -135,7 +135,7 @@ MCP requests are constrained to the workspace root and reject traversal, unsafe 
 ## Installation
 
 ### VS Code
-Simply install the extension from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=FRFlo.lugo-vscode). The extension automatically detects your OS and architecture and runs the correct bundled Go binary. No external dependencies are required.
+Simply install the extension from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=FRFlo.lugo-vscode-fivem-enhanced). The extension automatically detects your OS and architecture and runs the correct bundled Go binary. No external dependencies are required.
 
 ### Other Editors (Neovim, Helix, etc.)
 Lugo is entirely editor-agnostic and communicates using standard JSON-RPC over `stdio`. You can download the standalone LSP binaries for Windows, Linux and macOS from the [GitHub Releases](https://github.com/FRFlo/lugo/releases) page.

@@ -3,7 +3,7 @@
   "configVersion": 0,
   "workspaces": {
     "": {
-      "name": "lugo-vscode",
+      "name": "lugo-vscode-fivem-enhanced",
       "dependencies": {
         "posthog-node": "^5.52.5",
         "vscode-languageclient": "^10.1.1",
