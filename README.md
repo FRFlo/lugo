@@ -86,6 +86,39 @@ This fork is dedicated to FiveM support. Lugo activates FiveM metadata for files
 * **Callable proxies & bridge metadata:** Imported exports and bridge callback values stay table-shaped, but Lugo still provides hover and signature help for their callable proxy surface.
 * **Native helpers:** Client and server native helper docs are selected automatically from manifest metadata such as `fx_version`, `game`, `resource_manifest_version` and `use_experimental_fxv2_oal`. There is no separate FiveM setting for native bundle selection.
 
+## Repository quality gates
+
+Run the same checks used by CI with the quality-gate script:
+
+```bash
+bash ./scripts/quality-gate.sh format     # gofmt and whitespace/diff checks
+bash ./scripts/quality-gate.sh coverage   # package tests with coverage
+bash ./scripts/quality-gate.sh benchmark  # lexer/parser benchmark + zero allocations
+bash ./scripts/quality-gate.sh all
+```
+
+The lexer and parser benchmarks must continue to report `0 allocs/op`.
+
+## MCP server
+
+`lugo-mcp` exposes the indexed workspace over MCP (stdio), using one process per workspace:
+
+```bash
+lugo-mcp /path/to/project
+```
+
+The server registers read-only LSP tools such as `lugo_hover`, `lugo_completion`, `lugo_definition`, `lugo_references`, `lugo_document_symbols`, `lugo_workspace_symbols`, `lugo_format`, `lugo_range_format`, `lugo_diagnostics`, and `lugo_semantic_tokens`. Higher-level tools include `lugo_workspace`, `lugo_workspace_status`, `lugo_symbol_context`, `lugo_fivem_resources`, `lugo_fivem_events`, `lugo_fivem_exports`, and `lugo_reindex`. `lugo_validate_workspace_edit` and `lugo_preview_workspace_edit` validate or preview edits only; they never write files.
+
+`lugo_lsp_request_advanced` is restricted to the supported read-only methods: `textDocument/hover`, `textDocument/completion`, `textDocument/signatureHelp`, `textDocument/definition`, `textDocument/typeDefinition`, `textDocument/implementation`, `textDocument/references`, `textDocument/documentSymbol`, `workspace/symbol`, `textDocument/inlayHint`, `textDocument/semanticTokens/full`, `textDocument/foldingRange`, `textDocument/selectionRange`, `textDocument/codeLens`, `textDocument/documentLink`, and `textDocument/prepareCallHierarchy`.
+
+Resources are available at `lugo://workspace/summary`, with templates `lugo://workspace/document/{+path}` (plain Lua source) and `lugo://workspace/resource/{name}` (FiveM metadata). Tool paths are always workspace-relative and edit tools are preview-only. For example:
+
+```json
+{"name":"lugo_diagnostics","arguments":{"path":"client/main.lua"}}
+```
+
+A client can read `lugo://workspace/document/client/main.lua` before reviewing it. The `lugo_fivem_review` prompt takes a required workspace-relative `path` and directs clients to `lugo_diagnostics`, `lugo_hover`, `lugo_definition`, `lugo_references`, and `lugo_workspace`.
+
 ## Installation
 
 ### VS Code
@@ -100,6 +133,22 @@ Because Lugo does not rely on a generic wrapper, you must pass your settings dir
 You can easily add Lugo as a custom server in your Neovim environment. Since Lugo is standalone, you will need to pass the initialization options directly.
 
 See [**`example.init.lua`**](example.init.lua) for a complete setup snippet.
+
+## Optional FiveM runtime integration tier
+
+Static Go/Lua tests do not require FXServer and remain the default test tier. An optional smoke tier exercises a real resource manifest, server event, export, and (when available) NUI contract:
+
+```bash
+# Use an already running FXServer (the resource must be started there)
+FIVEM_RUNTIME_ENDPOINT=http://127.0.0.1:30120 \\
+  bash ./scripts/fivem-runtime-smoke.sh
+
+# Or start a configured server command. {resource} and {port} are replaced.
+FIVEM_SERVER_COMMAND='FXServer +exec server.cfg' \\
+  bash ./scripts/fivem-runtime-smoke.sh
+```
+
+With no configuration, or when the endpoint is unavailable, the script prints an explicit `SKIP` reason and exits successfully. It is never part of static `go test ./...`. Set `FIVEM_RUNTIME_REQUIRED=1` to make an unavailable configured runtime fail. `FIVEM_RUNTIME_RESOURCE`, `FIVEM_RUNTIME_PORT`, and `FIVEM_RUNTIME_SMOKE_URL` customize the deployment. The fixture is in `scripts/fixtures/fivem-runtime-smoke/`.
 
 ## CI/CD Pipeline Integration
 
