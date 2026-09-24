@@ -2,6 +2,7 @@ package lsp
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -71,16 +72,56 @@ func (s *Server) buildFiveMAssetInventoryDiagnostics(doc *Document) []Diagnostic
 		root = res.RootURI
 	}
 	paths := make([]string, 0)
-	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
-		if err != nil || entry.IsDir() {
+	failures := map[string]int{"permission": 0, "not_found": 0, "other": 0}
+	failureCount := 0
+	recordFailure := func(err error) {
+		class := "other"
+		if os.IsPermission(err) {
+			class = "permission"
+		} else if os.IsNotExist(err) {
+			class = "not_found"
+		}
+		failureCount++
+		failures[class]++
+	}
+	walkErr := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			recordFailure(err)
+			return nil
+		}
+		if entry.IsDir() {
 			return nil
 		}
 		rel, err := filepath.Rel(root, path)
-		if err == nil {
-			paths = append(paths, filepath.ToSlash(rel))
+		if err != nil {
+			recordFailure(err)
+			return nil
 		}
+		paths = append(paths, filepath.ToSlash(rel))
 		return nil
-	}); err != nil {
+	})
+	if walkErr != nil {
+		recordFailure(walkErr)
+	}
+	if failureCount > 0 {
+		// Counts are capped and error details/paths are deliberately excluded.
+		capCount := func(count int) int {
+			if count > 1000 {
+				return 1000
+			}
+			return count
+		}
+		RecordTelemetry(WithTraceContext(context.Background(), s.trace), "lugo.fivem.asset_inventory.filesystem_failure", map[string]any{
+			"failure_count":    capCount(failureCount),
+			"permission_count": capCount(failures["permission"]),
+			"not_found_count":  capCount(failures["not_found"]),
+			"other_count":      capCount(failures["other"]),
+			"degraded":         true,
+		})
+	}
+	// Preserve the old behavior on a root-level walk failure. Per-entry failures
+	// retain a partial inventory so diagnostics can still report useful results.
+	if walkErr != nil {
 		return nil
 	}
 	inventory := NewFiveMAssetInventory(paths)
@@ -277,6 +318,8 @@ func (s *Server) exportImplementations(res *FiveMResource, name string) []FiveML
 
 func (s *Server) publishWorkspaceDiagnostics() {
 	start := time.Now()
+	telemetryCtx := WithTraceContext(context.Background(), s.trace)
+	RecordTelemetry(telemetryCtx, "lugo.diagnostics_workspace.start", map[string]any{})
 	facts := s.beginWorkspaceDiagnosticFacts()
 	defer s.endWorkspaceDiagnosticFacts(facts)
 
@@ -312,7 +355,12 @@ func (s *Server) publishWorkspaceDiagnostics() {
 			}
 			nuiSeen[asset.uri] = true
 			assetDoc := &Document{Server: s, URI: asset.uri, Path: s.uriToPath(asset.uri), Tree: ast.NewTree(asset.src), FiveMProfile: resource.profile, FiveMProfileCached: true}
+			assetStarted := time.Now()
+			RecordTelemetry(telemetryCtx, "lugo.diagnostics_document.start", map[string]any{})
 			diags := s.buildFiveMNUIContractDiagnostics(assetDoc)
+			assetProperties := diagnosticTelemetryProperties(diags)
+			assetProperties["duration_ms"] = time.Since(assetStarted).Milliseconds()
+			RecordTelemetry(telemetryCtx, "lugo.diagnostics_document.finish", assetProperties)
 			if s.IsCI {
 				if len(diags) != 0 {
 					s.printCIDiagnostics(asset.uri, diags)
@@ -343,6 +391,47 @@ func (s *Server) publishWorkspaceDiagnostics() {
 	took := time.Since(start)
 
 	s.Log.Printf("Published diagnostics for %d files in %s\n", diagCount, took)
+	RecordTelemetry(telemetryCtx, "lugo.diagnostics_workspace.finish", map[string]any{
+		"duration_ms": took.Milliseconds(),
+		"documents":   diagCount,
+	})
+}
+
+// diagnosticTelemetryProperties reports aggregate, non-identifying diagnostic
+// metadata. It intentionally never includes diagnostic codes, messages, ranges,
+// or document information.
+func diagnosticTelemetryProperties(diags []Diagnostic) map[string]any {
+	properties := map[string]any{
+		"total":         len(diags),
+		"error_count":   0,
+		"warning_count": 0,
+		"info_count":    0,
+		"hint_count":    0,
+		"parse_count":   0,
+		"fivem_count":   0,
+		"lua_count":     0,
+	}
+	for _, diag := range diags {
+		switch diag.Severity {
+		case SeverityError:
+			properties["error_count"] = properties["error_count"].(int) + 1
+		case SeverityWarning:
+			properties["warning_count"] = properties["warning_count"].(int) + 1
+		case SeverityInformation:
+			properties["info_count"] = properties["info_count"].(int) + 1
+		case SeverityHint:
+			properties["hint_count"] = properties["hint_count"].(int) + 1
+		}
+		switch {
+		case diag.Code == "parse-error":
+			properties["parse_count"] = properties["parse_count"].(int) + 1
+		case strings.HasPrefix(diag.Code, "fivem-") || diag.Code == "unaccounted-file":
+			properties["fivem_count"] = properties["fivem_count"].(int) + 1
+		default:
+			properties["lua_count"] = properties["lua_count"].(int) + 1
+		}
+	}
+	return properties
 }
 
 func (s *Server) publishDiagnostics(uri string) {
@@ -364,6 +453,15 @@ func (s *Server) publishDiagnostics(uri string) {
 	if !ok || doc == nil {
 		return
 	}
+
+	started := time.Now()
+	telemetryCtx := WithTraceContext(context.Background(), s.trace)
+	RecordTelemetry(telemetryCtx, "lugo.diagnostics_document.start", map[string]any{})
+	defer func() {
+		properties := diagnosticTelemetryProperties(s.diagBuf)
+		properties["duration_ms"] = time.Since(started).Milliseconds()
+		RecordTelemetry(telemetryCtx, "lugo.diagnostics_document.finish", properties)
+	}()
 
 	emitDiagnostics := func(diags []Diagnostic) {
 		if s.IsCI {

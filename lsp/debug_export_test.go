@@ -1,10 +1,13 @@
 package lsp
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/FRFlo/lugo/ast"
@@ -175,6 +178,72 @@ func TestBuildDebugExportUsesDiskSourceForEvictedDocument(t *testing.T) {
 	}
 	if doc.Semantic == nil || !debugExportHasNodeRef(doc.Semantic.LocalDefs, "evictedName") {
 		t.Fatalf("semantic local defs = %+v, want evictedName from fallback source", doc.Semantic)
+	}
+}
+
+func TestDebugExportFailureIsSafeAndTelemetryIsRedacted(t *testing.T) {
+	oldTelemetry := globalTelemetry
+	t.Cleanup(func() { globalTelemetry = oldTelemetry })
+	journal := &traceJournal{max: 4096}
+	globalTelemetry = &Telemetry{Enabled: true, journal: journal}
+
+	var output bytes.Buffer
+	server := NewServer("test-version")
+	server.Writer = &output
+	server.MaxFileSize = 1
+	server.Documents["file:///private/token=secret.lua"] = &Document{
+		Server: server,
+		URI:    "file:///private/token=secret.lua",
+		Tree:   parseResolverLua(t, []byte("local name = true\n")),
+	}
+	server.handleDebugExport(Request{ID: 1, Params: json.RawMessage(`{}`)})
+
+	body, err := ReadMessage(bufio.NewReader(&output))
+	if err != nil {
+		t.Fatalf("ReadMessage() error = %v", err)
+	}
+	var response struct {
+		Error ResponseError `json:"error"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		t.Fatalf("response did not unmarshal: %v", err)
+	}
+	if response.Error.Message != "debug export failed" {
+		t.Fatalf("response error = %+v, want safe debug export failure", response.Error)
+	}
+	if bytes.Contains(body, []byte("private")) || bytes.Contains(body, []byte("secret")) {
+		t.Fatalf("response leaked internal failure details: %s", body)
+	}
+
+	journal.mu.Lock()
+	data := string(journal.entries[len(journal.entries)-1].Data)
+	journal.mu.Unlock()
+	if !strings.Contains(data, "lugo.debug_export.failure") || strings.Contains(data, "private") || strings.Contains(data, "secret") {
+		t.Fatalf("failure telemetry was missing or unsafe: %s", data)
+	}
+}
+
+func TestDebugExportRecordsOmittedSource(t *testing.T) {
+	oldTelemetry := globalTelemetry
+	t.Cleanup(func() { globalTelemetry = oldTelemetry })
+	journal := &traceJournal{max: 4096}
+	globalTelemetry = &Telemetry{Enabled: true, journal: journal}
+
+	server := NewServer("test-version")
+	server.Documents["file:///private/missing.lua"] = &Document{
+		Server: server,
+		URI:    "file:///private/missing.lua",
+		Path:   filepath.Join(t.TempDir(), "missing.lua"),
+	}
+	if _, err := server.buildDebugExport(DebugExportParams{}); err != nil {
+		t.Fatalf("buildDebugExport() error = %v", err)
+	}
+
+	journal.mu.Lock()
+	data := string(journal.entries[len(journal.entries)-1].Data)
+	journal.mu.Unlock()
+	if !strings.Contains(data, "lugo.debug_export.source_omitted") || strings.Contains(data, "missing.lua") {
+		t.Fatalf("source omission telemetry was missing or unsafe: %s", data)
 	}
 }
 

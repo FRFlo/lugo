@@ -1,6 +1,7 @@
 package lsp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -171,12 +172,13 @@ type debugExportGlobalSymbol struct {
 func (s *Server) handleDebugExport(req Request) {
 	var params DebugExportParams
 	if err := json.Unmarshal(req.Params, &params); err != nil {
+		recordDebugExportFailure("params", err)
 		WriteMessage(s.Writer, Response{
 			RPC: "2.0",
 			ID:  req.ID,
 			Error: ResponseError{
 				Code:    -32602,
-				Message: fmt.Sprintf("invalid debug export params: %v", err),
+				Message: "invalid debug export parameters",
 			},
 		})
 		return
@@ -184,12 +186,13 @@ func (s *Server) handleDebugExport(req Request) {
 
 	content, err := s.buildDebugExport(params)
 	if err != nil {
+		recordDebugExportFailure("build", err)
 		WriteMessage(s.Writer, Response{
 			RPC: "2.0",
 			ID:  req.ID,
 			Error: ResponseError{
 				Code:    -32603,
-				Message: err.Error(),
+				Message: "debug export failed",
 			},
 		})
 		return
@@ -222,12 +225,19 @@ func (s *Server) buildDebugExport(params DebugExportParams) (string, error) {
 		Documents: make([]debugExportDocument, 0, len(docs)),
 	}
 
+	omittedSources := 0
 	for _, doc := range docs {
-		source := debugExportDocumentSource(doc)
+		source, omitted := debugExportDocumentSource(doc)
+		if omitted {
+			omittedSources++
+		}
 		if s.MaxFileSize > 0 && int64(len(source)) > s.MaxFileSize {
 			return "", fmt.Errorf("document %s exceeds MaxFileSize (%d bytes)", doc.URI, s.MaxFileSize)
 		}
-		payload.Documents = append(payload.Documents, s.exportDebugDocument(doc, selected))
+		payload.Documents = append(payload.Documents, s.exportDebugDocument(doc, source, selected))
+	}
+	if omittedSources > 0 {
+		RecordTelemetry(context.Background(), "lugo.debug_export.source_omitted", map[string]any{"count": omittedSources})
 	}
 
 	if selected[debugExportCategoryGlobalIndex] {
@@ -296,8 +306,7 @@ func (s *Server) sortedDebugExportDocuments() []*Document {
 	return docs
 }
 
-func (s *Server) exportDebugDocument(doc *Document, selected map[string]bool) debugExportDocument {
-	source := debugExportDocumentSource(doc)
+func (s *Server) exportDebugDocument(doc *Document, source []byte, selected map[string]bool) debugExportDocument {
 	lineCount := 0
 	if doc.Tree != nil {
 		lineCount = len(doc.Tree.LineOffsets)
@@ -342,20 +351,20 @@ func (s *Server) exportDebugDocument(doc *Document, selected map[string]bool) de
 	return out
 }
 
-func debugExportDocumentSource(doc *Document) []byte {
+func debugExportDocumentSource(doc *Document) ([]byte, bool) {
 	if doc == nil {
-		return nil
+		return nil, true
 	}
 	if source := doc.Source(); len(source) > 0 {
-		return source
+		return source, false
 	}
 	if doc.Path == "" {
-		return nil
+		return doc.Source(), doc.Source() == nil
 	}
 
 	file, err := os.Open(doc.Path)
 	if err != nil {
-		return nil
+		return nil, true
 	}
 	defer file.Close()
 
@@ -367,9 +376,16 @@ func debugExportDocumentSource(doc *Document) []byte {
 	}
 	source, err := io.ReadAll(io.LimitReader(file, limit+1))
 	if err != nil || int64(len(source)) > limit {
-		return nil
+		return nil, true
 	}
-	return source
+	return source, false
+}
+
+func recordDebugExportFailure(stage string, err error) {
+	RecordTelemetry(context.Background(), "lugo.debug_export.failure", map[string]any{
+		"stage":      stage,
+		"error_type": fmt.Sprintf("%T", err),
+	})
 }
 
 func exportDebugTokens(source []byte, identifiersOnly bool) []debugExportToken {

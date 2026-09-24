@@ -1,10 +1,121 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const vscode = require("vscode");
 const { LanguageClient, ErrorAction, CloseAction } = require("vscode-languageclient/node");
 const { PostHog } = require("posthog-node");
 const { discoverResources, renderResource } = require("./fivem_resources");
+
+const DEFAULT_LIMIT = 50;
+const STORAGE_KEY = "lugo.telemetry.buffer.v1";
+const REDACTED = "[REDACTED]";
+const SECRET_KEY = /token|secret|password|authorization|cookie|apikey|api[_-]?key|source|contents?|text|args?|arguments?|path|uri|file/i;
+const PATH_VALUE = /(?:[A-Za-z]:[\\/]|(?:\\\\|\/)|\.\.\\|\/)[^\s]*/;
+
+function redact(value, key = "", depth = 0) {
+	if (depth > 6 || value === null || value === undefined) return value;
+	if (SECRET_KEY.test(key)) return REDACTED;
+	if (typeof value === "string") {
+		if (PATH_VALUE.test(value) || value.length > 512) return REDACTED;
+		return value;
+	}
+	if (typeof value === "number") return Number.isFinite(value) ? value : REDACTED;
+	if (typeof value === "boolean") return value;
+	if (Array.isArray(value)) return value.slice(0, 20).map(item => redact(item, key, depth + 1));
+	if (typeof value === "object") {
+		const result = {};
+		for (const [childKey, childValue] of Object.entries(value).slice(0, 40)) {
+			result[childKey] = redact(childValue, childKey, depth + 1);
+		}
+		return result;
+	}
+	return REDACTED;
+}
+
+// Error messages can contain document contents, paths, or command arguments.
+// Telemetry receives only a short, allowlisted error identity.
+function errorMetadata(error) {
+	const name = typeof error?.name === "string" && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(error.name) ? error.name : "Error";
+	const code = typeof error?.code === "string" && /^[A-Za-z0-9_-]{1,32}$/.test(error.code) ? error.code : undefined;
+	return code ? { error_type: name, error_code: code } : { error_type: name };
+}
+
+function elapsedMilliseconds(startedAt) {
+	return Math.max(0, Math.min(3_600_000, Date.now() - startedAt));
+}
+
+class Telemetry {
+	constructor({ posthog, distinctId, storage, enabled = true, limit = DEFAULT_LIMIT, now = () => Date.now(), id = () => crypto.randomUUID() }) {
+		this.posthog = posthog;
+		this.distinctId = distinctId || "anonymous";
+		this.storage = storage;
+		this.enabled = enabled;
+		this.limit = limit;
+		this.now = now;
+		this.id = id;
+		this.sessionId = id();
+		this.traceId = id();
+		this.spanId = id();
+		this.restartCount = 0;
+		this.buffer = this.#load();
+	}
+
+	#load() {
+		try {
+			const saved = this.storage?.get(STORAGE_KEY, []);
+			return Array.isArray(saved) ? saved.slice(-this.limit) : [];
+		} catch { return []; }
+	}
+
+	#persist() {
+		try { void this.storage?.update(STORAGE_KEY, this.buffer.slice(-this.limit)); } catch {}
+	}
+
+	setEnabled(enabled) {
+		this.enabled = enabled !== false;
+		if (!this.enabled) {
+			this.buffer = [];
+			this.#persist();
+		}
+	}
+
+	record(event, properties = {}) {
+		if (!this.enabled) return;
+		const payload = {
+			event,
+			timestamp: new Date(this.now()).toISOString(),
+			session_id: this.sessionId,
+			trace_id: this.traceId,
+			span_id: this.spanId,
+			...redact(properties),
+		};
+		this.buffer.push(payload);
+		if (this.buffer.length > this.limit) this.buffer.splice(0, this.buffer.length - this.limit);
+		this.#persist();
+		try {
+			this.posthog?.capture({ distinctId: this.distinctId, event, properties: payload });
+		} catch {}
+	}
+
+	lspStarted() { this.record("lsp_started", { restart_count: this.restartCount }); }
+	lspRestart(reason = "closed") {
+		this.restartCount++;
+		this.record("lsp_restart", { restart_count: this.restartCount, reason });
+	}
+	lspError(error, method, count) {
+		this.record("lsp_error", { ...errorMetadata(error), method: typeof method === "string" ? method.slice(0, 80) : "unknown", count: Math.max(0, Math.min(100, Number(count) || 0)), restart_count: this.restartCount });
+	}
+	lspCrash(error) {
+		this.record("lsp_crash", { ...errorMetadata(error), restart_count: this.restartCount, recent_events: this.buffer.slice(-5).map(item => item.event) });
+	}
+	traceContext() { return { traceId: this.traceId, spanId: this.spanId }; }
+
+	async shutdown() {
+		try { await this.posthog?.shutdown(); } catch {}
+	}
+}
+
 
 class FiveMResourceItem extends vscode.TreeItem {
 	constructor(resource) {
@@ -29,12 +140,21 @@ class FiveMResourceProvider {
 		this.resources = [];
 		this.onDidChangeTreeData.fire();
 		const workspaceFolders = (vscode.workspace.workspaceFolders || []).map(folder => folder.uri.fsPath);
-		const resources = await discoverResources(workspaceFolders, diagnostics, resource => {
+			let resources;
+		try {
+			resources = await discoverResources(workspaceFolders, diagnostics, resource => {
 			if (version !== this.refreshVersion) return;
 			this.resources.push(resource);
 			this.resources.sort((a, b) => a.name.localeCompare(b.name) || a.manifestPath.localeCompare(b.manifestPath));
 			this.onDidChangeTreeData.fire();
-		});
+			});
+		} catch (error) {
+			telemetry?.record("resource_discovery_failed", errorMetadata(error));
+			throw error;
+		}
+		if (resources.length === 0 && workspaceFolders.length > 0) {
+			telemetry?.record("resource_discovery_skipped", { reason: "no_resources_found", workspace_count: Math.min(workspaceFolders.length, 100) });
+		}
 		if (version === this.refreshVersion) {
 			this.resources = resources;
 			this.onDidChangeTreeData.fire();
@@ -46,12 +166,23 @@ class FiveMResourceProvider {
 	dispose() { this.onDidChangeTreeData.dispose(); }
 }
 
-const posthogClient = new PostHog(
-	"phc_AtCceYjFoZzdnFgfKNMGArJGbLMyFzzqvjBx7SQCou6k",
-	{ host: "https://eu.i.posthog.com" }
-);
+const posthogClient = new PostHog("phc_AtCceYjFoZzdnFgfKNMGArJGbLMyFzzqvjBx7SQCou6k", { host: "https://eu.i.posthog.com" });
 
+let telemetry;
 let client, restarting, indexing, debounce;
+const COMMAND_CANCELLED = Symbol("command_cancelled");
+
+async function runCommand(command, handler) {
+	telemetry?.record("command_invoked", { command });
+	try {
+		const result = await handler();
+		telemetry?.record(result === COMMAND_CANCELLED ? "command_cancelled" : "command_succeeded", { command });
+		return result;
+	} catch (error) {
+		telemetry?.record("command_failed", { command, ...errorMetadata(error) });
+		throw error;
+	}
+}
 
 const debugExportCategories = [
 	{
@@ -87,21 +218,22 @@ const debugExportCategories = [
 ];
 
 async function restartClient(context) {
-	if (restarting) {
-		return;
-	}
-
+	if (restarting) return false;
 	restarting = true;
-
+	const startedAt = Date.now();
+	telemetry?.record("lsp_restart_started");
 	try {
-		if (client) {
-			await client.stop();
-		}
-
+		if (client) await client.stop();
 		await startClient(context);
-	} catch {}
-
-	restarting = false;
+		telemetry?.record("lsp_restart_succeeded", { duration_ms: elapsedMilliseconds(startedAt) });
+		return true;
+	} catch (error) {
+		telemetry?.record("lsp_restart_failed", { ...errorMetadata(error), duration_ms: elapsedMilliseconds(startedAt) });
+		void vscode.window.showErrorMessage("Lugo LSP could not be started. See the Output panel for details.");
+		return false;
+	} finally {
+		restarting = false;
+	}
 }
 
 function buildInitializationOptions() {
@@ -133,6 +265,10 @@ function buildInitializationOptions() {
 		bannedSymbols: lugoConfig.get("diagnostics.bannedSymbols") || {},
 		maxFileSizeMB: lugoConfig.get("workspace.maxFileSizeMB") ?? 4,
 		telemetryEnabled: lugoConfig.get("telemetry.enabled") !== false,
+		...(telemetry ? {
+			telemetryTraceId: telemetry.traceContext().traceId,
+			telemetrySpanId: telemetry.traceContext().spanId,
+		} : {}),
 
 		parserMaxErrors: lugoConfig.get("parser.maxErrors") ?? 50,
 
@@ -191,14 +327,17 @@ function buildInitializationOptions() {
 function scheduleConfigUpdate() {
 	clearTimeout(debounce);
 
-	debounce = setTimeout(() => {
-		if (!client?.isRunning()) {
-			return;
+	debounce = setTimeout(async () => {
+		if (!client?.isRunning()) return;
+		try {
+			await client.sendNotification("workspace/didChangeConfiguration", {
+				settings: buildInitializationOptions(),
+			});
+			telemetry?.record("configuration_notification_succeeded");
+		} catch (error) {
+			telemetry?.record("configuration_notification_failed", errorMetadata(error));
+			void vscode.window.showWarningMessage("Lugo could not apply the updated configuration.");
 		}
-
-		client.sendNotification("workspace/didChangeConfiguration", {
-			settings: buildInitializationOptions(),
-		});
 	}, 1000);
 }
 
@@ -248,9 +387,11 @@ function resolveLibraryPathsToAbsolute(globs) {
 			try {
 				if (fs.existsSync(absPath) && fs.statSync(absPath).isDirectory()) {
 					resolved.push(absPath);
+				} else {
+					telemetry?.record("library_path_unavailable", { reason: "missing_or_not_directory" });
 				}
-			} catch {
-				// Skip inaccessible paths silently
+			} catch (error) {
+				telemetry?.record("library_path_unavailable", { reason: "inaccessible", ...errorMetadata(error) });
 			}
 		}
 	}
@@ -291,44 +432,52 @@ async function addToIgnoredGlobs(folderUri) {
 }
 
 async function activate(context) {
+	const telemetryEnabled = vscode.workspace.getConfiguration("lugo").get("telemetry.enabled") !== false;
+	telemetry = new Telemetry({
+		posthog: posthogClient,
+		distinctId: vscode.env.machineId,
+		storage: context.globalState,
+		enabled: telemetryEnabled,
+	});
+	telemetry.record("extension_activated", { os: os.platform(), arch: os.arch() });
+
 	const resourceProvider = new FiveMResourceProvider();
 	const resourceView = vscode.window.createTreeView("lugo.fivemResources", { treeDataProvider: resourceProvider, showCollapseAll: false });
 	const resourceStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
 	resourceStatus.command = "lugo.fivem.refresh";
 	resourceStatus.tooltip = "Refresh FiveM resources";
 	const refreshResources = async () => {
-		const resources = await resourceProvider.refresh();
-		const diagnostics = resources.reduce((total, resource) => total + resource.diagnostics, 0);
-		resourceStatus.text = `$(server) FiveM: ${resources.length} resources · ${diagnostics} diagnostics`;
-		resourceStatus.show();
+		const startedAt = Date.now();
+		try {
+			const resources = await resourceProvider.refresh();
+			const diagnostics = resources.reduce((total, resource) => total + resource.diagnostics, 0);
+			resourceStatus.text = `$(server) FiveM: ${resources.length} resources · ${diagnostics} diagnostics`;
+			resourceStatus.show();
+			telemetry?.record("resource_refresh_succeeded", { duration_ms: elapsedMilliseconds(startedAt), resource_count: Math.min(resources.length, 100000), diagnostic_count: Math.min(diagnostics, 1000000) });
+			return resources;
+		} catch (error) {
+			telemetry?.record("resource_refresh_failed", { ...errorMetadata(error), duration_ms: elapsedMilliseconds(startedAt) });
+			throw error;
+		}
 	};
 	let resourceRefreshDebounce;
 	const scheduleResourceRefresh = () => {
 		clearTimeout(resourceRefreshDebounce);
-		resourceRefreshDebounce = setTimeout(() => { void refreshResources(); }, 250);
+		resourceRefreshDebounce = setTimeout(() => { void refreshResources().catch(() => telemetry?.record("resource_refresh_automatic_failed")); }, 250);
 	};
 	context.subscriptions.push(resourceProvider, resourceView, resourceStatus, { dispose: () => clearTimeout(resourceRefreshDebounce) });
-	context.subscriptions.push(vscode.commands.registerCommand("lugo.fivem.refresh", refreshResources));
+	context.subscriptions.push(vscode.commands.registerCommand("lugo.fivem.refresh", () => runCommand("lugo.fivem.refresh", refreshResources)));
 	context.subscriptions.push(vscode.languages.onDidChangeDiagnostics(scheduleResourceRefresh));
 	context.subscriptions.push(vscode.workspace.onDidCreateFiles(scheduleResourceRefresh));
 	context.subscriptions.push(vscode.workspace.onDidDeleteFiles(scheduleResourceRefresh));
 	context.subscriptions.push(vscode.workspace.onDidRenameFiles(scheduleResourceRefresh));
-	void refreshResources();
-
-	const telemetryEnabled = vscode.workspace.getConfiguration("lugo").get("telemetry.enabled") !== false;
-	if (telemetryEnabled) {
-		posthogClient.capture({
-			distinctId: vscode.env.machineId,
-			event: "extension_activated",
-			properties: {
-				os: os.platform(),
-				arch: os.arch()
-			}
-		});
-	}
+	void refreshResources().catch(() => telemetry?.record("resource_refresh_automatic_failed"));
 
 	context.subscriptions.push(
 		vscode.workspace.onDidChangeConfiguration(async e => {
+			if (e.affectsConfiguration("lugo.telemetry.enabled")) {
+				telemetry?.setEnabled(vscode.workspace.getConfiguration("lugo").get("telemetry.enabled") !== false);
+			}
 			if (e.affectsConfiguration("lugo") || e.affectsConfiguration("files.exclude") || e.affectsConfiguration("search.exclude")) {
 				scheduleConfigUpdate();
 			}
@@ -336,45 +485,30 @@ async function activate(context) {
 	);
 
 	context.subscriptions.push(
-		vscode.commands.registerCommand("lugo.reindex", () => {
-			if (vscode.workspace.getConfiguration("lugo").get("telemetry.enabled") !== false) {
-				posthogClient.capture({
-					distinctId: vscode.env.machineId,
-					event: "command_reindex"
-				});
-			}
-			triggerReindex();
-		})
+		vscode.commands.registerCommand("lugo.reindex", () => runCommand("lugo.reindex", triggerReindex))
 	);
 
 	context.subscriptions.push(
-		vscode.commands.registerCommand("lugo.applySafeFixesWorkspace", () => {
-			vscode.commands.executeCommand("lugo.applySafeFixes");
-		})
+		vscode.commands.registerCommand("lugo.applySafeFixesWorkspace", () => runCommand("lugo.applySafeFixesWorkspace", () => vscode.commands.executeCommand("lugo.applySafeFixes")))
 	);
 
 	context.subscriptions.push(
-		vscode.commands.registerCommand("lugo.applySafeFixesFile", () => {
+		vscode.commands.registerCommand("lugo.applySafeFixesFile", () => runCommand("lugo.applySafeFixesFile", () => {
 			const editor = vscode.window.activeTextEditor;
-
-			if (editor) {
-				vscode.commands.executeCommand("lugo.applySafeFixes", editor.document.uri.toString());
-			}
-		})
+			return editor ? vscode.commands.executeCommand("lugo.applySafeFixes", editor.document.uri.toString()) : COMMAND_CANCELLED;
+		}))
 	);
 
 	context.subscriptions.push(
-		vscode.commands.registerCommand("lugo.exportDebugData", () => {
-			return exportDebugData();
-		})
+		vscode.commands.registerCommand("lugo.exportDebugData", () => runCommand("lugo.exportDebugData", exportDebugData))
 	);
 
 	context.subscriptions.push(
-		vscode.commands.registerCommand("lugo.ignoreDiagnostic", async (uriStr, line, rule, isFile) => {
+		vscode.commands.registerCommand("lugo.ignoreDiagnostic", (uriStr, line, rule, isFile) => runCommand("lugo.ignoreDiagnostic", async () => {
 			const editor = vscode.window.activeTextEditor;
 
 			if (!editor || editor.document.uri.fsPath !== vscode.Uri.parse(uriStr).fsPath) {
-				return;
+				return COMMAND_CANCELLED;
 			}
 
 			let insertLine = line,
@@ -392,33 +526,29 @@ async function activate(context) {
 			}
 
 			await editor.insertSnippet(new vscode.SnippetString(snippetText), new vscode.Position(insertLine, 0));
-		})
+		}))
 	);
 
 	context.subscriptions.push(
-		vscode.commands.registerCommand("lugo.addToLibraryPaths", (clickedFile, selectedFiles) => {
+		vscode.commands.registerCommand("lugo.addToLibraryPaths", (clickedFile, selectedFiles) => runCommand("lugo.addToLibraryPaths", async () => {
 			// When triggered from context menu, VS Code passes the URI directly.
 			// When multiple files are selected, selectedFiles is an array.
 			const targets = selectedFiles && selectedFiles.length > 0 ? selectedFiles : [clickedFile];
 
-			for (const target of targets) {
-				addToLibraryPaths(target);
-			}
-		})
+			for (const target of targets) await addToLibraryPaths(target);
+		}))
 	);
 
 	context.subscriptions.push(
-		vscode.commands.registerCommand("lugo.addToIgnoredGlobs", (clickedFile, selectedFiles) => {
+		vscode.commands.registerCommand("lugo.addToIgnoredGlobs", (clickedFile, selectedFiles) => runCommand("lugo.addToIgnoredGlobs", async () => {
 			const targets = selectedFiles && selectedFiles.length > 0 ? selectedFiles : [clickedFile];
 
-			for (const target of targets) {
-				addToIgnoredGlobs(target);
-			}
-		})
+			for (const target of targets) await addToIgnoredGlobs(target);
+		}))
 	);
 
 	context.subscriptions.push(
-		vscode.commands.registerCommand("lugo.showReferences", (uriStr, position, locations) => {
+		vscode.commands.registerCommand("lugo.showReferences", (uriStr, position, locations) => runCommand("lugo.showReferences", () => {
 			const uri = vscode.Uri.parse(uriStr),
 				pos = new vscode.Position(position.line, position.character);
 
@@ -427,8 +557,8 @@ async function activate(context) {
 					new vscode.Location(vscode.Uri.parse(loc.uri), new vscode.Range(loc.range.start.line, loc.range.start.character, loc.range.end.line, loc.range.end.character))
 			);
 
-			vscode.commands.executeCommand("editor.action.showReferences", uri, pos, locs);
-		})
+			return vscode.commands.executeCommand("editor.action.showReferences", uri, pos, locs);
+		}))
 	);
 
 	await restartClient(context);
@@ -445,9 +575,9 @@ async function startClient(context) {
 	const serverCommand = path.join(context.extensionPath, "bin", binName);
 
 	if (!fs.existsSync(serverCommand)) {
-		vscode.window.showErrorMessage(`Lugo LSP binary not found for your platform: ${binName}`);
-
-		return;
+		telemetry?.record("lsp_binary_missing", { platform, arch });
+		void vscode.window.showErrorMessage(`Lugo LSP binary not found for your platform: ${binName}`);
+		throw new Error("LspBinaryMissing");
 	}
 
 	const serverOptions = {
@@ -468,34 +598,14 @@ async function startClient(context) {
 		initializationOptions: initializationOptions,
 		errorHandler: {
 			error: (error, message, count) => {
-				if (vscode.workspace.getConfiguration("lugo").get("telemetry.enabled") !== false) {
-					posthogClient.capture({
-						distinctId: vscode.env.machineId,
-						event: "lsp_error",
-						properties: {
-							error: error.message || String(error),
-							method: message?.method,
-							count: count,
-							os: os.platform(),
-							arch: os.arch()
-						}
-					});
-				}
+				telemetry?.lspError(error, message?.method, count);
 				return { action: count <= 3 ? ErrorAction.Continue : ErrorAction.Shutdown };
 			},
 			closed: () => {
-				if (vscode.workspace.getConfiguration("lugo").get("telemetry.enabled") !== false) {
-					posthogClient.capture({
-						distinctId: vscode.env.machineId,
-						event: "lsp_crash",
-						properties: {
-							os: os.platform(),
-							arch: os.arch()
-						}
-					});
-				}
+				telemetry?.lspCrash();
 				restartCount++;
 				if (restartCount <= 5) {
+					telemetry?.lspRestart("closed");
 					return { action: CloseAction.Restart };
 				}
 				return { action: CloseAction.DoNotRestart };
@@ -505,16 +615,26 @@ async function startClient(context) {
 
 	client = new LanguageClient("lugo", "Lugo LSP", serverOptions, clientOptions);
 
-	await client.start();
+	const startedAt = Date.now();
+	try {
+		await client.start();
+		telemetry?.lspStarted();
+		telemetry?.record("lsp_start_succeeded", { duration_ms: elapsedMilliseconds(startedAt) });
+	} catch (error) {
+		telemetry?.record("lsp_start_failed", { ...errorMetadata(error), duration_ms: elapsedMilliseconds(startedAt) });
+		throw error;
+	}
 
-	triggerReindex();
+	void triggerReindex().catch(() => telemetry?.record("reindex_automatic_failed"));
 }
 
 async function exportDebugData() {
+	const startedAt = Date.now();
 	try {
 		if (!client?.isRunning()) {
+			telemetry?.record("debug_export_cancelled", { reason: "client_not_running" });
 			vscode.window.showWarningMessage("Lugo LSP is not running yet.");
-			return;
+			return COMMAND_CANCELLED;
 		}
 
 		const selected = await vscode.window.showQuickPick(debugExportCategories, {
@@ -526,7 +646,8 @@ async function exportDebugData() {
 		});
 
 		if (!selected || selected.length === 0) {
-			return;
+			telemetry?.record("debug_export_cancelled", { reason: "no_categories" });
+			return COMMAND_CANCELLED;
 		}
 
 		const workspaceName = vscode.workspace.name || "workspace",
@@ -543,7 +664,8 @@ async function exportDebugData() {
 		});
 
 		if (!target) {
-			return;
+			telemetry?.record("debug_export_cancelled", { reason: "save_dialog" });
+			return COMMAND_CANCELLED;
 		}
 
 		await vscode.window.withProgress(
@@ -561,52 +683,64 @@ async function exportDebugData() {
 			}
 		);
 
-		const action = await vscode.window.showInformationMessage(`Lugo debug data exported to ${target.fsPath}`, "Open File");
+		telemetry?.record("debug_export_succeeded", { duration_ms: elapsedMilliseconds(startedAt), category_count: selected.length });
+		const action = await vscode.window.showInformationMessage("Lugo debug data exported successfully.", "Open File");
 		if (action === "Open File") {
 			const doc = await vscode.workspace.openTextDocument(target);
 			await vscode.window.showTextDocument(doc, {preview: false});
 		}
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		vscode.window.showErrorMessage(`Lugo debug export failed: ${message}`);
+	} catch (error) {
+		telemetry?.record("debug_export_failed", { ...errorMetadata(error), duration_ms: elapsedMilliseconds(startedAt) });
+		vscode.window.showErrorMessage("Lugo debug export failed.");
+		throw error;
 	}
 }
 
-function triggerReindex() {
-	if (!client || indexing) {
-		return;
+async function triggerReindex() {
+	if (!client?.isRunning() || indexing) {
+		telemetry?.record("reindex_cancelled", { reason: !client?.isRunning() ? "client_not_running" : "already_indexing" });
+		return COMMAND_CANCELLED;
 	}
 
 	indexing = true;
-
-	vscode.window.withProgress(
-		{
-			location: vscode.ProgressLocation.Window,
-			title: "Lugo: Indexing workspace...",
-			cancellable: false,
-		},
-		async () => {
-			try {
-				await client.sendRequest("lugo/reindex");
-			} finally {
-				indexing = false;
-			}
-		}
-	);
+	const startedAt = Date.now();
+	try {
+		await vscode.window.withProgress(
+			{
+				location: vscode.ProgressLocation.Window,
+				title: "Lugo: Indexing workspace...",
+				cancellable: false,
+			},
+			() => client.sendRequest("lugo/reindex")
+		);
+		telemetry?.record("reindex_succeeded", { duration_ms: elapsedMilliseconds(startedAt) });
+	} catch (error) {
+		telemetry?.record("reindex_failed", { ...errorMetadata(error), duration_ms: elapsedMilliseconds(startedAt) });
+		throw error;
+	} finally {
+		indexing = false;
+	}
 }
 
-function deactivate() {
-	posthogClient.shutdown();
-
-	if (debounce) {
-		clearTimeout(debounce);
-	}
-
+async function deactivate() {
+	if (debounce) clearTimeout(debounce);
 	if (!client) {
+		telemetry?.record("client_shutdown_succeeded", { had_client: false });
+		await telemetry?.shutdown();
 		return undefined;
 	}
 
-	return client.stop();
+	const startedAt = Date.now();
+	telemetry?.record("client_shutdown_started");
+	try {
+		await client.stop();
+		telemetry?.record("client_shutdown_succeeded", { had_client: true, duration_ms: elapsedMilliseconds(startedAt) });
+	} catch (error) {
+		telemetry?.record("client_shutdown_failed", { ...errorMetadata(error), duration_ms: elapsedMilliseconds(startedAt) });
+		throw error;
+	} finally {
+		await telemetry?.shutdown();
+	}
 }
 
 module.exports = {

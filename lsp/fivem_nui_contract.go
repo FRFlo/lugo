@@ -1,6 +1,7 @@
 package lsp
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -69,8 +70,13 @@ func (s *Server) nuiResourceFiles(doc *Document) []nuiContractFile {
 		rootPath = root
 	}
 	var out []nuiContractFile
+	var traversalFailures, readFailures int
 	_ = filepath.WalkDir(rootPath, func(path string, entry os.DirEntry, err error) error {
-		if err != nil || entry.IsDir() || strings.Contains(filepath.ToSlash(path), "/node_modules/") {
+		if err != nil {
+			traversalFailures = boundedNUIFailureCount(traversalFailures)
+			return nil
+		}
+		if entry.IsDir() || strings.Contains(filepath.ToSlash(path), "/node_modules/") {
 			return nil
 		}
 		ext := strings.ToLower(filepath.Ext(path))
@@ -79,6 +85,7 @@ func (s *Server) nuiResourceFiles(doc *Document) []nuiContractFile {
 		}
 		src, err := os.ReadFile(path)
 		if err != nil {
+			readFailures = boundedNUIFailureCount(readFailures)
 			return nil
 		}
 		uri := s.pathToURI(path)
@@ -88,7 +95,20 @@ func (s *Server) nuiResourceFiles(doc *Document) []nuiContractFile {
 		out = append(out, nuiContractFile{uri: uri, src: src, names: nuiJSNames(src, ext == ".html")})
 		return nil
 	})
+	if traversalFailures > 0 || readFailures > 0 {
+		RecordTelemetry(WithTraceContext(context.Background(), s.trace), "lugo.fivem_nui_scan.failure", map[string]any{
+			"traversal_failures": traversalFailures,
+			"read_failures":      readFailures,
+		})
+	}
 	return out
+}
+
+func boundedNUIFailureCount(count int) int {
+	if count < 1000 {
+		return count + 1
+	}
+	return count
 }
 
 func (s *Server) collectFiveMNUIResourceFacts() map[string]nuiResourceFacts {

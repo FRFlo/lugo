@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -38,9 +39,46 @@ func TestCISARIFUsesUnsignedDiagnosticPositions(t *testing.T) {
 		Severity: SeverityError, Code: "bad", Message: "broken",
 		Range: Range{Start: Position{Line: 4, Character: 2}},
 	}})
-	s.writeCISARIF(dir + "/ci.json")
+	if err := s.writeCISARIF(dir + "/ci.json"); err != nil {
+		t.Fatalf("writeCISARIF() error = %v", err)
+	}
 	if _, err := os.Stat(dir + "/report.sarif"); err != nil {
 		t.Fatalf("SARIF report was not written: %v", err)
+	}
+}
+
+func TestCISARIFFailureReturnsErrorAndRecordsSafeTelemetry(t *testing.T) {
+	oldTelemetry := globalTelemetry
+	t.Cleanup(func() { globalTelemetry = oldTelemetry })
+	journal := &traceJournal{max: 4096}
+	globalTelemetry = &Telemetry{Enabled: true, journal: journal}
+
+	dir := t.TempDir()
+	s := &Server{Writer: io.Discard}
+	setCIPolicy(s, CIPolicy{SARIFPath: "."})
+	if err := s.writeCISARIF(filepath.Join(dir, "ci.json")); err == nil {
+		t.Fatal("writeCISARIF() error = nil, want write failure")
+	}
+
+	journal.mu.Lock()
+	data := string(journal.entries[len(journal.entries)-1].Data)
+	journal.mu.Unlock()
+	if !strings.Contains(data, "lugo.ci.sarif_failure") || strings.Contains(data, dir) {
+		t.Fatalf("SARIF failure telemetry was missing or unsafe: %s", data)
+	}
+}
+
+func TestRunCIFailsWhenSARIFCannotBeWritten(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "ci.json")
+	if err := os.WriteFile(configPath, []byte(`{"ciPolicy":{"sarifPath":"."}}`), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	s := NewServer("test-version")
+	s.Writer = io.Discard
+	if got := s.RunCI(configPath); got != 1 {
+		t.Fatalf("RunCI() = %d, want 1 after SARIF write failure", got)
 	}
 }
 

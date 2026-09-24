@@ -2,6 +2,7 @@ package lsp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -184,12 +185,17 @@ func (s *Server) handleDidChangeWatchedFiles(req Request) {
 
 	err := json.Unmarshal(req.Params, &params)
 	if err != nil {
+		telemetryCtx := WithTraceContext(context.Background(), s.trace)
+		RecordTelemetry(telemetryCtx, "lugo.watched_files.refresh_degraded", map[string]any{"reason": "invalid_params"})
 		return
 	}
 
 	var (
 		needsWorkspaceRepublish bool
 		singleRepublish         []string
+		statFailures            int
+		readFailures            int
+		oversizedFiles          int
 	)
 
 	for _, change := range params.Changes {
@@ -208,7 +214,11 @@ func (s *Server) handleDidChangeWatchedFiles(req Request) {
 				path := s.uriToPath(uri)
 
 				stat, statErr := os.Stat(path)
+				if statErr != nil {
+					statFailures++
+				}
 				if statErr == nil && stat.Size() > s.MaxFileSize {
+					oversizedFiles++
 					continue
 				}
 
@@ -226,6 +236,8 @@ func (s *Server) handleDidChangeWatchedFiles(req Request) {
 							singleRepublish = append(singleRepublish, uri)
 						}
 					}
+				} else {
+					readFailures++
 				}
 			}
 		case 3: // Deleted
@@ -263,6 +275,16 @@ func (s *Server) handleDidChangeWatchedFiles(req Request) {
 		}
 	}
 
+	if statFailures > 0 || readFailures > 0 || oversizedFiles > 0 {
+		telemetryCtx := WithTraceContext(context.Background(), s.trace)
+		RecordTelemetry(telemetryCtx, "lugo.watched_files.refresh_degraded", map[string]any{
+			"reason":          "file_refresh_incomplete",
+			"stat_failures":   boundedWatchedFileCount(statFailures),
+			"read_failures":   boundedWatchedFileCount(readFailures),
+			"oversized_files": boundedWatchedFileCount(oversizedFiles),
+		})
+	}
+
 	if needsWorkspaceRepublish {
 		s.publishWorkspaceDiagnostics()
 	} else {
@@ -270,6 +292,13 @@ func (s *Server) handleDidChangeWatchedFiles(req Request) {
 			s.publishDiagnostics(uri)
 		}
 	}
+}
+
+func boundedWatchedFileCount(count int) int {
+	if count > 1000 {
+		return 1000
+	}
+	return count
 }
 
 func (s *Server) handleReindex(req Request) {
@@ -280,6 +309,35 @@ func (s *Server) handleReindex(req Request) {
 
 func (s *Server) refreshWorkspace() {
 	s.Log.Println("Starting workspace re-index...")
+
+	telemetryCtx := WithTraceContext(context.Background(), s.trace)
+	RecordTelemetry(telemetryCtx, "lugo.workspace_index.start", map[string]any{})
+	start := time.Now()
+
+	var (
+		total     int
+		indexed   int
+		unchanged int
+		failed    int
+	)
+	defer func() {
+		properties := map[string]any{
+			"duration_ms":  time.Since(start).Milliseconds(),
+			"indexed":      indexed,
+			"unchanged":    unchanged,
+			"failed":       failed,
+			"bytes_bucket": workspaceIndexBytesBucket(total),
+		}
+		if r := recover(); r != nil {
+			// Do not include the recovered value: panic values can contain source,
+			// paths, or raw errors. Re-panic to preserve refreshWorkspace semantics.
+			properties["outcome"] = "panic"
+			RecordTelemetry(telemetryCtx, "lugo.workspace_index.finish", properties)
+			panic(r)
+		}
+		properties["outcome"] = "success"
+		RecordTelemetry(telemetryCtx, "lugo.workspace_index.finish", properties)
+	}()
 
 	s.IsIndexing = true
 
@@ -300,8 +358,6 @@ func (s *Server) refreshWorkspace() {
 		})
 	}
 
-	start := time.Now()
-
 	if s.activeURIs == nil {
 		s.activeURIs = make(map[string]bool, len(s.Documents))
 	} else {
@@ -312,13 +368,6 @@ func (s *Server) refreshWorkspace() {
 	if s.FiveMResourceGraph != nil {
 		s.FiveMResourceGraph.Clear()
 	}
-
-	var (
-		total     int
-		indexed   int
-		unchanged int
-		failed    int
-	)
 
 	var pendingJobs []*IndexJob
 
@@ -502,6 +551,25 @@ func (s *Server) refreshWorkspace() {
 	took = time.Since(start)
 
 	s.Log.Printf("Total time taken for %d bytes: %s\n", total, took)
+}
+
+// workspaceIndexBytesBucket deliberately exposes only a coarse size range.
+// Workspace sizes can otherwise reveal more than indexing telemetry needs.
+func workspaceIndexBytesBucket(total int) string {
+	switch {
+	case total == 0:
+		return "0"
+	case total <= 4<<10:
+		return "1-4KiB"
+	case total <= 64<<10:
+		return "4-64KiB"
+	case total <= 1<<20:
+		return "64KiB-1MiB"
+	case total <= 16<<20:
+		return "1-16MiB"
+	default:
+		return "16MiB+"
+	}
 }
 
 func (s *Server) indexWorkspace(rootPathOrURI string, pendingJobs *[]*IndexJob, unchanged, failed *int) {

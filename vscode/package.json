@@ -29,7 +29,7 @@
     "main": "./extension.js",
     "scripts": {
         "build": "esbuild ./extension.js --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --target=node18",
-        "test": "node package_identity_test.js && node fivem_resources_test.js"
+        "test": "node package_identity_test.js && node fivem_resources_test.js && node telemetry_test.js"
     },
     "contributes": {
         "languages": [

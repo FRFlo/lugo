@@ -18,12 +18,25 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
 	"github.com/FRFlo/lugo/lsp"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+type traceContextKey struct{}
+
+type traceContext struct {
+	id     string
+	parent string
+}
+
+type observability struct {
+	enabled bool
+	seq     atomic.Uint64
+}
 
 type server struct {
 	workspace *lsp.Server
@@ -32,9 +45,10 @@ type server struct {
 	// workspaceMu protects direct reads of LSP workspace maps while reindexing
 	// replaces the index. The LSP serializes requests internally, but summary
 	// reads those maps directly.
-	workspaceMu sync.RWMutex
-	freshnessMu sync.Mutex
-	freshness   workspaceFreshness
+	workspaceMu   sync.RWMutex
+	freshnessMu   sync.Mutex
+	freshness     workspaceFreshness
+	observability observability
 }
 
 type workspaceFreshness struct {
@@ -131,30 +145,99 @@ type locatedEdit struct {
 
 func main() {
 	log.SetOutput(os.Stderr)
+	if err := run(); err != nil {
+		log.Print(err)
+		os.Exit(1)
+	}
+}
+
+// run keeps all telemetry cleanup inside a defer-safe function. main only
+// converts the final error to a process exit after the journal has flushed.
+func run() (runErr error) {
+	telemetry, telemetryErr := lsp.InitTelemetry("mcp")
+	if telemetryErr != nil {
+		log.Printf("telemetry initialization failed: %v", telemetryErr)
+	}
+	if telemetry != nil {
+		defer telemetry.Close()
+	}
+	if telemetryOptedOut() {
+		lsp.SetTelemetryEnabled(false)
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			lsp.CapturePanic(recovered, "lugo-mcp.main")
+			lsp.FlushTelemetry()
+			runErr = fmt.Errorf("lugo-mcp panic: %T", recovered)
+			return
+		}
+		if runErr != nil {
+			lsp.RecordTelemetry(context.Background(), "lugo.mcp.lifecycle", map[string]any{"state": "failed", "error_type": fmt.Sprintf("%T", runErr)})
+			lsp.FlushTelemetry()
+		} else {
+			lsp.RecordTelemetry(context.Background(), "lugo.mcp.lifecycle", map[string]any{"state": "stopped"})
+		}
+	}()
+	lsp.RecordTelemetry(context.Background(), "lugo.mcp.lifecycle", map[string]any{"state": "started"})
 	root := "."
 	if len(os.Args) > 1 {
 		root = os.Args[1]
 	}
 	abs, err := filepath.Abs(root)
 	if err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("resolve MCP workspace: %w", err)
 	}
 	workspace, err := lsp.NewMCPWorkspace(abs)
 	if err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("initialize MCP workspace: %w", err)
+	}
+	// NewMCPWorkspace applies standalone LSP defaults, including telemetry=true.
+	// Re-apply the MCP-specific opt-out after construction so it cannot be
+	// accidentally overridden before the stdio server starts.
+	if telemetryOptedOut() {
+		lsp.SetTelemetryEnabled(false)
 	}
 
 	s, err := newServer(workspace, abs)
 	if err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("initialize MCP server: %w", err)
 	}
 	mcpServer := mcp.NewServer(&mcp.Implementation{Name: "lugo-mcp", Version: "0.1.0"}, nil)
+	s.instrumentProtocol(mcpServer)
 	s.registerTools(mcpServer)
 	s.registerResources(mcpServer)
 	s.registerPrompts(mcpServer)
 	if err := mcpServer.Run(context.Background(), &mcp.StdioTransport{}); err != nil && !errors.Is(err, io.EOF) {
-		log.Fatal(err)
+		return fmt.Errorf("run MCP transport: %w", err)
 	}
+	return nil
+}
+
+// instrumentProtocol observes every MCP method, including protocol lifecycle
+// calls such as initialize and list operations which do not pass through a
+// tool/resource handler. It intentionally records the method name only.
+func (s *server) instrumentProtocol(m *mcp.Server) {
+	m.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (result mcp.Result, err error) {
+			ctx, _ = s.trace(ctx)
+			started := time.Now()
+			s.logBoundary(ctx, "protocol", method, "start", nil)
+			defer func() {
+				status := "ok"
+				if err != nil {
+					status = "error"
+				}
+				s.logBoundary(ctx, "protocol", method, status, err)
+				trace, _ := ctx.Value(traceContextKey{}).(traceContext)
+				fields := map[string]any{"method": method, "status": status, "duration_ms": time.Since(started).Milliseconds()}
+				if err != nil {
+					fields["error_type"] = fmt.Sprintf("%T", err)
+				}
+				lsp.RecordTelemetry(lsp.WithTraceContext(ctx, lsp.TraceContext{TraceID: trace.id, SpanID: trace.id}), "lugo.mcp.protocol.finish", fields)
+			}()
+			return next(ctx, method, req)
+		}
+	})
 }
 
 func (s *server) registerTools(m *mcp.Server) {
@@ -192,71 +275,71 @@ func (s *server) registerTools(m *mcp.Server) {
 		{"lugo_document_links", "textDocument/documentLink", "Get links discovered in a Lua document.", fileSchema},
 		{"lugo_prepare_call_hierarchy", "textDocument/prepareCallHierarchy", "Prepare call hierarchy items at a Lua position.", positionSchema},
 	} {
-		m.AddTool(&mcp.Tool{Name: capability.name, Description: capability.description, InputSchema: capability.input}, s.capability(capability.method))
+		s.tool(m, &mcp.Tool{Name: capability.name, Description: capability.description, InputSchema: capability.input}, s.capability(capability.method))
 	}
-	m.AddTool(&mcp.Tool{
+	s.tool(m, &mcp.Tool{
 		Name:         "lugo_diagnostics",
 		Description:  "Compute parser, Lua, type, and FiveM diagnostics for a workspace Lua file.",
 		InputSchema:  schema(`{"type":"object","required":["path"],"properties":{"path":{"type":"string"}}}`),
 		OutputSchema: objectOutputSchema,
 	}, s.diagnostics)
-	m.AddTool(&mcp.Tool{
+	s.tool(m, &mcp.Tool{
 		Name:        "lugo_lsp_request_advanced",
 		Description: "Advanced escape hatch for an arbitrary supported LSP method. Prefer the dedicated lugo_* capability tools whenever available.",
 		InputSchema: schema(`{"type":"object","required":["method"],"properties":{"method":{"type":"string"},"params":{"type":"object"}}}`),
 	}, s.lspRequest)
-	m.AddTool(&mcp.Tool{
+	s.tool(m, &mcp.Tool{
 		Name:         "lugo_workspace",
 		Description:  "Summarize indexed Lua documents and FiveM resources in the active workspace.",
 		InputSchema:  schema(`{"type":"object"}`),
 		OutputSchema: workspaceOutputSchema,
 	}, s.workspaceSummary)
-	m.AddTool(&mcp.Tool{
+	s.tool(m, &mcp.Tool{
 		Name:         "lugo_symbol_context",
 		Description:  "Get the hover, definition, and references for a symbol at a position.",
 		InputSchema:  schema(`{"type":"object","required":["path","line","character"],"properties":{"path":{"type":"string"},"line":{"type":"integer","minimum":0},"character":{"type":"integer","minimum":0}}}`),
 		OutputSchema: schema(`{"type":"object"}`),
 	}, s.symbolContext)
-	m.AddTool(&mcp.Tool{
+	s.tool(m, &mcp.Tool{
 		Name:         "lugo_workspace_status",
 		Description:  "Return a deterministic status summary of the indexed workspace.",
 		InputSchema:  schema(`{"type":"object"}`),
 		OutputSchema: schema(`{"type":"object"}`),
 	}, s.workspaceStatus)
-	m.AddTool(&mcp.Tool{
+	s.tool(m, &mcp.Tool{
 		Name:        "lugo_fivem_resources",
 		Description: "List FiveM resources, manifests, dependencies, profiles, and exports.",
 		InputSchema: fivemListSchema,
 	}, s.fivemResources)
-	m.AddTool(&mcp.Tool{
+	s.tool(m, &mcp.Tool{
 		Name:        "lugo_fivem_events",
 		Description: "List registered and triggered FiveM events across resources.",
 		InputSchema: fivemListSchema,
 	}, s.fivemEvents)
-	m.AddTool(&mcp.Tool{
+	s.tool(m, &mcp.Tool{
 		Name:        "lugo_fivem_exports",
 		Description: "List client and server FiveM exports across resources.",
 		InputSchema: fivemListSchema,
 	}, s.fivemExports)
-	m.AddTool(&mcp.Tool{
+	s.tool(m, &mcp.Tool{
 		Name:         "lugo_fivem_contracts",
 		Description:  "Return deterministic, read-only FiveM event, export, NUI, convar, and manifest contracts with source locations.",
 		InputSchema:  schema(`{"type":"object"}`),
 		OutputSchema: schema(`{"type":"object","required":["symbols","links","manifests"],"properties":{"symbols":{"type":"array","items":{"type":"object"}},"links":{"type":"array","items":{"type":"object"}},"manifests":{"type":"array","items":{"type":"object"}}}}`),
 	}, s.fivemContracts)
-	m.AddTool(&mcp.Tool{
+	s.tool(m, &mcp.Tool{
 		Name:         "lugo_validate_workspace_edit",
 		Description:  "Validate a proposed workspace edit without changing files. Checks workspace-relative paths, source hashes, ranges, and overlaps.",
 		InputSchema:  editSchema,
 		OutputSchema: schema(`{"type":"object","required":["valid","files","errors"]}`),
 	}, s.validateEdits)
-	m.AddTool(&mcp.Tool{
+	s.tool(m, &mcp.Tool{
 		Name:         "lugo_preview_workspace_edit",
 		Description:  "Preview a proposed workspace edit without changing files. Returns the resulting source only when validation succeeds.",
 		InputSchema:  editSchema,
 		OutputSchema: schema(`{"type":"object","required":["valid","files","errors"]}`),
 	}, s.validateEdits)
-	m.AddTool(&mcp.Tool{
+	s.tool(m, &mcp.Tool{
 		Name:         "lugo_reindex",
 		Description:  "Reindex the active workspace, optionally requesting specific workspace-relative paths.",
 		InputSchema:  schema(`{"type":"object","properties":{"paths":{"type":"array","items":{"type":"string"}}}}`),
@@ -270,7 +353,7 @@ func (s *server) registerResources(m *mcp.Server) {
 		Name:        "Workspace summary",
 		Description: "Current indexed Lua documents and FiveM resources.",
 		MIMEType:    "application/json",
-	}, func(context.Context, *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+	}, s.resource(func(context.Context, *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 		result, err := s.summary()
 		if err != nil {
 			return nil, err
@@ -280,19 +363,19 @@ func (s *server) registerResources(m *mcp.Server) {
 			return nil, err
 		}
 		return &mcp.ReadResourceResult{Contents: []*mcp.ResourceContents{{URI: "lugo://workspace/summary", MIMEType: "application/json", Text: string(data)}}}, nil
-	})
+	}, "summary"))
 	m.AddResourceTemplate(&mcp.ResourceTemplate{
 		URITemplate: "lugo://workspace/document/{+path}",
 		Name:        "Workspace document",
 		Description: "Read a workspace-relative Lua document as text.",
 		MIMEType:    "text/plain",
-	}, s.documentResource)
+	}, s.resource(s.documentResource, "document"))
 	m.AddResourceTemplate(&mcp.ResourceTemplate{
 		URITemplate: "lugo://workspace/resource/{name}",
 		Name:        "FiveM resource metadata",
 		Description: "Read metadata for a named FiveM resource as JSON.",
 		MIMEType:    "application/json",
-	}, s.fivemResource)
+	}, s.resource(s.fivemResource, "fivem"))
 }
 
 func (s *server) documentResource(_ context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
@@ -346,13 +429,118 @@ func (s *server) registerPrompts(m *mcp.Server) {
 		Name:        "lugo_fivem_review",
 		Description: "Review a FiveM Lua change using Lugo diagnostics and resource metadata.",
 		Arguments:   []*mcp.PromptArgument{{Name: "path", Description: "Workspace-relative Lua file to review", Required: true}},
-	}, func(_ context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+	}, s.prompt(func(_ context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
 		path := req.Params.Arguments["path"]
 		return &mcp.GetPromptResult{Description: "Lugo FiveM review", Messages: []*mcp.PromptMessage{{Role: "user", Content: &mcp.TextContent{Text: fmt.Sprintf("Review %s using lugo_diagnostics, lugo_hover, lugo_definition, lugo_references, and lugo_workspace. Report actionable issues and preserve existing behavior.", path)}}}}, nil
-	})
+	}))
 }
 
 func schema(value string) json.RawMessage { return json.RawMessage(value) }
+
+func telemetryOptedOut() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("LUGO_MCP_TELEMETRY"))) {
+	case "0", "false", "off", "no":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *server) trace(ctx context.Context) (context.Context, string) {
+	parent, _ := ctx.Value(traceContextKey{}).(traceContext)
+	id := fmt.Sprintf("mcp-%016x", s.observability.seq.Add(1))
+	return context.WithValue(ctx, traceContextKey{}, traceContext{id: id, parent: parent.id}), id
+}
+
+// logBoundary deliberately records only bounded metadata. Argument values,
+// paths, URIs, and external MCP metadata never enter logs or analytics.
+func (s *server) logBoundary(ctx context.Context, kind, name, status string, err error) {
+	if !s.observability.enabled {
+		return
+	}
+	trace, _ := ctx.Value(traceContextKey{}).(traceContext)
+	fields := map[string]any{"event": "mcp_boundary", "kind": kind, "name": name, "status": status, "trace_id": trace.id}
+	if trace.parent != "" {
+		fields["parent_trace_id"] = trace.parent
+	}
+	if err != nil {
+		fields["error_type"] = fmt.Sprintf("%T", err)
+	}
+	lsp.RecordTelemetry(lsp.WithTraceContext(ctx, lsp.TraceContext{TraceID: trace.id, SpanID: trace.id}), "lugo.mcp.boundary", fields)
+	data, _ := json.Marshal(fields)
+	log.Print(string(data))
+}
+
+func (s *server) tool(m *mcp.Server, tool *mcp.Tool, handler mcp.ToolHandler) {
+	m.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
+		ctx, _ = s.trace(ctx)
+		s.logBoundary(ctx, "tool", tool.Name, "start", nil)
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				err = fmt.Errorf("mcp tool %s panicked", tool.Name)
+				lsp.CapturePanicContext(ctx, recovered, "lugo-mcp.tool."+tool.Name)
+			}
+			status := "ok"
+			if err != nil {
+				status = "error"
+			}
+			s.logBoundary(ctx, "tool", tool.Name, status, err)
+		}()
+		return handler(ctx, req)
+	})
+}
+
+func (s *server) resource(handler mcp.ResourceHandler, kind string) mcp.ResourceHandler {
+	return func(ctx context.Context, req *mcp.ReadResourceRequest) (result *mcp.ReadResourceResult, err error) {
+		ctx, _ = s.trace(ctx)
+		s.logBoundary(ctx, "resource", kind, "start", nil)
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				err = fmt.Errorf("mcp resource %s panicked", kind)
+				lsp.CapturePanicContext(ctx, recovered, "lugo-mcp.resource."+kind)
+			}
+			status := "ok"
+			if err != nil {
+				status = "error"
+			}
+			s.logBoundary(ctx, "resource", kind, status, err)
+		}()
+		return handler(ctx, req)
+	}
+}
+
+func (s *server) prompt(handler mcp.PromptHandler) mcp.PromptHandler {
+	return func(ctx context.Context, req *mcp.GetPromptRequest) (result *mcp.GetPromptResult, err error) {
+		ctx, _ = s.trace(ctx)
+		s.logBoundary(ctx, "prompt", "lugo_fivem_review", "start", nil)
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				err = fmt.Errorf("mcp prompt panicked")
+				lsp.CapturePanicContext(ctx, recovered, "lugo-mcp.prompt")
+			}
+			status := "ok"
+			if err != nil {
+				status = "error"
+			}
+			s.logBoundary(ctx, "prompt", "lugo_fivem_review", status, err)
+		}()
+		return handler(ctx, req)
+	}
+}
+
+func (s *server) request(ctx context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
+	ctx, _ = s.trace(ctx)
+	s.logBoundary(ctx, "lsp_request", method, "start", nil)
+	trace, _ := ctx.Value(traceContextKey{}).(traceContext)
+	lspCtx := lsp.WithTraceContext(ctx, lsp.TraceContext{TraceID: trace.id, SpanID: trace.id})
+	result, err := s.workspace.MCPRequestContext(lspCtx, method, params)
+	status := "ok"
+	if err != nil {
+		status = "error"
+	}
+	s.logBoundary(ctx, "lsp_request", method, status, err)
+	return result, err
+}
 
 var fivemListSchema = schema(`{"type":"object","properties":{"resource":{"type":"string"},"limit":{"type":"integer","minimum":1},"cursor":{"type":"string"},"detail":{"type":"boolean"}}}`)
 
@@ -372,7 +560,7 @@ var advancedReadOnlyMethods = map[string]bool{
 	"textDocument/prepareCallHierarchy": true,
 }
 
-func (s *server) lspRequest(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *server) lspRequest(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	var args toolArgs
 	if err := json.Unmarshal(req.Params.Arguments, &args); err != nil {
 		return nil, err
@@ -390,7 +578,7 @@ func (s *server) lspRequest(_ context.Context, req *mcp.CallToolRequest) (*mcp.C
 	if err != nil {
 		return nil, err
 	}
-	result, err := s.workspace.MCPRequest(args.Method, params)
+	result, err := s.request(ctx, args.Method, params)
 	if err != nil {
 		return nil, err
 	}
@@ -398,7 +586,7 @@ func (s *server) lspRequest(_ context.Context, req *mcp.CallToolRequest) (*mcp.C
 }
 
 func (s *server) capability(method string) func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	return func(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		var args capabilityArgs
 		if err := json.Unmarshal(req.Params.Arguments, &args); err != nil {
 			return nil, err
@@ -440,7 +628,7 @@ func (s *server) capability(method string) func(context.Context, *mcp.CallToolRe
 		if err != nil {
 			return nil, err
 		}
-		result, err := s.workspace.MCPRequest(method, data)
+		result, err := s.request(ctx, method, data)
 		if err != nil {
 			return nil, err
 		}
@@ -448,7 +636,7 @@ func (s *server) capability(method string) func(context.Context, *mcp.CallToolRe
 	}
 }
 
-func (s *server) diagnostics(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *server) diagnostics(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	var args fileArgs
 	if err := json.Unmarshal(req.Params.Arguments, &args); err != nil {
 		return nil, err
@@ -457,16 +645,21 @@ func (s *server) diagnostics(_ context.Context, req *mcp.CallToolRequest) (*mcp.
 	if err != nil {
 		return nil, err
 	}
+	start := time.Now()
+	trace, _ := ctx.Value(traceContextKey{}).(traceContext)
+	lspCtx := lsp.WithTraceContext(ctx, lsp.TraceContext{TraceID: trace.id, SpanID: trace.id})
+	lsp.RecordTelemetry(lspCtx, "lugo.lsp.request.start", map[string]any{"method": "textDocument/publishDiagnostics"})
 	s.workspaceMu.RLock()
 	result, err := s.workspace.MCPDiagnostics(s.workspace.MCPDocumentURI(path))
 	s.workspaceMu.RUnlock()
+	lsp.RecordTelemetry(lspCtx, "lugo.lsp.request.finish", map[string]any{"method": "textDocument/publishDiagnostics", "duration_ms": time.Since(start).Milliseconds()})
 	if err != nil {
 		return nil, err
 	}
 	return structuredResult(string(result)), nil
 }
 
-func (s *server) reindex(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *server) reindex(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	var args reindexArgs
 	arguments := json.RawMessage(`{}`)
 	if req != nil && req.Params != nil && len(req.Params.Arguments) != 0 {
@@ -486,7 +679,7 @@ func (s *server) reindex(_ context.Context, req *mcp.CallToolRequest) (*mcp.Call
 	// requested paths in the response so clients can use the same contract for
 	// selective refreshes without making this operation mutate source files.
 	s.workspaceMu.Lock()
-	_, err := s.workspace.MCPRequest("lugo/reindex", json.RawMessage(`{}`))
+	_, err := s.request(ctx, "lugo/reindex", json.RawMessage(`{}`))
 	s.workspaceMu.Unlock()
 	if err != nil {
 		return nil, err
@@ -522,7 +715,7 @@ func (s *server) workspaceSummary(_ context.Context, _ *mcp.CallToolRequest) (*m
 	return structuredResult(string(data)), nil
 }
 
-func (s *server) symbolContext(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *server) symbolContext(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	var args symbolContextArgs
 	if err := json.Unmarshal(req.Params.Arguments, &args); err != nil {
 		return nil, err
@@ -542,7 +735,7 @@ func (s *server) symbolContext(_ context.Context, req *mcp.CallToolRequest) (*mc
 		if err != nil {
 			return nil, err
 		}
-		return s.workspace.MCPRequest(method, data)
+		return s.request(ctx, method, data)
 	}
 	hover, err := request("textDocument/hover")
 	if err != nil {
@@ -808,6 +1001,7 @@ func marshalFivemList(items []map[string]any, args fivemArgs, compact func(map[s
 // already have changed on disk.
 func newServer(workspace *lsp.Server, root string) (*server, error) {
 	s := &server{workspace: workspace, root: root}
+	s.observability.enabled = !telemetryOptedOut()
 	if _, err := s.captureFreshness(); err != nil {
 		return nil, err
 	}

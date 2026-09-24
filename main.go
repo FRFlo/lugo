@@ -21,7 +21,9 @@ func main() {
 	tel, err := lsp.InitTelemetry(Version)
 	if err != nil {
 		// We don't want to crash the LSP just because telemetry failed to init
-		fmt.Fprintf(os.Stderr, "Telemetry init failed: %v\n", err)
+		// Initialization errors can contain a user-configured journal path, so do
+		// not expose their raw text on the process transport.
+		fmt.Fprintln(os.Stderr, "Telemetry initialization failed")
 	} else if tel != nil {
 		defer tel.Close()
 	}
@@ -29,9 +31,9 @@ func main() {
 	defer func() {
 		if r := recover(); r != nil {
 			lsp.CapturePanic(r, "main")
-			if tel != nil {
-				tel.Close() // Flush events
-			}
+			// Persist the local envelope before re-panicking. The deferred Close
+			// below also gives PostHog its configured bounded shutdown flush.
+			lsp.FlushTelemetry()
 			panic(r) // Re-panic to retain original behavior
 		}
 	}()
@@ -39,7 +41,13 @@ func main() {
 	server := lsp.NewServer(Version)
 
 	if *ciFlag != "" {
-		os.Exit(server.RunCI(*ciFlag))
+		// os.Exit skips defers, so CI must explicitly flush and close telemetry.
+		code := server.RunCI(*ciFlag)
+		if tel != nil {
+			_ = tel.Flush()
+			tel.Close()
+		}
+		os.Exit(code)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

@@ -3,6 +3,7 @@ package lsp
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -91,6 +92,17 @@ func ReadMessage(r *bufio.Reader) ([]byte, error) {
 // WriteMessage writes a JSON-RPC message to an io.Writer.
 // It marshals the message to JSON and prepends the Content-Length header.
 func WriteMessage(w io.Writer, msg any) error {
+	err := writeMessageRaw(w, msg)
+	if err != nil {
+		recordTransportWriteFailure(context.Background(), "unclassified", err)
+	}
+	return err
+}
+
+// writeMessageRaw is used by the protocol dispatcher when it can attach a
+// more useful response path to a failed write. All other writers go through
+// WriteMessage so failures from feature and notification handlers are covered.
+func writeMessageRaw(w io.Writer, msg any) error {
 	body, err := json.Marshal(msg)
 	if err != nil {
 		return err
@@ -112,6 +124,28 @@ func WriteMessage(w io.Writer, msg any) error {
 	}
 
 	return nil
+}
+
+// writeProtocolResponse writes a response emitted by the JSON-RPC dispatch
+// boundary. A write failure is still returned to preserve the caller's existing
+// behavior; recording it is best-effort and cannot turn it into a panic.
+func writeProtocolResponse(ctx context.Context, w io.Writer, responsePath string, msg any) (err error) {
+	err = writeMessageRaw(w, msg)
+	if err != nil {
+		recordTransportWriteFailure(ctx, responsePath, err)
+	}
+	return err
+}
+
+func recordTransportWriteFailure(ctx context.Context, responsePath string, writeErr error) {
+	defer func() {
+		// Observability must never disrupt the protocol failure path.
+		_ = recover()
+	}()
+	RecordTelemetry(ctx, "lsp_transport_write_failed", map[string]any{
+		"response_path": responsePath,
+		"error_type":    fmt.Sprintf("%T", writeErr),
+	})
 }
 
 // WriteNotification sends a JSON-RPC notification (no ID) to an io.Writer.

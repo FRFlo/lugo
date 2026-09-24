@@ -1,6 +1,7 @@
 package lsp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -76,7 +77,10 @@ func (s *Server) RunCI(configPath string) int {
 
 	s.applyInitializationOptions(cfg.Settings)
 	s.refreshWorkspace()
-	s.writeCISARIF(configPath)
+	if err := s.writeCISARIF(configPath); err != nil {
+		s.Log.Errorf("Failed to write SARIF report.\n")
+		return 1
+	}
 
 	state := getCIState(s)
 	s.Log.Printf("CI completed. Found %d diagnostics (%d errors).\n", s.CIDiagnosticCount, s.CIErrorCount)
@@ -170,10 +174,10 @@ func maxInt(a, b int) int {
 	return b
 }
 
-func (s *Server) writeCISARIF(configPath string) {
+func (s *Server) writeCISARIF(configPath string) error {
 	state := getCIState(s)
 	if state.policy.SARIFPath == "" {
-		return
+		return nil
 	}
 	type sarifResult struct {
 		RuleID    string            `json:"ruleId,omitempty"`
@@ -195,7 +199,21 @@ func (s *Server) writeCISARIF(configPath string) {
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(filepath.Dir(configPath), path)
 	}
-	if b, err := json.MarshalIndent(payload, "", "  "); err == nil {
-		_ = os.WriteFile(path, b, 0644)
+	b, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		recordCISARIFFailure("marshal", err)
+		return fmt.Errorf("marshal SARIF report: %w", err)
 	}
+	if err := os.WriteFile(path, b, 0644); err != nil {
+		recordCISARIFFailure("write", err)
+		return fmt.Errorf("write SARIF report: %w", err)
+	}
+	return nil
+}
+
+func recordCISARIFFailure(stage string, err error) {
+	RecordTelemetry(context.Background(), "lugo.ci.sarif_failure", map[string]any{
+		"stage":      stage,
+		"error_type": fmt.Sprintf("%T", err),
+	})
 }

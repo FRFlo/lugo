@@ -96,6 +96,12 @@ This fork is dedicated to FiveM support. Lugo activates FiveM metadata for files
 * **Trust-boundary checks:** Event parameters are treated as untrusted until validated before reaching sensitive operations such as exports, SQL, HTTP, command execution or event forwarding.
 * **Performance and SQL checks:** Low-confidence diagnostics flag tight `Wait(0)` loops, synchronous SQL, excessive network handlers, placeholder mismatches and optional annotated-table/column mismatches. Built-in adapter metadata covers `oxmysql` and `mysql-async`, and custom adapters can be configured.
 
+## Telemetry and crash reporting
+
+Lugo sends anonymous, redacted operational events to the hardcoded EU PostHog endpoint. Set `LUGO_TELEMETRY=false` (or disable telemetry in client initialization) to opt out. Opting out stops future collection, closes the local delivery queue, and removes Lugo's local trace journal when possible; it cannot retract events already accepted by the remote service.
+
+Panic envelopes include a separately redacted and bounded stack, a bounded list of recent trace identifiers (not prior event payloads), and non-sensitive process/build metadata. Normal event metadata has a stricter bound. Lugo flushes telemetry on orderly LSP shutdown and explicitly before CI exits. No in-process handler can report crashes caused by `SIGKILL`, a forced termination, or an OOM condition that prevents the process from running its recovery/flush code.
+
 ## Repository quality gates
 
 Run the same checks used by CI with the quality-gate script:
@@ -199,6 +205,33 @@ You can configure Lugo via your VS Code `settings.json` (also available via the 
 * `lugo.environment.knownGlobals`: Global variables to ignore when reporting undefined globals. Supports wildcards (e.g., `N_0x*`).
 * `lugo.workspace.maxFileSizeMB`: Maximum file size in megabytes to index (default: `4`). Files larger than this are ignored to prevent out-of-memory crashes.
 * `lugo.telemetry.enabled`: Enable or disable anonymous crash reporting and telemetry (default: `true`).
+
+### Telemetry and local tracing
+
+Lugo collects only bounded, anonymous operational metadata when telemetry is
+enabled. Source code, absolute paths, workspace names, symbols, MCP arguments,
+and document contents are redacted before they can leave the process. The
+extension and Go processes keep a bounded local trace journal so an abnormal
+LSP/MCP exit can report the most recent correlated operations. Traces are not
+exported through OTLP; PostHog receives analytics and redacted crash summaries
+only.
+
+The Go binaries use these environment variables:
+
+* `LUGO_TELEMETRY=false`: global opt-out; stop collection and purge Lugo's
+  local journal when possible.
+* `LUGO_TELEMETRY_LOCAL_ONLY=true`: keep the bounded local trace journal but
+  disable PostHog delivery. `LUGO_TELEMETRY=false` takes precedence.
+The bundled project token targets the EU PostHog Cloud project and uses
+`https://eu.i.posthog.com`; EU and US PostHog projects are region-isolated, so
+the EU project token must be sent to the EU ingestion host.
+* `LUGO_TRACE_JOURNAL`: optional path for the local NDJSON trace journal. By
+  default it is stored under the platform user cache directory.
+* `LUGO_TRACE_MAX_BYTES`: maximum journal size (default: 1 MiB).
+
+The MCP executable also accepts `LUGO_MCP_TELEMETRY=0|false|off|no` for an
+explicit MCP opt-out. MCP trace boundaries are recorded locally without raw
+tool arguments or paths.
 
 **Parser & Diagnostics**
 * `lugo.diagnostics.bannedSymbols`: Map of banned global functions/symbols to a custom warning message (e.g., `{"print": "Use customLogger instead"}`).

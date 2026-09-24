@@ -3,6 +3,7 @@ package lsp
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/coalaura/plain"
 )
@@ -207,6 +209,12 @@ func (s *Server) MCPDiagnostics(uri string) (json.RawMessage, error) {
 // returns its JSON result. It is intentionally serialized because the LSP
 // server reuses parser and response buffers for allocation-free operation.
 func (s *Server) MCPRequest(method string, params json.RawMessage) (json.RawMessage, error) {
+	return s.MCPRequestContext(context.Background(), method, params)
+}
+
+// MCPRequestContext dispatches an MCP-backed LSP request while preserving the
+// caller's trace context across the LSP boundary.
+func (s *Server) MCPRequestContext(ctx context.Context, method string, params json.RawMessage) (result json.RawMessage, resultErr error) {
 	s.mcpMu.Lock()
 	defer s.mcpMu.Unlock()
 
@@ -222,7 +230,17 @@ func (s *Server) MCPRequest(method string, params json.RawMessage) (json.RawMess
 	s.Writer = &output
 	defer func() { s.Writer = oldWriter }()
 
-	s.handleMessage(Request{
+	traceCtx, _ := StartSpan(ctx)
+	RecordTelemetry(traceCtx, "lugo.mcp.lsp_request.start", map[string]any{"method": method})
+	started := time.Now()
+	defer func() {
+		status := "ok"
+		if resultErr != nil {
+			status = "error"
+		}
+		RecordTelemetry(traceCtx, "lugo.mcp.lsp_request.finish", map[string]any{"method": method, "status": status, "duration_ms": time.Since(started).Milliseconds()})
+	}()
+	s.handleMessageContext(withRecoverableMCPRequest(traceCtx), Request{
 		RPC:    "2.0",
 		Method: method,
 		Params: params,
@@ -259,5 +277,11 @@ func (s *Server) MCPRequest(method string, params json.RawMessage) (json.RawMess
 		return envelope.Result, nil
 	}
 
-	return json.RawMessage("null"), nil
+	resultErr = fmt.Errorf("LSP response missing")
+	RecordTelemetry(traceCtx, "lugo.mcp.lsp_request.missing_response", map[string]any{
+		"boundary":     "embedded_mcp",
+		"method_class": mcpMethodClass(method),
+		"status":       "missing_response",
+	})
+	return nil, resultErr
 }

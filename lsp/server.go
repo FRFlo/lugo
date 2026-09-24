@@ -3,16 +3,17 @@ package lsp
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"maps"
 	"os"
 	"path/filepath"
-	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/coalaura/plain"
 
@@ -49,6 +50,7 @@ type Server struct {
 	canceledRequests        map[string]struct{}
 	canceledRequestsMu      sync.Mutex
 	mcpMu                   sync.Mutex
+	trace                   TraceContext
 
 	// Transport & Logging
 	Reader *bufio.Reader
@@ -268,17 +270,21 @@ func (s *Server) Start() error {
 	)
 
 	s.Log.Printf("Lugo LSP %s Started\n", s.Version)
+	RecordTelemetry(WithTraceContext(context.Background(), s.trace), "lugo.lsp.lifecycle", map[string]any{"state": "started", "version": s.Version})
+	defer RecordTelemetry(WithTraceContext(context.Background(), s.trace), "lugo.lsp.lifecycle", map[string]any{"state": "stopped"})
 
 	for {
 		msg, err := ReadMessage(s.Reader)
 		if err != nil {
 			if err == io.EOF || strings.Contains(err.Error(), "closed") {
 				s.Log.Println("Input stream closed, stopping server.")
+				RecordTelemetry(WithTraceContext(context.Background(), s.trace), "lugo.lsp.transport", map[string]any{"operation": "read", "status": "closed"})
 
 				break
 			}
 
 			s.Log.Errorf("Error reading message: %v\n", err)
+			RecordTelemetry(WithTraceContext(context.Background(), s.trace), "lugo.lsp.transport", map[string]any{"operation": "read", "status": "error", "error_type": fmt.Sprintf("%T", err)})
 
 			continue
 		}
@@ -288,7 +294,8 @@ func (s *Server) Start() error {
 		err = json.Unmarshal(msg, &req)
 		if err != nil {
 			s.Log.Errorf("Failed to unmarshal request: %v\n", err)
-			_ = WriteMessage(s.Writer, Response{
+			RecordTelemetry(WithTraceContext(context.Background(), s.trace), "lugo.lsp.request", map[string]any{"status": "parse_error", "error_type": fmt.Sprintf("%T", err)})
+			_ = writeProtocolResponse(WithTraceContext(context.Background(), s.trace), s.Writer, "parse", Response{
 				RPC: "2.0",
 				ID:  nil,
 				Error: ResponseError{
@@ -300,8 +307,9 @@ func (s *Server) Start() error {
 			continue
 		}
 		if req.RPC != "2.0" || req.Method == "" {
+			RecordTelemetry(WithTraceContext(context.Background(), s.trace), "lugo.lsp.request", map[string]any{"status": "invalid"})
 			if req.ID != nil {
-				_ = WriteMessage(s.Writer, Response{
+				_ = writeProtocolResponse(WithTraceContext(context.Background(), s.trace), s.Writer, "invalid", Response{
 					RPC: "2.0",
 					ID:  req.ID,
 					Error: ResponseError{
@@ -314,7 +322,8 @@ func (s *Server) Start() error {
 		}
 
 		if req.Method != "$/cancelRequest" && req.ID != nil && s.takeCanceledRequest(req.ID) {
-			_ = WriteMessage(s.Writer, Response{
+			RecordTelemetry(WithTraceContext(context.Background(), s.trace), "lugo.lsp.request", map[string]any{"method": req.Method, "status": "cancelled"})
+			_ = writeProtocolResponse(WithTraceContext(context.Background(), s.trace), s.Writer, "cancel", Response{
 				RPC: "2.0",
 				ID:  req.ID,
 				Error: ResponseError{
@@ -333,6 +342,9 @@ func (s *Server) Start() error {
 
 func (s *Server) applyInitializationOptions(opts InitializationOptions) (needsReindex bool, needsRepublish bool) {
 	SetTelemetryEnabled(opts.TelemetryEnabled)
+	if opts.TelemetryTraceID != "" {
+		s.trace = TraceContext{TraceID: opts.TelemetryTraceID, SpanID: opts.TelemetrySpanID}
+	}
 
 	effectiveLibraryPaths := s.buildConfiguredLibraryPaths(opts.LibraryPaths)
 	if s.setLibraryPaths(effectiveLibraryPaths) {
@@ -499,30 +511,88 @@ func (s *Server) setLibraryPaths(paths []string) bool {
 	return true
 }
 
+type recoverableMCPRequestContextKey struct{}
+
+func withRecoverableMCPRequest(ctx context.Context) context.Context {
+	return context.WithValue(ctx, recoverableMCPRequestContextKey{}, true)
+}
+
+func isRecoverableMCPRequest(ctx context.Context) bool {
+	recoverable, _ := ctx.Value(recoverableMCPRequestContextKey{}).(bool)
+	return recoverable
+}
+
+func mcpMethodClass(method string) string {
+	switch {
+	case strings.HasPrefix(method, "textDocument/"):
+		return "text_document"
+	case strings.HasPrefix(method, "workspace/"):
+		return "workspace"
+	case strings.HasPrefix(method, "lugo/"):
+		return "lugo"
+	case strings.HasPrefix(method, "$/"):
+		return "protocol"
+	default:
+		return "other"
+	}
+}
+
 func (s *Server) handleMessage(req Request) {
+	s.handleMessageContext(WithTraceContext(context.Background(), s.trace), req)
+}
+
+func (s *Server) handleMessageContext(parent context.Context, req Request) {
+	ctx, _ := StartSpan(parent)
+	started := time.Now()
+	RecordTelemetry(ctx, "lugo.lsp.request.start", map[string]any{"method": req.Method, "has_id": req.ID != nil})
+	status := "ok"
+	defer func() {
+		RecordTelemetry(ctx, "lugo.lsp.request.finish", map[string]any{"method": req.Method, "status": status, "duration_ms": time.Since(started).Milliseconds()})
+	}()
 	defer s.trimSharedBuffers()
 	defer func() {
 		if r := recover(); r != nil {
-			stack := debug.Stack()
+			status = "panic"
+			if isRecoverableMCPRequest(parent) {
+				RecordTelemetry(ctx, "lsp_request_panic_recovered", map[string]any{
+					"boundary":     "embedded_mcp",
+					"method_class": mcpMethodClass(req.Method),
+					"panic_type":   fmt.Sprintf("%T", r),
+				})
+				if req.ID != nil {
+					_ = writeProtocolResponse(ctx, s.Writer, "panic", Response{
+						RPC: "2.0",
+						ID:  req.ID,
+						Error: ResponseError{
+							Code:    -32603,
+							Message: "internal error",
+						},
+					})
+				}
+				return
+			}
 
-			s.Log.Errorf("CRITICAL PANIC in method %s: %v\n%s\n", req.Method, r, string(stack))
+			// Do not expose panic values or raw stack paths on the protocol/log
+			// channel. The bounded crash envelope retains a redacted stack locally.
+			s.Log.Errorf("CRITICAL PANIC in method class %s\n", mcpMethodClass(req.Method))
 
-			CapturePanic(r, "handleMessage:"+req.Method)
+			CapturePanicContext(ctx, r, "handleMessage:"+req.Method)
 			FlushTelemetry()
 
 			// Attempt to notify the client before we die
 			if req.ID != nil {
-				WriteMessage(s.Writer, Response{
+				writeProtocolResponse(ctx, s.Writer, "panic", Response{
 					RPC: "2.0",
 					ID:  req.ID,
 					Error: ResponseError{
 						Code:    -32603, // InternalError
-						Message: fmt.Sprintf("Lugo LSP crashed critically: %v", r),
+						Message: "internal error",
 					},
 				})
 			}
 
-			// Fail-fast
+			// A panic can leave mutable parser state unsafe. Flush the local journal
+			// before fail-fast termination; defer-based cleanup cannot run after Exit.
 			os.Exit(1)
 		}
 	}()
@@ -635,7 +705,7 @@ func (s *Server) handleMessage(req Request) {
 		// JSON-RPC requests must receive a method-not-found response. Ignore
 		// unknown notifications, which have no response ID by definition.
 		if req.ID != nil {
-			_ = WriteMessage(s.Writer, Response{
+			_ = writeProtocolResponse(ctx, s.Writer, "unknown", Response{
 				RPC: "2.0",
 				ID:  req.ID,
 				Error: ResponseError{
@@ -1119,6 +1189,9 @@ func (s *Server) handleShutdown(req Request) {
 
 func (s *Server) handleExit() {
 	s.Log.Println("Received exit notification, terminating.")
+	RecordTelemetry(WithTraceContext(context.Background(), s.trace), "lugo.lsp.lifecycle", map[string]any{"action": "exit"})
+	// os.Exit bypasses deferred shutdown; sync the bounded local journal first.
+	FlushTelemetry()
 
 	os.Exit(0)
 }
