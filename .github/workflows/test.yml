@@ -36,13 +36,15 @@ jobs:
       run: go generate ./lsp
 
     - name: Check formatting and diff cleanliness
-      run: bash ./scripts/quality-gate.sh format
+      run: |
+        test -z "$(gofmt -l $(git ls-files -- '*.go'))"
+        git diff --check
 
     - name: Run package coverage
-      run: bash ./scripts/quality-gate.sh coverage
+      run: go test -count=1 -cover ./...
 
-    - name: Run lexer/parser benchmark allocation gate
-      run: bash ./scripts/quality-gate.sh benchmark
+    - name: Check lexer/parser benchmark allocations
+      run: go run ./scripts/benchmark-gate
 
     - name: Build MCP server
       run: go build -trimpath -buildvcs=false ./cmd/lugo-mcp
@@ -51,7 +53,7 @@ jobs:
       env:
         CGO_ENABLED: 1
         CC: gcc
-      run: bash ./scripts/quality-gate.sh race
+      run: go test -count=1 -v -race ./...
 
     - name: Validate VS Code extension package
       if: github.event_name == 'pull_request'

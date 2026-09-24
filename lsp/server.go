@@ -919,7 +919,11 @@ func (s *Server) handleInitialized(req Request) {
 	_ = req
 
 	s.IsIndexing = false
-	go s.refreshWorkspace()
+	// Requests are dispatched on the reader goroutine. Indexing on another
+	// goroutine races with didOpen/didChange and shared symbol maps when clients
+	// send notifications immediately after initialized. Finish the initial
+	// index before dispatching the next request.
+	s.refreshWorkspace()
 	s.sendShowMessage(3, "Lugo LSP "+s.Version+" ready.")
 }
 

@@ -102,19 +102,23 @@ Lugo sends anonymous, redacted operational events to the hardcoded EU PostHog en
 
 Panic envelopes include a separately redacted and bounded stack, a bounded list of recent trace identifiers (not prior event payloads), and non-sensitive process/build metadata. Normal event metadata has a stricter bound. Lugo flushes telemetry on orderly LSP shutdown and explicitly before CI exits. No in-process handler can report crashes caused by `SIGKILL`, a forced termination, or an OOM condition that prevents the process from running its recovery/flush code.
 
-## Repository quality gates
+## Repository checks
 
-Run the same checks used by CI with the quality-gate script:
+Run the same direct commands used by CI:
 
 ```bash
-bash ./scripts/quality-gate.sh format     # gofmt and whitespace/diff checks
-bash ./scripts/quality-gate.sh coverage   # package tests with coverage
-bash ./scripts/quality-gate.sh benchmark  # lexer/parser benchmark + zero allocations
-bash ./scripts/quality-gate.sh race       # race-enabled test suite (requires CGO and a C compiler)
-bash ./scripts/quality-gate.sh all
+test -z "$(gofmt -l $(git ls-files -- '*.go'))"  # formatting
+git diff --check
+go test -count=1 -cover ./...                       # package coverage
+go run ./scripts/benchmark-gate                      # fail unless both benchmarks report 0 allocs/op
+go test -count=1 -v -race ./...                     # requires CGO and a C compiler
 ```
 
 The lexer and parser benchmarks must continue to report `0 allocs/op`.
+
+The mandatory subprocess E2E suite (`go test ./tests/e2e -v`) exercises LSP and
+MCP against a static multi-resource FiveM workspace without an FXServer.
+See [tests/README.md](tests/README.md) for the fixture and test layers.
 
 ## MCP server
 
@@ -152,22 +156,6 @@ Because Lugo does not rely on a generic wrapper, you must pass your settings dir
 You can easily add Lugo as a custom server in your Neovim environment. Since Lugo is standalone, you will need to pass the initialization options directly.
 
 See [**`example.init.lua`**](example.init.lua) for a complete setup snippet.
-
-## Optional FiveM runtime integration tier
-
-Static Go/Lua tests do not require FXServer and remain the default test tier. An optional smoke tier exercises a real resource manifest, server event, export, and (when available) NUI contract:
-
-```bash
-# Use an already running FXServer (the resource must be started there)
-FIVEM_RUNTIME_ENDPOINT=http://127.0.0.1:30120 \\
-  bash ./scripts/fivem-runtime-smoke.sh
-
-# Or start a configured server command. {resource} and {port} are replaced.
-FIVEM_SERVER_COMMAND='FXServer +exec server.cfg' \\
-  bash ./scripts/fivem-runtime-smoke.sh
-```
-
-With no configuration, or when the endpoint is unavailable, the script prints an explicit `SKIP` reason and exits successfully. It is never part of static `go test ./...`. Set `FIVEM_RUNTIME_REQUIRED=1` to make an unavailable configured runtime fail. `FIVEM_RUNTIME_RESOURCE`, `FIVEM_RUNTIME_PORT`, and `FIVEM_RUNTIME_SMOKE_URL` customize the deployment. The fixture is in `scripts/fixtures/fivem-runtime-smoke/`.
 
 ## CI/CD Pipeline Integration
 
