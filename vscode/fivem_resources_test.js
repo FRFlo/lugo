@@ -15,6 +15,14 @@ test("registers the FiveM resource view and refresh command", () => {
 	assert.ok(manifest.contributes.views.explorer.some(view => view.id === "lugo.fivemResources"));
 });
 
+test("exposes the tree change event rather than its emitter", () => {
+	const source = fs.readFileSync(path.join(__dirname, "extension.js"), "utf8");
+	const provider = source.match(/class FiveMResourceProvider \{([\s\S]*?)\n\}/)?.[1];
+	assert.ok(provider, "FiveMResourceProvider must be defined");
+	assert.match(provider, /this\.onDidChangeTreeData\s*=\s*this\._onDidChangeTreeData\.event/);
+	assert.doesNotMatch(provider, /this\.onDidChangeTreeData\s*=\s*new vscode\.EventEmitter/);
+});
+
 test("parses resource metadata deterministically", () => {
 	const resource = parseManifest(`fx_version 'cerulean'\nname 'city-core'\nshared_script 'shared.lua'\ndependency 'mysql-async'\ndependencies { 'ox_lib', 'mysql-async' }`, "/tmp/city-core/fxmanifest.lua");
 	assert.deepEqual(resource, {

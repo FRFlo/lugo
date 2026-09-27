@@ -132,13 +132,14 @@ class FiveMResourceProvider {
 	constructor() {
 		this.resources = [];
 		this.refreshVersion = 0;
-		this.onDidChangeTreeData = new vscode.EventEmitter();
+		this._onDidChangeTreeData = new vscode.EventEmitter();
+		this.onDidChangeTreeData = this._onDidChangeTreeData.event;
 	}
 	async refresh() {
 		const version = ++this.refreshVersion;
 		const diagnostics = vscode.languages.getDiagnostics().map(([uri, values]) => ({ path: uri.fsPath, count: values.length }));
 		this.resources = [];
-		this.onDidChangeTreeData.fire();
+		this._onDidChangeTreeData.fire();
 		const workspaceFolders = (vscode.workspace.workspaceFolders || []).map(folder => folder.uri.fsPath);
 			let resources;
 		try {
@@ -146,7 +147,7 @@ class FiveMResourceProvider {
 			if (version !== this.refreshVersion) return;
 			this.resources.push(resource);
 			this.resources.sort((a, b) => a.name.localeCompare(b.name) || a.manifestPath.localeCompare(b.manifestPath));
-			this.onDidChangeTreeData.fire();
+			this._onDidChangeTreeData.fire();
 			});
 		} catch (error) {
 			telemetry?.record("resource_discovery_failed", errorMetadata(error));
@@ -157,13 +158,13 @@ class FiveMResourceProvider {
 		}
 		if (version === this.refreshVersion) {
 			this.resources = resources;
-			this.onDidChangeTreeData.fire();
+			this._onDidChangeTreeData.fire();
 		}
 		return this.resources;
 	}
 	getTreeItem(resource) { return new FiveMResourceItem(resource); }
 	getChildren() { return this.resources; }
-	dispose() { this.onDidChangeTreeData.dispose(); }
+	dispose() { this._onDidChangeTreeData.dispose(); }
 }
 
 const posthogClient = new PostHog("phc_AtCceYjFoZzdnFgfKNMGArJGbLMyFzzqvjBx7SQCou6k", { host: "https://eu.i.posthog.com" });
