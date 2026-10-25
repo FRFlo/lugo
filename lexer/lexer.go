@@ -40,16 +40,8 @@ func init() {
 }
 
 func New(source []byte) *Lexer {
-	l := &Lexer{
-		source: source,
-		length: uint32(len(source)),
-	}
-
-	if bytes.HasPrefix(source, []byte{0xEF, 0xBB, 0xBF}) {
-		l.read = 3
-	}
-	l.advance()
-
+	l := &Lexer{}
+	l.Reset(source)
 	return l
 }
 
@@ -60,7 +52,7 @@ func (l *Lexer) Reset(source []byte) {
 	l.read = 0
 	l.ch = 0
 
-	if bytes.HasPrefix(source, []byte{0xEF, 0xBB, 0xBF}) {
+	if len(source) >= 3 && source[0] == 0xEF && source[1] == 0xBB && source[2] == 0xBF {
 		l.read = 3
 	}
 	l.advance()
