@@ -68,6 +68,56 @@ func TestAdvertisesNavigationSurface(t *testing.T) {
 	}
 }
 
+func TestAdvertisesWorkspaceFolderChangeSupport(t *testing.T) {
+	capabilities := initializeCapabilitiesForTest(t)
+	if capabilities.Workspace == nil {
+		t.Fatal("workspace capabilities = nil, want workspace folder support")
+	}
+	folders := capabilities.Workspace.WorkspaceFolders
+	if folders == nil {
+		t.Fatal("workspaceFolders capability = nil, want support")
+	}
+	if !folders.Supported {
+		t.Error("workspaceFolders.supported = false, want true")
+	}
+	if !folders.ChangeNotifications {
+		t.Error("workspaceFolders.changeNotifications = false, want true")
+	}
+}
+
+func TestInitializeAcceptsVSCodeWorkspaceCapabilities(t *testing.T) {
+	s := NewServer("test")
+	var output bytes.Buffer
+	s.Writer = &output
+	s.Log = plain.New(plain.WithTarget(io.Discard))
+
+	s.handleInitialize(Request{
+		RPC: "2.0",
+		ID:  float64(1),
+		Params: json.RawMessage(`{
+			"rootUri": "file:///workspace",
+			"workspaceFolders": [{"uri": "file:///workspace", "name": "workspace"}],
+			"capabilities": {
+				"workspace": {
+					"applyEdit": true,
+					"workspaceFolders": true,
+					"didChangeConfiguration": {"dynamicRegistration": true}
+				}
+			}
+		}`),
+	})
+
+	if len(s.WorkspaceFolders) != 1 {
+		t.Fatalf("workspace folders = %v, want one initialized folder", s.WorkspaceFolders)
+	}
+	if s.RootURI == "" || s.lowerRootPath == "" {
+		t.Fatalf("root not initialized: uri=%q path=%q", s.RootURI, s.lowerRootPath)
+	}
+	if !s.workspaceFolderSupport {
+		t.Fatal("workspace folder support = false, want true")
+	}
+}
+
 func TestAdvertisesLinkedEditingAndSourceFixAll(t *testing.T) {
 	capabilities := initializeCapabilitiesForTest(t)
 	if !capabilities.LinkedEditingRangeProvider {

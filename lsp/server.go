@@ -846,6 +846,10 @@ func (s *Server) handleInitialize(req Request) {
 				Commands: []string{"lugo.applySafeFixes"},
 			},
 			Workspace: &WorkspaceServerCapabilities{
+				WorkspaceFolders: &WorkspaceFoldersServerCapabilities{
+					Supported:           true,
+					ChangeNotifications: true,
+				},
 				FileOperations: &WorkspaceFileOperationsServerCapabilities{
 					WillRename: &FileOperationRegistrationOptions{
 						Filters: []FileOperationFilter{

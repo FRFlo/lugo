@@ -177,10 +177,14 @@ type CompletionItemClientCapabilities struct {
 
 // WorkspaceClientCapabilities represents workspace specific client capabilities.
 type WorkspaceClientCapabilities struct {
-	ApplyEdit              bool `json:"applyEdit,omitempty"`
-	WorkspaceFolders       bool `json:"workspaceFolders,omitempty"`
-	DidChangeConfiguration bool `json:"didChangeConfiguration,omitempty"`
-	DynamicRegistration    bool `json:"dynamicRegistration,omitempty"`
+	ApplyEdit              bool                                      `json:"applyEdit,omitempty"`
+	WorkspaceFolders       bool                                      `json:"workspaceFolders,omitempty"`
+	DidChangeConfiguration *DidChangeConfigurationClientCapabilities `json:"didChangeConfiguration,omitempty"`
+	DynamicRegistration    bool                                      `json:"dynamicRegistration,omitempty"`
+}
+
+type DidChangeConfigurationClientCapabilities struct {
+	DynamicRegistration bool `json:"dynamicRegistration,omitempty"`
 }
 
 type WindowClientCapabilities struct {
@@ -388,7 +392,14 @@ type ServerCapabilities struct {
 
 // WorkspaceServerCapabilities represents workspace-specific server capabilities.
 type WorkspaceServerCapabilities struct {
-	FileOperations *WorkspaceFileOperationsServerCapabilities `json:"fileOperations,omitempty"`
+	WorkspaceFolders *WorkspaceFoldersServerCapabilities        `json:"workspaceFolders,omitempty"`
+	FileOperations   *WorkspaceFileOperationsServerCapabilities `json:"fileOperations,omitempty"`
+}
+
+// WorkspaceFoldersServerCapabilities describes workspace folder support.
+type WorkspaceFoldersServerCapabilities struct {
+	Supported           bool `json:"supported"`
+	ChangeNotifications bool `json:"changeNotifications,omitempty"`
 }
 
 // WorkspaceFileOperationsServerCapabilities represents workspace file operation capabilities.
