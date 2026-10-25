@@ -29,6 +29,14 @@ func TestLexer_Comprehensive(t *testing.T) {
 			},
 		},
 		{
+			name:  "UTF-8 BOM",
+			input: "\uFEFFlocal value = 1",
+			expected: []lexTest{
+				{token.Local, "local"}, {token.Ident, "value"}, {token.Assign, "="},
+				{token.Number, "1"}, {token.EOF, ""},
+			},
+		},
+		{
 			name:  "Numbers (Lua 5.4 Standard & Hex Floats)",
 			input: "42 3.14 .5 5. 0xFF 0x1p-3 1e10",
 			expected: []lexTest{

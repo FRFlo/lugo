@@ -45,6 +45,9 @@ func New(source []byte) *Lexer {
 		length: uint32(len(source)),
 	}
 
+	if bytes.HasPrefix(source, []byte{0xEF, 0xBB, 0xBF}) {
+		l.read = 3
+	}
 	l.advance()
 
 	return l
@@ -57,6 +60,9 @@ func (l *Lexer) Reset(source []byte) {
 	l.read = 0
 	l.ch = 0
 
+	if bytes.HasPrefix(source, []byte{0xEF, 0xBB, 0xBF}) {
+		l.read = 3
+	}
 	l.advance()
 }
 
