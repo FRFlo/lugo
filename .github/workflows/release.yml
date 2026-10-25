@@ -180,7 +180,7 @@ jobs:
 
     - name: Install dependencies
       working-directory: ./vscode
-      run: npm install
+      run: npm ci
 
     - name: Package VS Code Extension
       working-directory: ./vscode

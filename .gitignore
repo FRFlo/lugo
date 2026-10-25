@@ -4,6 +4,7 @@
 *.prof
 *.out
 !vscode/package.json
+!vscode/package-lock.json
 !vscode/language-configuration.json
 !.vscode/launch.json
 !example.ci.json
