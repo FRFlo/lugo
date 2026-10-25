@@ -395,12 +395,13 @@ func NewFiveMResourceGraph() *FiveMResourceGraph {
 }
 
 type FiveMBuiltinEvent struct {
-	Name        string
-	Subset      string // Host execution subset (CLIENT, SERVER, or SHARED).
-	Profile     string // Resource profile in which the host event is available.
-	Direction   string // Direction from the host runtime to resource code.
-	Description string
-	Payload     string
+	Name           string
+	Subset         string // Host execution subset (CLIENT, SERVER, or SHARED).
+	Profile        string // Resource profile in which the host event is available.
+	Direction      string // Direction from the host runtime to resource code.
+	Description    string
+	Payload        string
+	NetworkBuiltin bool // Host/system network events need no workspace RegisterNetEvent.
 }
 
 func (e FiveMBuiltinEvent) metadata() (profile, direction string) {
@@ -443,17 +444,17 @@ var EventsBuiltin = map[string]FiveMBuiltinEvent{
 	"playerConnecting": {
 		Subset:      "SERVER",
 		Description: "Fires when a player is connecting to the server. Use this to deny or allow the connection.",
-		Payload:     "(source: number, name: string, setKickReason: function, deferrals: table)",
+		Payload:     "(name: string, setKickReason: function, deferrals: table)",
 	},
 	"playerJoining": {
 		Subset:      "SERVER",
 		Description: "Fires when a player has successfully joined and is being assigned to a slot.",
-		Payload:     "(source: number, name: string, id: number)",
+		Payload:     "(oldID: string)",
 	},
 	"playerDropped": {
 		Subset:      "SERVER",
 		Description: "Fires when a player disconnects or is dropped from the server.",
-		Payload:     "(source: number, reason: string)",
+		Payload:     "(reason: string, resourceName: string, dropReason: number)",
 	},
 	"entityCreating": {
 		Subset:      "SERVER",
@@ -471,9 +472,9 @@ var EventsBuiltin = map[string]FiveMBuiltinEvent{
 		Payload:     "(entityId: number)",
 	},
 	"weaponDamageEvent": {
-		Subset:      "SHARED",
+		Subset:      "SERVER",
 		Description: "Fires when a weapon damage is dealt. Can be used to modify damage or cancel.",
-		Payload:     "(victim: number, attacker: number, weaponHash: number, damage: number, isAutoRestart: boolean)",
+		Payload:     "(sender: number, data: table)",
 	},
 	"onResourceStarting": {
 		Subset:      "SHARED",
@@ -518,12 +519,12 @@ var EventsBuiltin = map[string]FiveMBuiltinEvent{
 	"playerEnteredScope": {
 		Subset:      "SERVER",
 		Description: "Fires when a player enters another player's scope.",
-		Payload:     "(for: number, player: number)",
+		Payload:     "(data: table)",
 	},
 	"playerLeftScope": {
 		Subset:      "SERVER",
 		Description: "Fires when a player leaves another player's scope.",
-		Payload:     "(for: number, player: number)",
+		Payload:     "(data: table)",
 	},
 	"populationPedCreating": {
 		Subset:      "CLIENT",
@@ -531,23 +532,23 @@ var EventsBuiltin = map[string]FiveMBuiltinEvent{
 		Payload:     "(handle: number)",
 	},
 	"onClientResourceStart": {
-		Subset:      "CLIENT",
-		Description: "Fires when a client resource starts.",
+		Subset:      "SHARED",
+		Description: "Fires when a resource starts; delivered on both client and server.",
 		Payload:     "(resourceName: string)",
 	},
 	"onClientResourceStop": {
-		Subset:      "CLIENT",
-		Description: "Fires when a client resource stops.",
+		Subset:      "SHARED",
+		Description: "Fires when a resource stops; delivered on both client and server.",
 		Payload:     "(resourceName: string)",
 	},
 	"onServerResourceStart": {
-		Subset:      "SERVER",
-		Description: "Fires when a server resource starts.",
+		Subset:      "SHARED",
+		Description: "Fires when a resource starts; delivered on both client and server.",
 		Payload:     "(resourceName: string)",
 	},
 	"onServerResourceStop": {
-		Subset:      "SERVER",
-		Description: "Fires when a server resource stops.",
+		Subset:      "SHARED",
+		Description: "Fires when a resource stops; delivered on both client and server.",
 		Payload:     "(resourceName: string)",
 	},
 	"chatMessage": {
@@ -559,6 +560,155 @@ var EventsBuiltin = map[string]FiveMBuiltinEvent{
 		Subset:      "SERVER",
 		Description: "Fires when an RCON command is executed.",
 		Payload:     "(commandName: string, args: table)",
+	},
+	"serverEntityCreated": {
+		Subset:      "SERVER",
+		Description: "Fires when a server-managed, non-networked entity is created.",
+		Payload:     "(handle: number)",
+	},
+	"onPlayerBucketChange": {
+		Subset:      "SERVER",
+		Description: "Fires when a player's routing bucket changes.",
+		Payload:     "(player: string, bucket: number, oldBucket: number)",
+	},
+	"onEntityBucketChange": {
+		Subset:      "SERVER",
+		Description: "Fires when an entity's routing bucket changes.",
+		Payload:     "(entity: string, bucket: number, oldBucket: number)",
+	},
+	"removeAllWeaponsEvent": {
+		Subset:      "SERVER",
+		Description: "Fires when all weapons are removed from a ped.",
+		Payload:     "(sender: number, data: table)",
+	},
+	"startProjectileEvent": {
+		Subset:      "SERVER",
+		Description: "Fires when a projectile is fired.",
+		Payload:     "(sender: number, data: table)",
+	},
+	"ptFxEvent": {
+		Subset:      "SERVER",
+		Description: "Fires when a particle-effects network event occurs.",
+		Payload:     "(sender: number, data: table)",
+	},
+	"givePedScriptedTaskEvent": {
+		Subset:      "SERVER",
+		Description: "Fires when a scripted task is given to a ped.",
+		Payload:     "(sender: number, data: table)",
+	},
+	"onResourceListRefresh": {
+		Subset:      "SERVER",
+		Description: "Fires when the server resource list is refreshed.",
+		Payload:     "()",
+	},
+	"mumbleConnected": {
+		Subset:      "CLIENT",
+		Description: "Fires when the Mumble voice client connects.",
+		Payload:     "(address: string, reconnecting: boolean)",
+	},
+	"mumbleDisconnected": {
+		Subset:      "CLIENT",
+		Description: "Fires when the Mumble voice client disconnects.",
+		Payload:     "(address: string)",
+	},
+	"onPlayerDropped": {
+		Subset:      "CLIENT",
+		Description: "Fires when a remote player is removed from the local player's scope.",
+	},
+	"__cfx_internal:commandFallback": {
+		Subset:      "SERVER",
+		Description: "Internal local event for commands without a registered handler.",
+		Payload:     "(command: string)",
+	},
+	"__cfx_internal:httpResponse": {
+		Subset:      "SHARED",
+		Description: "Internal local event used to deliver an HTTP request response.",
+	},
+	"__cfx_internal:serverPrint": {
+		Subset:         "CLIENT",
+		Direction:      "server → client resource",
+		Description:    "Internal network event that relays server console output to clients.",
+		Payload:        "(message: string)",
+		NetworkBuiltin: true,
+	},
+	"disconnecting": {
+		Subset:      "CLIENT",
+		Description: "Fires on the client when it is about to disconnect from the server.",
+	},
+	"chat:addMessage": {
+		Subset:         "CLIENT",
+		Direction:      "server → client resource",
+		Description:    "Adds a message to the bundled chat resource.",
+		Payload:        "(message: table)",
+		NetworkBuiltin: true,
+	},
+	"chat:addSuggestion": {
+		Subset:         "CLIENT",
+		Direction:      "server → client resource",
+		Description:    "Adds a command suggestion to the bundled chat resource.",
+		Payload:        "(name: string, help: string, params: table)",
+		NetworkBuiltin: true,
+	},
+	"chat:addSuggestions": {
+		Subset:         "CLIENT",
+		Direction:      "server → client resource",
+		Description:    "Adds command suggestions to the bundled chat resource.",
+		Payload:        "(suggestions: table)",
+		NetworkBuiltin: true,
+	},
+	"chat:removeSuggestion": {
+		Subset:         "CLIENT",
+		Direction:      "server → client resource",
+		Description:    "Removes a command suggestion from the bundled chat resource.",
+		Payload:        "(name: string)",
+		NetworkBuiltin: true,
+	},
+	"chat:addMode": {
+		Subset:         "CLIENT",
+		Direction:      "server → client resource",
+		Description:    "Adds a chat mode to the bundled chat resource.",
+		Payload:        "(mode: table)",
+		NetworkBuiltin: true,
+	},
+	"chat:removeMode": {
+		Subset:         "CLIENT",
+		Direction:      "server → client resource",
+		Description:    "Removes a chat mode from the bundled chat resource.",
+		Payload:        "(mode: string)",
+		NetworkBuiltin: true,
+	},
+	"chat:addTemplate": {
+		Subset:         "CLIENT",
+		Direction:      "server → client resource",
+		Description:    "Adds a message template to the bundled chat resource.",
+		Payload:        "(id: string, html: string)",
+		NetworkBuiltin: true,
+	},
+	"chat:clear": {
+		Subset:         "CLIENT",
+		Direction:      "server → client resource",
+		Description:    "Clears the bundled chat display.",
+		NetworkBuiltin: true,
+	},
+	"chat:init": {
+		Subset:         "SERVER",
+		Direction:      "client → server resource",
+		Description:    "Requests chat configuration from the bundled chat server resource.",
+		NetworkBuiltin: true,
+	},
+	"_chat:messageEntered": {
+		Subset:         "SERVER",
+		Direction:      "client → server resource",
+		Description:    "Fires on the server when a player submits a chat message.",
+		Payload:        "(author: string, color: table, message: string)",
+		NetworkBuiltin: true,
+	},
+	"sessionHostResult": {
+		Subset:         "CLIENT",
+		Direction:      "server → client resource",
+		Description:    "Internal network event reporting a session-hosting result.",
+		Payload:        "(status: string)",
+		NetworkBuiltin: true,
 	},
 }
 

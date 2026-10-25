@@ -2330,6 +2330,9 @@ func (s *Server) diagFiveMUnregisteredNetEvent(doc *Document) {
 		if ev.Kind != FiveMEventTriggerServer && ev.Kind != FiveMEventTriggerClient {
 			continue
 		}
+		if builtin, ok := lookupFiveMBuiltinEvent(ev.Name); ok && builtin.NetworkBuiltin {
+			continue
+		}
 
 		// Check across all indexed documents for a matching RegisterNetEvent.
 		found := false
