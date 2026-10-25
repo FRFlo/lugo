@@ -1223,8 +1223,12 @@ func (p *Parser) parseCallArgs(left ast.NodeID, callToken token.Kind) ast.NodeID
 		} else {
 			p.error("expected ')'")
 		}
-	case token.String:
-		arg := p.tree.AddNode(ast.Node{Kind: ast.KindString, Start: p.curr.Start, End: p.curr.End})
+	case token.String, token.BacktickString:
+		kind := ast.KindString
+		if callToken == token.BacktickString {
+			kind = ast.KindHashedString
+		}
+		arg := p.tree.AddNode(ast.Node{Kind: kind, Start: p.curr.Start, End: p.curr.End})
 
 		p.listStack = append(p.listStack, arg)
 
