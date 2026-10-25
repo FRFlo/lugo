@@ -1,6 +1,10 @@
 package lsp
 
-import "testing"
+import (
+	"slices"
+	"sort"
+	"testing"
+)
 
 func TestFiveMSQLDiagnosticsConservative(t *testing.T) {
 	tests := []struct {
@@ -8,6 +12,9 @@ func TestFiveMSQLDiagnosticsConservative(t *testing.T) {
 		codes        []string
 	}{
 		{"placeholder mismatch", `MySQL.query('select * from users where id = ? and name = ?', {1})`, []string{"fivem-sql-placeholder-count"}},
+		{"named placeholders match keyed bindings", `MySQL.Async.fetchAll('select * from users where discord = @discord and pet = @pet', {['@discord'] = discord, ['@pet'] = pet}, function() end)`, nil},
+		{"named placeholder missing binding", `MySQL.Async.fetchAll('select * from users where discord = @discord and pet = @pet', {['@discord'] = discord}, function() end)`, []string{"fivem-sql-placeholder-count"}},
+		{"named placeholders ignore SQL strings and comments", `MySQL.Async.fetchAll("select '@ignored' from users where id = @id -- @alsoIgnored", {['@id'] = id}, function() end)`, nil},
 		{"schema checks are opt in", `MySQL.query('select missing from users')`, nil},
 		{"declared schema", `---@sql table users (id, name)
 MySQL.query('select users.missing from users')`, []string{"fivem-sql-unknown-column"}},
@@ -19,10 +26,15 @@ MySQL.query(q, {1, 2})`, nil},
 			s, root := newFiveMProfileTestServer(t)
 			doc := addFiveMTestDocument(t, s, root+"/server.lua", tt.source)
 			diags := s.buildFiveMSQLDiagnostics(doc)
-			for _, code := range tt.codes {
-				if !hasDiagnosticCode(diags, code) {
-					t.Fatalf("diagnostics = %#v, missing %s", diags, code)
-				}
+			got := make([]string, 0, len(diags))
+			for _, diagnostic := range diags {
+				got = append(got, diagnostic.Code)
+			}
+			want := append([]string(nil), tt.codes...)
+			sort.Strings(got)
+			sort.Strings(want)
+			if !slices.Equal(got, want) {
+				t.Fatalf("diagnostic codes = %v, want %v; diagnostics: %#v", got, want, diags)
 			}
 		})
 	}

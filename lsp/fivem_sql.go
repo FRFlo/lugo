@@ -3,6 +3,7 @@ package lsp
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/FRFlo/lugo/ast"
@@ -65,9 +66,24 @@ func (s *Server) buildFiveMSQLDiagnostics(doc *Document) []Diagnostic {
 		}
 		sql := unquoteLuaString(string(doc.Source()[doc.Tree.Nodes[query].Start:doc.Tree.Nodes[query].End]))
 		if args := callArgument(doc, n, 1); args != ast.InvalidNode && doc.Tree.Nodes[args].Kind == ast.KindTableExpr {
-			want := strings.Count(sql, "?")
-			if want != int(doc.Tree.Nodes[args].Count) {
-				out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, id), Severity: SeverityWarning, Code: "fivem-sql-placeholder-count", Message: fmt.Sprintf("SQL query has %d placeholders but %d arguments were supplied.", want, doc.Tree.Nodes[args].Count)})
+			named := sqlNamedPlaceholders(sql)
+			if len(named) > 0 {
+				bindings := sqlNamedBindings(doc, args)
+				var missing []string
+				for name := range named {
+					if !bindings[name] {
+						missing = append(missing, "@"+name)
+					}
+				}
+				if len(missing) > 0 {
+					sort.Strings(missing)
+					out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, id), Severity: SeverityWarning, Code: "fivem-sql-placeholder-count", Message: fmt.Sprintf("SQL query has named placeholders without matching bindings: %s.", strings.Join(missing, ", "))})
+				}
+			} else {
+				want := strings.Count(sql, "?")
+				if want != int(doc.Tree.Nodes[args].Count) {
+					out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, id), Severity: SeverityWarning, Code: "fivem-sql-placeholder-count", Message: fmt.Sprintf("SQL query has %d placeholders but %d arguments were supplied.", want, doc.Tree.Nodes[args].Count)})
+				}
 			}
 		}
 		if len(schemas) > 0 {
@@ -75,6 +91,103 @@ func (s *Server) buildFiveMSQLDiagnostics(doc *Document) []Diagnostic {
 		}
 	}
 	return out
+}
+
+func sqlNamedPlaceholders(sql string) map[string]bool {
+	out := make(map[string]bool)
+	for i := 0; i < len(sql); {
+		switch {
+		case sql[i] == '\'' || sql[i] == '"' || sql[i] == '`':
+			quote := sql[i]
+			i++
+			for i < len(sql) {
+				if sql[i] == '\\' && i+1 < len(sql) {
+					i += 2
+					continue
+				}
+				if sql[i] == quote {
+					if i+1 < len(sql) && sql[i+1] == quote {
+						i += 2
+						continue
+					}
+					i++
+					break
+				}
+				i++
+			}
+		case i+1 < len(sql) && sql[i:i+2] == "--":
+			for i < len(sql) && sql[i] != '\n' {
+				i++
+			}
+		case i+1 < len(sql) && sql[i:i+2] == "/*":
+			i += 2
+			for i+1 < len(sql) && sql[i:i+2] != "*/" {
+				i++
+			}
+			if i+1 < len(sql) {
+				i += 2
+			}
+		case (sql[i] == '@' || sql[i] == ':') && i+1 < len(sql) && isSQLNameStart(sql[i+1]):
+			if i == 0 || sql[i-1] != sql[i] {
+				start := i + 1
+				i = start + 1
+				for i < len(sql) && isSQLNamePart(sql[i]) {
+					i++
+				}
+				out[strings.ToLower(sql[start:i])] = true
+			} else {
+				i++
+			}
+		default:
+			i++
+		}
+	}
+	return out
+}
+
+func sqlNamedBindings(doc *Document, tableID ast.NodeID) map[string]bool {
+	out := make(map[string]bool)
+	if doc == nil || doc.Tree == nil || tableID == ast.InvalidNode || int(tableID) >= len(doc.Tree.Nodes) {
+		return out
+	}
+	table := doc.Tree.Nodes[tableID]
+	for i := uint32(0); i < table.Count; i++ {
+		extraIndex := table.Extra + i
+		if int(extraIndex) >= len(doc.Tree.ExtraList) {
+			break
+		}
+		fieldID := doc.Tree.ExtraList[extraIndex]
+		if fieldID == ast.InvalidNode || int(fieldID) >= len(doc.Tree.Nodes) {
+			continue
+		}
+		field := doc.Tree.Nodes[fieldID]
+		if (field.Kind != ast.KindRecordField && field.Kind != ast.KindIndexField) || field.Left == ast.InvalidNode || int(field.Left) >= len(doc.Tree.Nodes) {
+			continue
+		}
+		key := doc.Tree.Nodes[field.Left]
+		var name string
+		switch key.Kind {
+		case ast.KindString:
+			name = unquoteLuaString(string(doc.Source()[key.Start:key.End]))
+		case ast.KindIdent:
+			name = string(doc.Source()[key.Start:key.End])
+		}
+		if len(name) > 1 && (name[0] == '@' || name[0] == ':') {
+			name = name[1:]
+		}
+		if name != "" {
+			out[strings.ToLower(name)] = true
+		}
+	}
+	return out
+}
+
+func isSQLNameStart(b byte) bool {
+	return b == '_' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z'
+}
+
+func isSQLNamePart(b byte) bool {
+	return isSQLNameStart(b) || b >= '0' && b <= '9'
 }
 
 type sqlSchema struct{ columns map[string]bool }
