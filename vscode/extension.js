@@ -452,7 +452,7 @@ async function activate(context) {
 		try {
 			const resources = await resourceProvider.refresh();
 			const diagnostics = resources.reduce((total, resource) => total + resource.diagnostics, 0);
-			resourceStatus.text = `$(server) FiveM: ${resources.length} resources · ${diagnostics} diagnostics`;
+			resourceStatus.text = `$(server) FiveM: ${resources.length} resources`;
 			resourceStatus.show();
 			telemetry?.record("resource_refresh_succeeded", { duration_ms: elapsedMilliseconds(startedAt), resource_count: Math.min(resources.length, 100000), diagnostic_count: Math.min(diagnostics, 1000000) });
 			return resources;
