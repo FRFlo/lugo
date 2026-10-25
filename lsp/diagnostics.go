@@ -655,6 +655,7 @@ func (s *Server) publishDiagnostics(uri string) {
 	s.diagBuf = append(s.diagBuf, s.buildFiveMEntityLifecycleDiagnostics(doc)...)
 	s.diagBuf = append(s.diagBuf, s.buildFiveMCommandDiagnostics(doc)...)
 	s.diagBuf = append(s.diagBuf, s.buildFiveMConvarDiagnostics(doc)...)
+	s.diagBuf = append(s.diagBuf, s.buildFiveMOALVectorDiagnostics(doc)...)
 
 	// FiveM-specific event diagnostics (optional)
 	// Run the unknown-event diagnostic check if enabled, before emitting diagnostics
