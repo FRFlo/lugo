@@ -14,7 +14,7 @@
         "url": "https://github.com/FRFlo/lugo.git"
     },
     "engines": {
-        "vscode": "^1.138.0"
+        "vscode": "^1.140.0"
     },
     "categories": [
         "Programming Languages",

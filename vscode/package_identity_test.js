@@ -54,6 +54,21 @@ test('uses the canonical Lugo package and repository identity', () => {
   assert.equal(`${manifest.publisher}.${manifest.name}`, 'FRFlo.lugo-vscode-fivem-enhanced');
 });
 
+test('supports the VS Code API version declared by its type dependency', () => {
+  const minimumVersion = (range) => range.match(/^\^?(\d+\.\d+\.\d+)/)?.[1].split('.').map(Number);
+  const engine = minimumVersion(manifest.engines.vscode);
+  const types = minimumVersion(manifest.devDependencies['@types/vscode']);
+
+  assert.ok(engine && types, 'VS Code engine and type versions must use parseable ranges');
+  const engineSupportsTypes = engine[0] > types[0]
+    || (engine[0] === types[0] && engine[1] > types[1])
+    || (engine[0] === types[0] && engine[1] === types[1] && engine[2] >= types[2]);
+  assert.ok(
+    engineSupportsTypes,
+    `VS Code engine ${manifest.engines.vscode} must support @types/vscode ${manifest.devDependencies['@types/vscode']}`,
+  );
+});
+
 function test(name, fn) {
   try {
     fn();
