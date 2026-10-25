@@ -1,5 +1,23 @@
 ---@meta
 
+---Sets the map name displayed by the server.
+---@param mapName string
+function SetMapName(mapName) end
+
+---Sets the game type displayed by the server.
+---@param gameType string
+function SetGameType(gameType) end
+
+---Starts a resource by name.
+---@param resourceName string
+---@return boolean
+function StartResource(resourceName) end
+
+---Stops a resource by name.
+---@param resourceName string
+---@return boolean
+function StopResource(resourceName) end
+
 ---Registers a server event and optionally installs a handler.
 ---@param eventName string
 ---@param handler? fun(...: any)

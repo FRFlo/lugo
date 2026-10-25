@@ -468,7 +468,7 @@ These natives are registered via `fx::ScriptEngine` and are always available reg
 | `GetRegisteredCommands()` | `→ table` | Both | Returns an array of `{ name, restricted }` tables. |
 | `GetResourceCommands(resource)` | `string → table` | Both | Returns commands registered by the specified resource. |
 | `GetNumResources()` | `→ integer` | Both | Returns the total number of resources. |
-| `GetResourceByFindIndex(i)` | `integer → string` | Both | Returns the name of the `i`-th resource (1-indexed). |
+| `GetResourceByFindIndex(i)` | `integer → string` | Both | Returns the name of the resource at a zero-based index. |
 | `GetResourceState(name)` | `string → string` | Both | Returns the resource state: `"started"`, `"stopped"`, `"starting"`, `"stopping"`. |
 | `GetInstanceId()` | `→ integer` | Both | Returns the script runtime instance ID. |
 | `IsAceAllowed(object)` | `string → boolean` | Both | Check the Active Community Environment access control for the specified object. |

@@ -1,5 +1,63 @@
 ---@meta
 
+---Returns the name of the current resource.
+---@return string
+function GetCurrentResourceName() end
+
+---Returns the resource that invoked the current call, if any.
+---@return string|nil
+function GetInvokingResource() end
+
+---Returns true when running in a server runtime.
+---@return boolean
+function IsDuplicityVersion() end
+
+---Executes a server console command.
+---@param command string
+function ExecuteCommand(command) end
+
+---Registers a console command.
+---@param name string
+---@param handler fun(source: integer, args: string[], rawCommand: string)
+---@param restricted? boolean
+function RegisterCommand(name, handler, restricted) end
+
+---Returns commands registered by the runtime.
+---@return table[]
+function GetRegisteredCommands() end
+
+---Returns commands registered by a resource.
+---@param resourceName string
+---@return table[]
+function GetResourceCommands(resourceName) end
+
+---Returns the number of resources known to the runtime.
+---@return integer
+function GetNumResources() end
+
+---Returns the resource at a zero-based resource index.
+---@param findIndex integer
+---@return string
+function GetResourceByFindIndex(findIndex) end
+
+---Returns the current state of a resource.
+---@param resourceName string
+---@return string
+function GetResourceState(resourceName) end
+
+---Returns a resource's manifest metadata value.
+---@param resourceName string
+---@param metadataKey string
+---@param index? integer
+---@return string|nil
+function GetResourceMetadata(resourceName, metadataKey, index) end
+
+---Returns the number of values for a resource metadata key.
+---@param resourceName string
+---@param metadataKey string
+---@return integer
+function GetNumResourceMetadata(resourceName, metadataKey) end
+
 ---@class CitizenRuntime
 Citizen = {}
 

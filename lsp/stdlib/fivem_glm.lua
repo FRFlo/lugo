@@ -80,11 +80,24 @@ function vec4(x, y, z) end
 ---@return Vector2
 function vec(x) end
 function vec1() end
-function vector() end
-function vector1() end
-function vector2() end
-function vector3() end
-function vector4() end
+
+---@param x? number
+---@param y? number
+---@return Vector2
+function vector2(x, y) end
+
+---@param x? number
+---@param y? number
+---@param z? number
+---@return Vector3
+function vector3(x, y, z) end
+
+---@param x? number
+---@param y? number
+---@param z? number
+---@param w? number
+---@return Vector4
+function vector4(x, y, z, w) end
 
 -- =============================================================================
 -- Integer Vector Constructors (global)
