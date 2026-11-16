@@ -19,13 +19,20 @@ function firstString(text, pattern) {
 	return match && match[1];
 }
 
-async function findManifests(root, onManifest, results = []) {
+async function findManifests(root, onManifest, results = [], cancelled = () => false, visited = new Set(), physicalRoot = path.resolve(root), traversalRoot = root) {
+	if (cancelled()) return results;
+	// Keep the user's workspace path for resource URIs while identifying
+	// directories by their physical location across workspace aliases.
+	const directory = path.resolve(physicalRoot, path.relative(traversalRoot, root));
+	if (visited.has(directory)) return results;
 	let entries;
 	try { entries = await fs.promises.readdir(root, { withFileTypes: true }); } catch { return results; }
+	visited.add(directory);
 	for (const entry of entries) {
+		if (cancelled()) break;
 		if (entry.name === "node_modules" || entry.name === ".git") continue;
 		const fullPath = path.join(root, entry.name);
-		if (entry.isDirectory()) await findManifests(fullPath, onManifest, results);
+		if (entry.isDirectory()) await findManifests(fullPath, onManifest, results, cancelled, visited, physicalRoot, traversalRoot);
 		else if (entry.name === "fxmanifest.lua" || entry.name === "__resource.lua") {
 			results.push(fullPath);
 			if (onManifest) await onManifest(fullPath);
@@ -36,9 +43,13 @@ async function findManifests(root, onManifest, results = []) {
 
 // Discovery reports each parsed resource as soon as its manifest is found, so
 // large workspaces do not wait for a complete traversal before updating the view.
-async function discoverResources(workspaceFolders, diagnostics = [], onResource) {
+async function discoverResources(workspaceFolders, diagnostics = [], onResource, cancelled = () => false) {
 	const resources = [];
+	const visited = new Set();
 	for (const folder of workspaceFolders || []) {
+		if (cancelled()) break;
+		let physicalRoot;
+		try { physicalRoot = await fs.promises.realpath(folder); } catch { physicalRoot = path.resolve(folder); }
 		await findManifests(folder, async manifestPath => {
 			try {
 				const resource = parseManifest(await fs.promises.readFile(manifestPath, "utf8"), manifestPath);
@@ -47,7 +58,7 @@ async function discoverResources(workspaceFolders, diagnostics = [], onResource)
 				resources.push(resource);
 				if (onResource) onResource(resource);
 			} catch { /* Ignore unreadable manifests. */ }
-		});
+		}, [], cancelled, visited, physicalRoot, folder);
 	}
 	return resources.sort((a, b) => a.name.localeCompare(b.name) || a.manifestPath.localeCompare(b.manifestPath));
 }

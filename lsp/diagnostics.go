@@ -435,6 +435,11 @@ func diagnosticTelemetryProperties(diags []Diagnostic) map[string]any {
 }
 
 func (s *Server) publishDiagnostics(uri string) {
+	// Keep the already published size diagnostic while the editor's current
+	// contents are too large to index; the cached document may be stale.
+	if s.oversizedOpenFiles[uri] {
+		return
+	}
 	// During workspace indexing, suppress diagnostics for background-indexed files
 	// but allow explicitly opened documents to receive diagnostics immediately.
 	// This prevents the "first-touch diagnostics gap" where opencode's 5s timeout
