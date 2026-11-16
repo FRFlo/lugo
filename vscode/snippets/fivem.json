@@ -6,7 +6,7 @@
       "game '${2:gta5}'",
       "lua54 'yes'",
       "",
-      "${3:client_script '${4:client.lua}'}"
+      "${3:client_script '${4:client.lua}'}${0}"
     ],
     "description": "Create a FiveM fxmanifest.lua resource manifest"
   },
@@ -15,7 +15,7 @@
     "body": [
       "RegisterNetEvent('${1:resource:event}', function(${2})",
       "\t${3}",
-      "end)"
+      "end)${0}"
     ],
     "description": "Register a network event with an inline handler"
   },
@@ -24,7 +24,7 @@
     "body": [
       "AddEventHandler('${1:resource:event}', function(${2})",
       "\t${3}",
-      "end)"
+      "end)${0}"
     ],
     "description": "Add a handler for a local or registered event"
   },
@@ -33,7 +33,7 @@
     "body": [
       "CreateThread(function()",
       "\t${1}",
-      "end)"
+      "end)${0}"
     ],
     "description": "Start a FiveM script thread"
   },

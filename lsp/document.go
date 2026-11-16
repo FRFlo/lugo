@@ -3,7 +3,9 @@ package lsp
 import (
 	"bytes"
 	"iter"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/FRFlo/lugo/ast"
@@ -17,6 +19,12 @@ type DiagPragmas struct {
 	LineDisabled map[uint32]map[string]bool
 }
 
+type evictedNodeTextEntry struct {
+	node   ast.NodeID
+	offset uint32
+	length uint32
+}
+
 type Document struct {
 	// Identity
 	Server     *Server
@@ -27,8 +35,16 @@ type Document struct {
 	ModuleName string
 
 	// Parser State
-	Tree     *ast.Tree
-	Resolver *semantic.Resolver
+	Tree                       *ast.Tree
+	Resolver                   *semantic.Resolver
+	metatableIndexMu           sync.Mutex
+	metatableCalls             *metatableAttachmentIndex
+	evictedNodeTextMu          sync.RWMutex
+	evictedNodeText            []evictedNodeTextEntry
+	evictedNodeTextData        []byte
+	evictedGlobalRefs          map[uint64]struct{}
+	evictedGenericContracts    []evictedNodeTextEntry
+	evictedGenericContractData []byte
 	// Source bytes are owned by the canonical Tree. Use Tree.Source as the authoritative source.
 	Errors []parser.ParseError
 
@@ -42,9 +58,10 @@ type Document struct {
 	ExportedNode       ast.NodeID
 
 	// FiveM Fields
-	FiveMProfile    FiveMExecutionProfile
-	FiveMLuaExports []FiveMLuaExport
-	FiveMEvents     []FiveMEventInfo
+	FiveMProfile          FiveMExecutionProfile
+	FiveMLuaExports       []FiveMLuaExport
+	FiveMEvents           []FiveMEventInfo
+	FiveMManifestResource *FiveMResource
 
 	// Metadata
 	IsMeta             bool
@@ -79,8 +96,146 @@ func (doc *Document) nodeSource(id ast.NodeID) []byte {
 	}
 
 	node := doc.Tree.Nodes[id]
+	if source := doc.sourceSlice(node.Start, node.End); source != nil {
+		return source
+	}
+	if doc.Source() == nil {
+		doc.evictedNodeTextMu.RLock()
+		var text []byte
+		low, high := 0, len(doc.evictedNodeText)
+		for low < high {
+			mid := low + (high-low)/2
+			entry := doc.evictedNodeText[mid]
+			if entry.node < id {
+				low = mid + 1
+			} else {
+				high = mid
+			}
+		}
+		if low < len(doc.evictedNodeText) && doc.evictedNodeText[low].node == id {
+			entry := doc.evictedNodeText[low]
+			end := uint64(entry.offset) + uint64(entry.length)
+			if end <= uint64(len(doc.evictedNodeTextData)) {
+				text = doc.evictedNodeTextData[entry.offset:uint32(end)]
+			}
+		}
+		doc.evictedNodeTextMu.RUnlock()
+		return text
+	}
+	return nil
+}
 
-	return doc.sourceSlice(node.Start, node.End)
+// cacheEvictedMetatableNodeText retains small token spellings needed to rebuild
+// metatable indexes, plus generic call contracts, after source eviction.
+func (doc *Document) cacheEvictedMetatableNodeText() {
+	if doc == nil || doc.Tree == nil || doc.Source() == nil {
+		return
+	}
+	var text []evictedNodeTextEntry
+	var seen map[ast.NodeID]struct{}
+	var data []byte
+	var globalRefs map[uint64]struct{}
+	var metatableReceivers map[string]struct{}
+	internedText := make(map[string]evictedNodeTextEntry)
+	doc.evictedGenericContracts = nil
+	doc.evictedGenericContractData = nil
+	appendNodeText := func(id ast.NodeID) {
+		if id == ast.InvalidNode || int(id) >= len(doc.Tree.Nodes) {
+			return
+		}
+		if _, exists := seen[id]; exists {
+			return
+		}
+		if value := doc.nodeSource(id); len(value) > 0 {
+			key := string(value)
+			entry, exists := internedText[key]
+			if !exists {
+				entry = evictedNodeTextEntry{offset: uint32(len(data)), length: uint32(len(value))}
+				data = append(data, value...)
+				internedText[key] = entry
+			}
+			if seen == nil {
+				seen = make(map[ast.NodeID]struct{})
+			}
+			text = append(text, evictedNodeTextEntry{node: id, offset: entry.offset, length: entry.length})
+			seen[id] = struct{}{}
+		}
+	}
+	for id, node := range doc.Tree.Nodes {
+		if node.Kind == ast.KindFunctionExpr && doc.cacheEvictedGenericContract(ast.NodeID(id)) {
+			// Generic argument binding follows the actual parameter order,
+			// which can differ from the order of @param annotations.
+			for i := uint32(0); i < node.Count && node.Extra+i < uint32(len(doc.Tree.ExtraList)); i++ {
+				appendNodeText(doc.Tree.ExtraList[node.Extra+i])
+			}
+		}
+		if node.Kind == ast.KindRecordField && node.Left != ast.InvalidNode && int(node.Left) < len(doc.Tree.Nodes) && doc.Tree.Nodes[node.Left].Kind == ast.KindIdent {
+			appendNodeText(node.Left)
+		} else if node.Kind == ast.KindIndexField && node.Left != ast.InvalidNode && int(node.Left) < len(doc.Tree.Nodes) && doc.Tree.Nodes[node.Left].Kind == ast.KindString {
+			appendNodeText(node.Left)
+		} else if node.Kind == ast.KindMemberExpr && node.Right != ast.InvalidNode && int(node.Right) < len(doc.Tree.Nodes) && doc.Tree.Nodes[node.Right].Kind == ast.KindIdent {
+			appendNodeText(node.Right)
+		} else if node.Kind == ast.KindIndexExpr && node.Right != ast.InvalidNode && int(node.Right) < len(doc.Tree.Nodes) && doc.Tree.Nodes[node.Right].Kind == ast.KindString {
+			appendNodeText(node.Right)
+		} else if node.Kind == ast.KindCallExpr && node.Left != ast.InvalidNode && int(node.Left) < len(doc.Tree.Nodes) && doc.Tree.Nodes[node.Left].Kind == ast.KindIdent && bytes.Equal(doc.nodeSource(node.Left), []byte("setmetatable")) {
+			appendNodeText(node.Left)
+			if node.Count >= 2 && node.Extra+1 < uint32(len(doc.Tree.ExtraList)) {
+				receiver := doc.Tree.ExtraList[node.Extra]
+				appendNodeText(receiver)
+				if name := doc.nodeSource(receiver); len(name) > 0 {
+					if metatableReceivers == nil {
+						metatableReceivers = make(map[string]struct{})
+					}
+					metatableReceivers[string(name)] = struct{}{}
+				}
+			}
+		}
+	}
+	if doc.Resolver != nil {
+		for _, ref := range doc.Resolver.GlobalRefs {
+			if int(ref) >= len(doc.Tree.Nodes) {
+				continue
+			}
+			if doc.Tree.Nodes[ref].Kind != ast.KindIdent {
+				continue
+			}
+			appendNodeText(ref)
+			if hash := ast.HashBytes(doc.nodeSource(ref)); hash != 0 {
+				if globalRefs == nil {
+					globalRefs = make(map[uint64]struct{})
+				}
+				globalRefs[hash] = struct{}{}
+			}
+		}
+		for _, definition := range doc.Resolver.GlobalDefs {
+			if int(definition) >= len(doc.Tree.Nodes) {
+				continue
+			}
+			if _, needed := metatableReceivers[string(doc.nodeSource(definition))]; needed {
+				appendNodeText(definition)
+			}
+		}
+	}
+	sort.Slice(text, func(i, j int) bool { return text[i].node < text[j].node })
+	doc.evictedNodeTextMu.Lock()
+	doc.evictedNodeText = text
+	doc.evictedNodeTextData = data
+	doc.evictedGlobalRefs = globalRefs
+	doc.evictedNodeTextMu.Unlock()
+}
+
+func (doc *Document) clearEvictedMetatableNodeText() {
+	if doc == nil {
+		return
+	}
+	doc.evictedNodeTextMu.Lock()
+	doc.evictedNodeText = nil
+	doc.evictedNodeTextData = nil
+	doc.evictedGlobalRefs = nil
+	doc.evictedGenericContracts = nil
+	doc.evictedGenericContractData = nil
+	doc.evictedNodeTextMu.Unlock()
+	doc.FiveMManifestResource = nil
 }
 
 func (doc *Document) referenceAt(id ast.NodeID) ast.NodeID {
@@ -267,6 +422,15 @@ func (doc *Document) getAssignedValue(id ast.NodeID) ast.NodeID {
 			return ast.InvalidNode
 		}
 	}
+}
+
+func (doc *Document) invalidateMetatableAttachmentIndex() {
+	if doc == nil {
+		return
+	}
+	doc.metatableIndexMu.Lock()
+	doc.metatableCalls = nil
+	doc.metatableIndexMu.Unlock()
 }
 
 func (doc *Document) getFunctionParams(funcExprID ast.NodeID, luadoc *LuaDoc) string {

@@ -1283,11 +1283,11 @@ func (s *Server) resolveSymbolNode(uri string, doc *Document, nodeID ast.NodeID)
 		return nil
 	}
 
-	if identNode.Start > identNode.End || identNode.End > uint32(len(doc.Source())) {
+	identBytes := doc.nodeSource(nodeID)
+	if len(identBytes) == 0 {
 		return nil
 	}
 
-	identBytes := doc.Source()[identNode.Start:identNode.End]
 	identName := ast.String(identBytes)
 
 	displayName := identName
@@ -1477,6 +1477,7 @@ func (s *Server) resolveSymbolNode(uri string, doc *Document, nodeID ast.NodeID)
 
 	if ctx.TargetDefID == ast.InvalidNode && gKey.PropHash != 0 {
 		var resolved bool
+		var scopedClassHierarchy bool
 
 		if ctx.FiveMExportRes != "" {
 			if resObj := s.resolveFiveMResource(ctx.FiveMExportRes); resObj != nil {
@@ -1500,6 +1501,69 @@ func (s *Server) resolveSymbolNode(uri string, doc *Document, nodeID ast.NodeID)
 		}
 
 		if !resolved {
+			if isProp && parentID != ast.InvalidNode && int(parentID) < len(doc.Tree.Nodes) {
+				receiverType := doc.InferType(doc.Tree.Nodes[parentID].Left)
+				if receiverType.DeclNode != ast.InvalidNode {
+					declDoc := doc
+					if receiverType.DeclURI != "" && receiverType.DeclURI != doc.URI {
+						declDoc = s.Documents[receiverType.DeclURI]
+					}
+					if declDoc != nil && int(receiverType.DeclNode) < len(declDoc.Tree.Nodes) {
+						if value := declDoc.findFieldInTable(receiverType.DeclNode, identName); value != ast.InvalidNode && declDoc.Tree.Nodes[value].Kind != ast.KindNil {
+							parent := declDoc.Tree.Nodes[value].Parent
+							if parent != ast.InvalidNode && int(parent) < len(declDoc.Tree.Nodes) {
+								ctx.TargetDoc = declDoc
+								ctx.TargetURI = declDoc.URI
+								ctx.TargetDefID = declDoc.Tree.Nodes[parent].Left
+								resolved = true
+							}
+						}
+					}
+				}
+				if targetDoc, targetNode := s.findMetatableMember(doc, receiverType, identName, identNode.Start); !resolved && targetDoc != nil {
+					ctx.TargetDoc = targetDoc
+					ctx.TargetURI = targetDoc.URI
+					ctx.TargetDefID = targetNode
+					resolved = true
+				}
+				if !resolved {
+					if targetDoc, targetNode, _ := doc.newIndexWrite(receiverType, identName, identNode.Start); targetDoc != nil && targetNode != ast.InvalidNode {
+						ctx.TargetDoc = targetDoc
+						ctx.TargetURI = targetDoc.URI
+						ctx.TargetDefID = targetNode
+						resolved = true
+					}
+				}
+				if !resolved {
+					if targetDoc, targetNode := s.uniqueVisibleNewIndexWrite(doc, receiverType, identName); targetDoc != nil && targetNode != ast.InvalidNode {
+						ctx.TargetDoc = targetDoc
+						ctx.TargetURI = targetDoc.URI
+						ctx.TargetDefID = targetNode
+						resolved = true
+					}
+				}
+				if !resolved && s.GlobalIndex != nil && receiverType.CustomName != "" {
+					resource, scope := s.globalIndexContext(doc)
+					className := luaDocGenericClassName(receiverType.CustomName)
+					hierarchy := s.GlobalIndex.LookupLuaDocClassHierarchy(resource, scope, className)
+					fields := s.luaDocClassMemberCandidates(resource, scope, className, identName, hierarchy)
+					reachable := s.luaDocClassFieldReachability(doc, hierarchy)
+					scopedClassHierarchy = len(hierarchy) > 0
+					for _, candidate := range fields {
+						entry := candidate.Entry
+						if targetDoc := s.Documents[entry.URI]; targetDoc != nil && int(entry.NodeID) < len(targetDoc.Tree.Nodes) && s.canSeeLuaDocClassFieldLookup(targetDoc, candidate, reachable) {
+							ctx.TargetDoc = targetDoc
+							ctx.TargetURI = targetDoc.URI
+							ctx.TargetDefID = entry.NodeID
+							resolved = true
+							break
+						}
+					}
+				}
+			}
+		}
+
+		if !resolved && !scopedClassHierarchy {
 			recHashes := []uint64{gKey.ReceiverHash}
 
 			if isProp && parentID != ast.InvalidNode && int(parentID) < len(doc.Tree.Nodes) {
@@ -1514,12 +1578,28 @@ func (s *Server) resolveSymbolNode(uri string, doc *Document, nodeID ast.NodeID)
 				}
 
 				if recType.CustomName != "" {
-					classHash := ast.HashBytes([]byte(recType.CustomName))
-					recHashes = appendUniqueHash(recHashes, classHash)
-
-					if s.TableAliases != nil {
-						if tableHash := s.TableAliases[classHash]; tableHash != 0 {
-							recHashes = appendUniqueHash(recHashes, tableHash)
+					classQueue := []string{luaDocGenericClassName(recType.CustomName)}
+					seenClasses := make(map[string]struct{})
+					for len(classQueue) > 0 {
+						className := classQueue[0]
+						classQueue = classQueue[1:]
+						if className == "" {
+							continue
+						}
+						if _, ok := seenClasses[className]; ok {
+							continue
+						}
+						seenClasses[className] = struct{}{}
+						classHash := ast.HashBytes([]byte(className))
+						recHashes = appendUniqueHash(recHashes, classHash)
+						if s.TableAliases != nil {
+							if tableHash := s.TableAliases[classHash]; tableHash != 0 {
+								recHashes = appendUniqueHash(recHashes, tableHash)
+							}
+						}
+						entry := s.inferFirstGlobalSymbolEntry(doc, 0, classHash)
+						if entry != nil {
+							classQueue = append(classQueue, symbolParents(entry)...)
 						}
 					}
 				}
@@ -1550,6 +1630,84 @@ func (s *Server) resolveSymbolNode(uri string, doc *Document, nodeID ast.NodeID)
 	}
 
 	return ctx
+}
+
+// findMetatableMember follows table-valued __index entries, stopping when a
+// table repeats. It returns the key node so definition and hover can use the
+// actual declaration location.
+func (s *Server) findMetatableMember(srcDoc *Document, receiverType TypeSet, name string, offset uint32) (*Document, ast.NodeID) {
+	if s == nil || srcDoc == nil || name == "" || receiverType.MetaNode == ast.InvalidNode {
+		return nil, ast.InvalidNode
+	}
+	type tableKey struct {
+		uri  string
+		node ast.NodeID
+	}
+	seen := make(map[tableKey]struct{})
+	var visit func(*Document, ast.NodeID) (*Document, ast.NodeID)
+	visit = func(metaDoc *Document, metaNode ast.NodeID) (*Document, ast.NodeID) {
+		if metaDoc == nil || metaNode == ast.InvalidNode || int(metaNode) >= len(metaDoc.Tree.Nodes) {
+			return nil, ast.InvalidNode
+		}
+		key := tableKey{uri: metaDoc.URI, node: metaNode}
+		if _, ok := seen[key]; ok {
+			return nil, ast.InvalidNode
+		}
+		seen[key] = struct{}{}
+		lookupOffset := ^uint32(0)
+		if metaDoc == srcDoc {
+			lookupOffset = offset
+		}
+		if alternatives := metaDoc.metatableFieldAlternativesAt(metaNode, "__index", lookupOffset); len(alternatives) > 1 {
+			return nil, ast.InvalidNode
+		}
+		indexType := metaDoc.completionIndexTypeAt(metaNode, lookupOffset)
+		indexDoc := metaDoc
+		if indexType.DeclURI != "" && indexType.DeclURI != metaDoc.URI {
+			indexDoc = s.Documents[indexType.DeclURI]
+		}
+		indexTable := indexType.DeclNode
+		if indexDoc == nil || indexTable == ast.InvalidNode || int(indexTable) >= len(indexDoc.Tree.Nodes) {
+			return nil, ast.InvalidNode
+		}
+		indexKey := tableKey{uri: indexDoc.URI, node: indexTable}
+		if _, ok := seen[indexKey]; ok {
+			return nil, ast.InvalidNode
+		}
+		seen[indexKey] = struct{}{}
+		lookupOffset = metatableOffsetForDocument(srcDoc, indexDoc, offset)
+		valueAlternatives := indexDoc.metatableFieldAlternativesAt(indexTable, name, lookupOffset)
+		if len(valueAlternatives) > 1 {
+			return nil, ast.InvalidNode
+		}
+		valueID := indexDoc.metatableFieldValueAt(indexTable, name, lookupOffset)
+		if valueID != ast.InvalidNode && indexDoc.Tree.Nodes[valueID].Kind != ast.KindNil {
+			if definition := indexDoc.getDefForValue(valueID); definition != ast.InvalidNode {
+				return indexDoc, definition
+			}
+			fieldID := indexDoc.Tree.Nodes[valueID].Parent
+			if fieldID != ast.InvalidNode && int(fieldID) < len(indexDoc.Tree.Nodes) {
+				field := indexDoc.Tree.Nodes[fieldID]
+				if (field.Kind == ast.KindRecordField || field.Kind == ast.KindIndexField) && field.Right == valueID {
+					return indexDoc, field.Left
+				}
+			}
+		}
+		// An __index table can itself inherit from another table.
+		if indexType.MetaNode != ast.InvalidNode {
+			indexMetaDoc := metaDoc
+			if indexType.MetaURI != "" && indexType.MetaURI != metaDoc.URI {
+				indexMetaDoc = s.Documents[indexType.MetaURI]
+			}
+			return visit(indexMetaDoc, indexType.MetaNode)
+		}
+		return nil, ast.InvalidNode
+	}
+	metaDoc := srcDoc
+	if receiverType.MetaURI != "" && receiverType.MetaURI != srcDoc.URI {
+		metaDoc = s.Documents[receiverType.MetaURI]
+	}
+	return visit(metaDoc, receiverType.MetaNode)
 }
 
 func (s *Server) getFiveMExportResource(doc *Document, nodeID ast.NodeID) string {
@@ -1923,6 +2081,98 @@ func (s *Server) getReferences(ctx *SymbolContext, includeDeclaration bool) []Lo
 				addRef(ctx.TargetDoc, ctx.TargetURI, ast.NodeID(i))
 			}
 		}
+		// Resolver references do not bind accesses supplied by a metatable.
+		// Re-resolve member accesses against the declaration and include only
+		// those that land on this exact key node.
+		if ctx.TargetDefID < ast.NodeID(len(ctx.TargetDoc.Tree.Nodes)) {
+			target := ctx.TargetDoc.Tree.Nodes[ctx.TargetDefID]
+			parentID := target.Parent
+			isRecordField := false
+			isMethod := false
+			targetKeyID := ctx.TargetDefID
+			if parentID != ast.InvalidNode && int(parentID) < len(ctx.TargetDoc.Tree.Nodes) {
+				parent := ctx.TargetDoc.Tree.Nodes[parentID]
+				isRecordField = (parent.Kind == ast.KindRecordField || parent.Kind == ast.KindIndexField) && parent.Left == ctx.TargetDefID
+				isMethod = parent.Kind == ast.KindMethodName && parent.Right == ctx.TargetDefID
+				if parent.Kind == ast.KindIndexField && parent.Right == ctx.TargetDefID && parent.Left != ast.InvalidNode && int(parent.Left) < len(ctx.TargetDoc.Tree.Nodes) && ctx.TargetDoc.Tree.Nodes[parent.Left].Kind == ast.KindString {
+					isRecordField = true
+					targetKeyID = parent.Left
+				}
+			}
+			isVirtualField := target.Start == target.End
+			if ctx.IsProp && (isRecordField || isVirtualField || isMethod) {
+				nameBytes := []byte(ctx.IdentName)
+				propHash := ast.HashBytes(nameBytes)
+				for uri, candidateDoc := range s.Documents {
+					hasMemberCandidate := false
+					for _, field := range candidateDoc.Resolver.FieldDefs {
+						if field.PropHash == propHash {
+							hasMemberCandidate = true
+							break
+						}
+					}
+					if !hasMemberCandidate {
+						source := candidateDoc.Source()
+						hasMemberCandidate = bytes.Contains(source, nameBytes) || bytes.ContainsRune(source, '\\')
+					}
+					if !hasMemberCandidate {
+						continue
+					}
+					for i := 1; i < len(candidateDoc.Tree.Nodes); i++ {
+						nodeID := ast.NodeID(i)
+						node := candidateDoc.Tree.Nodes[nodeID]
+						if node.Kind != ast.KindMemberExpr && node.Kind != ast.KindMethodCall && node.Kind != ast.KindIndexExpr {
+							continue
+						}
+						if node.Right == ast.InvalidNode || int(node.Right) >= len(candidateDoc.Tree.Nodes) {
+							continue
+						}
+						keyID := node.Right
+						key := candidateDoc.Tree.Nodes[keyID]
+						if node.Kind == ast.KindIndexExpr {
+							if key.Kind != ast.KindString {
+								continue
+							}
+							value, ok := candidateDoc.evalNode(keyID, 0)
+							if !ok || value.kind != ast.KindString || value.str != ctx.IdentName {
+								continue
+							}
+							receiverType := candidateDoc.InferType(node.Left)
+							matched := false
+							if s.GlobalIndex != nil && receiverType.CustomName != "" {
+								resource, scope := s.globalIndexContext(candidateDoc)
+								className := luaDocGenericClassName(receiverType.CustomName)
+								hierarchy := s.GlobalIndex.LookupLuaDocClassHierarchy(resource, scope, className)
+								reachable := s.luaDocClassFieldReachability(candidateDoc, hierarchy)
+								for _, candidate := range s.luaDocClassMemberCandidates(resource, scope, className, ctx.IdentName, hierarchy) {
+									field := candidate.Entry
+									if field.URI == ctx.TargetURI && field.NodeID == ctx.TargetDefID && s.canSeeLuaDocClassFieldLookup(ctx.TargetDoc, candidate, reachable) {
+										matched = true
+										break
+									}
+								}
+							}
+							if !matched {
+								if targetDoc, targetID := s.findMetatableMember(candidateDoc, receiverType, ctx.IdentName, key.Start); targetDoc != nil && targetDoc.URI == ctx.TargetURI && (targetID == ctx.TargetDefID || targetID == targetKeyID) {
+									matched = true
+								}
+							}
+							if matched {
+								addRef(candidateDoc, uri, keyID)
+							}
+							continue
+						}
+						if key.Kind != ast.KindIdent || !bytes.Equal(candidateDoc.nodeSource(keyID), nameBytes) {
+							continue
+						}
+						resolved := s.resolveSymbolNode(uri, candidateDoc, keyID)
+						if resolved != nil && resolved.TargetURI == ctx.TargetURI && resolved.TargetDefID == ctx.TargetDefID {
+							addRef(candidateDoc, uri, keyID)
+						}
+					}
+				}
+			}
+		}
 	}
 
 	if ctx.FiveMExportRes != "" {
@@ -2072,31 +2322,49 @@ func (s *Server) iterateGlobalReferences(ctx *SymbolContext) iter.Seq[GlobalRefe
 }
 
 func (s *Server) getGlobalSymbols(srcDoc *Document, recHash, propHash uint64) ([]GlobalSymbol, bool) {
-	currRec := recHash
+	queue := []uint64{recHash}
+	seenReceivers := make(map[uint64]struct{})
 
-	for range 10 {
+	for len(queue) > 0 {
+		currRec := queue[0]
+		queue = queue[1:]
+		if _, seen := seenReceivers[currRec]; seen {
+			continue
+		}
+		seenReceivers[currRec] = struct{}{}
+
 		key := GlobalKey{ReceiverHash: currRec, PropHash: propHash}
 		if syms := s.visibleGlobalSymbolsFromEntries(srcDoc, s.GlobalIndex.SymbolsByHash(key), 10); len(syms) > 0 {
 			return syms, true
 		}
 
 		if currRec == 0 {
-			break
-		}
-
-		classKey := GlobalKey{ReceiverHash: 0, PropHash: currRec}
-		if classSyms := s.visibleGlobalSymbolsFromEntries(srcDoc, s.GlobalIndex.SymbolsByHash(classKey), 1); len(classSyms) > 0 && classSyms[0].Parent != "" {
-			currRec = ast.HashBytes([]byte(classSyms[0].Parent))
-
 			continue
 		}
 
-		nextRec := s.getGlobalAlias(srcDoc, currRec)
-		if nextRec == 0 {
-			break
+		classKey := GlobalKey{ReceiverHash: 0, PropHash: currRec}
+		classEntries := s.GlobalIndex.SymbolsByHash(classKey)
+		if classSyms := s.visibleGlobalSymbolsFromEntries(srcDoc, classEntries, 1); len(classSyms) > 0 {
+			var parentEntry *SymbolEntry
+			for _, entry := range classEntries {
+				if entry != nil && entry.URI == classSyms[0].URI && entry.NodeID == classSyms[0].NodeID {
+					parentEntry = entry
+					break
+				}
+			}
+			parents := symbolParents(parentEntry)
+			if len(parents) > 0 {
+				for _, parent := range parents {
+					queue = append(queue, ast.HashBytes([]byte(parent)))
+				}
+				continue
+			}
 		}
 
-		currRec = nextRec
+		if nextRec := s.getGlobalAlias(srcDoc, currRec); nextRec != 0 {
+			queue = append(queue, nextRec)
+			continue
+		}
 	}
 
 	return nil, false
@@ -2412,6 +2680,41 @@ func (s *Server) suggestGlobal(srcDoc *Document, name string) string {
 	return bestMatch
 }
 
+// uniqueVisibleNewIndexWrite resolves a redirected write from another visible
+// document only when exactly one matching assignment exists. Cross-document
+// offsets do not define execution order, so multiple candidates stay unresolved.
+func (s *Server) uniqueVisibleNewIndexWrite(srcDoc *Document, receiverType TypeSet, name string) (*Document, ast.NodeID) {
+	if s == nil || srcDoc == nil {
+		return nil, ast.InvalidNode
+	}
+	candidates := s.newIndexWriteCandidates(name)
+	var targetDoc *Document
+	var targetNode ast.NodeID = ast.InvalidNode
+	seen := make(map[string]map[ast.NodeID]struct{})
+	for _, candidate := range candidates {
+		candidateDoc := candidate.doc
+		if candidateDoc == nil || candidateDoc == srcDoc || !s.canSeeSymbol(srcDoc, candidateDoc) {
+			continue
+		}
+		writeDoc, writeNode, _ := candidateDoc.newIndexWrite(receiverType, name, candidate.assignStart+1)
+		if writeDoc != candidateDoc || writeNode == ast.InvalidNode {
+			continue
+		}
+		if seen[candidateDoc.URI] == nil {
+			seen[candidateDoc.URI] = make(map[ast.NodeID]struct{})
+		}
+		if _, ok := seen[candidateDoc.URI][writeNode]; ok {
+			continue
+		}
+		seen[candidateDoc.URI][writeNode] = struct{}{}
+		if targetDoc != nil {
+			return nil, ast.InvalidNode
+		}
+		targetDoc, targetNode = writeDoc, writeNode
+	}
+	return targetDoc, targetNode
+}
+
 func (s *Server) getDocResourceRoot(doc *Document) string {
 	if doc == nil {
 		return ""
@@ -2477,6 +2780,151 @@ func (s *Server) canSeeSymbol(srcDoc, tgtDoc *Document) bool {
 	}
 
 	return s.canSeeFiveMCrossResourceInclude(srcProfile, tgtDoc)
+}
+
+func (s *Server) canSeeLuaDocClassField(srcDoc, fieldDoc *Document, path []LuaDocClassHierarchyEntry) bool {
+	if s == nil || srcDoc == nil || fieldDoc == nil || len(path) == 0 {
+		return false
+	}
+	current := srcDoc
+	for _, class := range path {
+		if class.Entry == nil {
+			return false
+		}
+		classDoc := s.Documents[class.Entry.URI]
+		if classDoc == nil || !s.canSeeSymbol(current, classDoc) {
+			return false
+		}
+		current = classDoc
+	}
+	return s.canSeeSymbol(current, fieldDoc)
+}
+
+func (s *Server) luaDocClassTableAlias(class *SymbolEntry) (uint64, string) {
+	if s == nil || class == nil || class.Name == "" || s.TableAliasSources == nil {
+		return 0, ""
+	}
+	classDoc := s.Documents[class.URI]
+	if classDoc == nil {
+		return 0, ""
+	}
+	sources := s.TableAliasSources[ast.HashBytes([]byte(class.Name))]
+	if len(sources) == 0 {
+		return 0, ""
+	}
+	if tableHash := sources[class.URI]; tableHash != 0 {
+		return tableHash, s.getDocResourceRoot(classDoc)
+	}
+	uris := make([]string, 0, len(sources))
+	for uri := range sources {
+		uris = append(uris, uri)
+	}
+	slices.Sort(uris)
+	for _, uri := range uris {
+		aliasDoc := s.Documents[uri]
+		if aliasDoc != nil && s.canSeeSymbol(classDoc, aliasDoc) {
+			return sources[uri], s.getDocResourceRoot(aliasDoc)
+		}
+	}
+	return 0, ""
+}
+
+func (s *Server) luaDocClassMemberCandidates(resource ResourceURI, scope GlobalIndexScope, className, fieldName string, hierarchy []LuaDocClassHierarchyEntry) []LuaDocClassFieldLookup {
+	if s == nil || s.GlobalIndex == nil || len(hierarchy) == 0 {
+		return nil
+	}
+	candidates := s.GlobalIndex.LookupLuaDocClassFieldCandidatesInHierarchy(scope, fieldName, hierarchy)
+	propHash := ast.HashBytes([]byte(fieldName))
+	for i, class := range hierarchy {
+		tableHash, aliasResource := s.luaDocClassTableAlias(class.Entry)
+		if tableHash == 0 {
+			continue
+		}
+		for _, entry := range s.GlobalIndex.SymbolsByHash(GlobalKey{ReceiverHash: tableHash, PropHash: propHash}) {
+			if aliasResource != "" {
+				entryDoc := s.Documents[entry.URI]
+				if entryDoc == nil || s.getDocResourceRoot(entryDoc) != aliasResource {
+					continue
+				}
+			}
+			candidates = append(candidates, LuaDocClassFieldLookup{Entry: entry, Hierarchy: hierarchy, ClassIndex: i})
+		}
+	}
+	return candidates
+}
+
+func (s *Server) luaDocClassFields(resource ResourceURI, scope GlobalIndexScope, className string, hierarchy []LuaDocClassHierarchyEntry) []LuaDocClassFieldLookup {
+	if s == nil || s.GlobalIndex == nil || len(hierarchy) == 0 {
+		return nil
+	}
+	fields := s.GlobalIndex.LookupLuaDocClassFieldsInHierarchy(scope, hierarchy)
+	for i, class := range hierarchy {
+		tableHash, aliasResource := s.luaDocClassTableAlias(class.Entry)
+		if tableHash == 0 {
+			continue
+		}
+		keys := s.GlobalIndex.FieldKeysForReceivers(map[uint64]bool{tableHash: true})
+		for _, key := range keys {
+			for _, entry := range s.GlobalIndex.SymbolsByHash(key) {
+				if aliasResource != "" {
+					entryDoc := s.Documents[entry.URI]
+					if entryDoc == nil || s.getDocResourceRoot(entryDoc) != aliasResource {
+						continue
+					}
+				}
+				fields = append(fields, LuaDocClassFieldLookup{Entry: entry, Hierarchy: hierarchy, ClassIndex: i})
+			}
+		}
+	}
+	return fields
+}
+
+func (s *Server) luaDocClassFieldReachability(srcDoc *Document, hierarchy []LuaDocClassHierarchyEntry) []bool {
+	if s == nil || srcDoc == nil || len(hierarchy) == 0 {
+		return nil
+	}
+	firstDoc := s.Documents[hierarchy[0].Entry.URI]
+	if firstDoc == nil || !s.canSeeSymbol(srcDoc, firstDoc) {
+		return nil
+	}
+	reachable := make([]bool, len(hierarchy))
+	queue := make([]int, 0, len(hierarchy))
+	reachable[0] = true
+	queue = append(queue, 0)
+	for head := 0; head < len(queue); head++ {
+		childIndex := queue[head]
+		childDoc := s.Documents[hierarchy[childIndex].Entry.URI]
+		if childDoc == nil {
+			continue
+		}
+		parentIndex := hierarchy[childIndex].FirstParent
+		if parentIndex >= 0 && !reachable[parentIndex] {
+			parentDoc := s.Documents[hierarchy[parentIndex].Entry.URI]
+			if parentDoc != nil && s.canSeeSymbol(childDoc, parentDoc) {
+				reachable[parentIndex] = true
+				queue = append(queue, parentIndex)
+			}
+		}
+		for _, parentIndex := range hierarchy[childIndex].ParentIndices {
+			if reachable[parentIndex] {
+				continue
+			}
+			parentDoc := s.Documents[hierarchy[parentIndex].Entry.URI]
+			if parentDoc != nil && s.canSeeSymbol(childDoc, parentDoc) {
+				reachable[parentIndex] = true
+				queue = append(queue, parentIndex)
+			}
+		}
+	}
+	return reachable
+}
+
+func (s *Server) canSeeLuaDocClassFieldLookup(fieldDoc *Document, field LuaDocClassFieldLookup, reachable []bool) bool {
+	if s == nil || fieldDoc == nil || field.ClassIndex < 0 || field.ClassIndex >= len(field.Hierarchy) || field.ClassIndex >= len(reachable) || !reachable[field.ClassIndex] {
+		return false
+	}
+	classDoc := s.Documents[field.Hierarchy[field.ClassIndex].Entry.URI]
+	return classDoc != nil && s.canSeeSymbol(classDoc, fieldDoc)
 }
 
 func (s *Server) isKnownGlobal(doc *Document, name []byte) bool {

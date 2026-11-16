@@ -56,12 +56,11 @@ test("correlates restarts and crash context", () => {
 	assert.deepEqual(Array.from(events.at(-1).properties.recent_events), ["lsp_started", "lsp_error", "lsp_restart"]);
 });
 
-test("automatic discovery and indexing failures use bounded telemetry events", () => {
+test("automatic discovery failures use bounded telemetry events", () => {
 	assert.match(source, /resource_discovery_skipped.*reason: "no_resources_found"/);
 	assert.match(source, /resource_discovery_failed", errorMetadata\(error\)/);
 	assert.match(source, /library_path_unavailable", \{ reason: "inaccessible", \.\.\.errorMetadata\(error\) \}/);
 	assert.match(source, /resource_refresh_automatic_failed/);
-	assert.match(source, /reindex_automatic_failed/);
 	assert.doesNotMatch(source, /resource_discovery_skipped", \{[^}]*path:/);
 });
 

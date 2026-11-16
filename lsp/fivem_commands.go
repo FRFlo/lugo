@@ -26,6 +26,9 @@ type fiveMKeyMapping struct {
 }
 
 func fiveMCall(doc *Document, id ast.NodeID) (string, ast.Node) {
+	if doc == nil || doc.Tree == nil || id == ast.InvalidNode || int(id) >= len(doc.Tree.Nodes) {
+		return "", ast.Node{}
+	}
 	n := doc.Tree.Nodes[id]
 	if n.Kind != ast.KindCallExpr || n.Left == ast.InvalidNode || int(n.Left) >= len(doc.Tree.Nodes) {
 		return "", n
@@ -34,18 +37,26 @@ func fiveMCall(doc *Document, id ast.NodeID) (string, ast.Node) {
 	if left.Kind != ast.KindIdent {
 		return "", n
 	}
-	return string(doc.Source()[left.Start:left.End]), n
+	src := doc.Source()
+	if src == nil || left.Start > left.End || uint64(left.End) > uint64(len(src)) {
+		return "", n
+	}
+	return string(src[left.Start:left.End]), n
 }
 
 func fiveMLiteralString(doc *Document, id ast.NodeID) (string, bool) {
-	if id == ast.InvalidNode || int(id) >= len(doc.Tree.Nodes) {
+	if doc == nil || doc.Tree == nil || id == ast.InvalidNode || int(id) >= len(doc.Tree.Nodes) {
 		return "", false
 	}
 	n := doc.Tree.Nodes[id]
 	if n.Kind != ast.KindString && n.Kind != ast.KindHashedString {
 		return "", false
 	}
-	return unquoteLuaString(string(doc.Source()[n.Start:n.End])), true
+	src := doc.Source()
+	if src == nil || n.Start > n.End || uint64(n.End) > uint64(len(src)) {
+		return "", false
+	}
+	return unquoteLuaString(string(src[n.Start:n.End])), true
 }
 
 func fiveMCommandArg(doc *Document, call ast.Node, index uint32) (string, ast.NodeID, bool) {

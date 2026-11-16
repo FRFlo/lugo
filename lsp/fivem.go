@@ -1628,6 +1628,9 @@ func (res *FiveMResource) deriveFromManifest() {
 }
 
 func (s *Server) parseFiveMManifest(doc *Document) *FiveMResource {
+	if doc.FiveMManifestResource != nil {
+		return doc.FiveMManifestResource
+	}
 	manifest := &FiveMManifest{
 		SourceURI:  doc.URI,
 		SourceKind: fiveMManifestSourceFromURI(doc.URI),
@@ -1671,6 +1674,7 @@ func (s *Server) parseFiveMManifest(doc *Document) *FiveMResource {
 	}
 
 	res.deriveFromManifest()
+	doc.FiveMManifestResource = res
 
 	return res
 }

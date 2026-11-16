@@ -63,7 +63,7 @@ func TestFiveMEviction(t *testing.T) {
 
 		// Verify caches are evicted
 		if !doc.TypeCache.Empty() {
-			t.Fatal("TypeCache should be nil after eviction")
+			t.Fatal("TypeCache should be empty after eviction")
 		}
 		if len(doc.Inferring) > 0 {
 			t.Fatal("Inferring should be nil/empty after eviction")

@@ -52,6 +52,19 @@ func (c *typeCache) Put(id ast.NodeID, t TypeSet) {
 	c.values[c.slots[id]-1] = t
 }
 
+// Invalidate forgets one cached result while keeping the compact slot map in
+// place. A subsequent Put for the node reuses its value slot.
+func (c *typeCache) Invalidate(id ast.NodeID) {
+	if c == nil || uint64(id) >= uint64(len(c.slots)) {
+		return
+	}
+	index := c.slots[id]
+	if index == 0 || uint64(index-1) >= uint64(len(c.values)) {
+		return
+	}
+	c.values[index-1] = TypeSet{}
+}
+
 // Reset drops all references from the previous tree and bounds retained
 // capacity after large-to-small edits. Values are cleared before reuse because
 // TypeSet contains strings, slices, and URI references.

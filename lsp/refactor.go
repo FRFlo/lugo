@@ -1539,17 +1539,23 @@ func (s *Server) handleRename(req Request) {
 
 			if ctx.GKey.ReceiverHash == 0 {
 				for _, id := range dDoc.Resolver.GlobalDefs {
-					node := dDoc.Tree.Nodes[id]
+					if id == ast.InvalidNode || int(id) >= len(dDoc.Tree.Nodes) {
+						continue
+					}
 
-					if ast.HashBytes(dDoc.Source()[node.Start:node.End]) == ctx.GKey.PropHash {
+					name := dDoc.nodeSource(id)
+					if len(name) > 0 && ast.HashBytes(name) == ctx.GKey.PropHash {
 						addEdit(dDoc, dUri, id)
 					}
 				}
 
 				for _, id := range dDoc.Resolver.GlobalRefs {
-					node := dDoc.Tree.Nodes[id]
+					if id == ast.InvalidNode || int(id) >= len(dDoc.Tree.Nodes) {
+						continue
+					}
 
-					if ast.HashBytes(dDoc.Source()[node.Start:node.End]) == ctx.GKey.PropHash {
+					name := dDoc.nodeSource(id)
+					if len(name) > 0 && ast.HashBytes(name) == ctx.GKey.PropHash {
 						if dDoc.referenceAt(id) == ast.InvalidNode {
 							addEdit(dDoc, dUri, id)
 						}

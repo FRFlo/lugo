@@ -273,12 +273,29 @@ func (doc *Document) InferType(id ast.NodeID) TypeSet {
 		typeSet.DeclURI = doc.URI
 	case ast.KindBinaryExpr:
 		op := node.Extra
+		resolveOperator := func(receiver TypeSet, name string) (TypeSet, bool) {
+			return doc.inferOperatorMetamethodAt(receiver, name, node.Start)
+		}
 
 		switch token.Kind(op) {
 		case token.Plus, token.Minus, token.Asterisk, token.Slash, token.FloorSlash, token.Modulo, token.Caret, token.BitAnd, token.BitOr, token.BitXor, token.ShiftLeft, token.ShiftRight:
 			leftType := doc.InferType(node.Left)
 			rightType := doc.InferType(node.Right)
 
+			if result, ok := InferMetatableBinaryOperator(token.Kind(op), leftType, rightType, resolveOperator); ok {
+				typeSet = result
+				break
+			}
+			if name, ok := LuaMetatableOperatorName(token.Kind(op)); ok {
+				if result, found := doc.inferLuaDocOperator(leftType, rightType, name); found {
+					typeSet = result
+					break
+				}
+				if result, found := doc.inferLuaDocOperator(rightType, leftType, name); found {
+					typeSet = result
+					break
+				}
+			}
 			if leftType.CustomName != "" {
 				typeSet.CustomName = leftType.CustomName
 				typeSet.Basics = leftType.Basics
@@ -289,7 +306,16 @@ func (doc *Document) InferType(id ast.NodeID) TypeSet {
 				typeSet.Basics = TypeNumber
 			}
 		case token.Concat:
-			typeSet.Basics = TypeString
+			left, right := doc.InferType(node.Left), doc.InferType(node.Right)
+			if result, ok := InferMetatableBinaryOperator(token.Concat, left, right, resolveOperator); ok {
+				typeSet = result
+			} else if result, ok := doc.inferLuaDocOperator(left, right, "__concat"); ok {
+				typeSet = result
+			} else if result, ok := doc.inferLuaDocOperator(right, left, "__concat"); ok {
+				typeSet = result
+			} else {
+				typeSet.Basics = TypeString
+			}
 		case token.Eq, token.NotEq, token.Less, token.LessEq, token.Greater, token.GreaterEq:
 			typeSet.Basics = TypeBoolean
 		case token.And, token.Or:
@@ -335,10 +361,28 @@ func (doc *Document) InferType(id ast.NodeID) TypeSet {
 
 		if bytes.HasPrefix(src, []byte("not")) {
 			typeSet.Basics = TypeBoolean
-		} else if len(src) > 0 && src[0] == '#' {
-			typeSet.Basics = TypeNumber
 		} else {
-			typeSet.Basics = TypeNumber
+			op := token.Minus
+			if len(src) > 0 && src[0] == '#' {
+				op = token.Hash
+			} else if len(src) > 0 && src[0] == '~' {
+				op = token.BitXor
+			}
+			resolveOperator := func(receiver TypeSet, name string) (TypeSet, bool) {
+				return doc.inferOperatorMetamethodAt(receiver, name, node.Start)
+			}
+			operand := doc.InferType(node.Right)
+			if result, ok := InferMetatableUnaryOperator(op, operand, resolveOperator); ok {
+				typeSet = result
+			} else if name, valid := LuaMetatableUnaryOperatorName(op); valid {
+				if result, found := doc.inferLuaDocOperator(operand, TypeSet{}, name); found {
+					typeSet = result
+				} else {
+					typeSet.Basics = TypeNumber
+				}
+			} else {
+				typeSet.Basics = TypeNumber
+			}
 		}
 	case ast.KindParenExpr:
 		typeSet = doc.InferType(node.Left)
@@ -346,6 +390,30 @@ func (doc *Document) InferType(id ast.NodeID) TypeSet {
 		typeSet = doc.inferIdent(id)
 	case ast.KindMemberExpr:
 		typeSet = doc.inferMemberExpr(node)
+	case ast.KindIndexExpr:
+		typeSet = doc.inferMemberExpr(node)
+		if typeSet.Basics == TypeUnknown && typeSet.CustomName == "" {
+			receiver := doc.fiveMGLMExprType(node.Left, 0)
+			if doc.Server != nil && doc.Server.getDocumentFiveMProfile(doc).IsResourceProfile() {
+				index := 0.0
+				known := false
+				if value, evaluated := doc.evalNode(node.Right, 0); evaluated && value.kind == ast.KindNumber {
+					index, known = value.num, true
+				} else if doc.InferType(node.Right).Basics&TypeNumber == 0 {
+					known = true // Non-numeric keys do not use the GLM numeric accessor.
+				}
+				if !known || index != 0 {
+					if result, ok := fiveMGLMIndexType(receiver, index); ok {
+						typeSet = result
+					}
+				}
+			}
+			if typeSet.Basics == TypeUnknown {
+				if result, ok := doc.inferLuaDocOperator(receiver, doc.InferType(node.Right), "__index"); ok {
+					typeSet = result
+				}
+			}
+		}
 	case ast.KindMethodName:
 		typeSet = doc.inferMethodSelfType(id)
 	case ast.KindCallExpr, ast.KindMethodCall:
@@ -397,7 +465,7 @@ func (doc *Document) inferIdent(id ast.NodeID) TypeSet {
 			}
 		}
 
-		return TypeSet{}
+		return doc.inferMetatableAttachment(id, ast.InvalidNode, TypeSet{})
 	}
 
 	luadoc := targetDoc.GetLuaDoc(targetDef)
@@ -475,7 +543,15 @@ func (doc *Document) inferIdent(id ast.NodeID) TypeSet {
 		checkReassignments(targetDoc)
 	}
 
-	return t
+	if targetDoc != doc && targetDef != ast.InvalidNode {
+		doc.Server.trackMetatableTypeDependency(targetDoc.URI, doc.URI)
+		result := targetDoc.inferMetatableAttachmentAt(targetDef, t, ^uint32(0))
+		if localDefID == ast.InvalidNode {
+			return doc.inferMetatableAttachment(id, ast.InvalidNode, result)
+		}
+		return result
+	}
+	return doc.inferMetatableAttachment(id, targetDef, t)
 }
 
 func (doc *Document) inferMethodSelfType(methodNameID ast.NodeID) TypeSet {
@@ -672,6 +748,9 @@ func (doc *Document) inferLoopVariable(defID, nameListID ast.NodeID) TypeSet {
 			}
 		}
 	} else if bytes.Equal(funcName, []byte("pairs")) {
+		if inferred, ok := doc.inferPairsMetamethodLoopVariable(firstExpr, idx); ok {
+			return inferred
+		}
 		switch idx {
 		case 0:
 			return TypeSet{Basics: TypeAny}
@@ -685,6 +764,212 @@ func (doc *Document) inferLoopVariable(defID, nameListID ast.NodeID) TypeSet {
 	}
 
 	return TypeSet{}
+}
+
+// inferPairsMetamethodLoopVariable follows __pairs to its iterator and uses
+// the iterator's return tuple for the generic-for variables.
+func (doc *Document) inferPairsMetamethodLoopVariable(call ast.Node, idx int) (TypeSet, bool) {
+	if call.Count == 0 || call.Extra >= uint32(len(doc.Tree.ExtraList)) {
+		return TypeSet{}, false
+	}
+	sourceID := doc.Tree.ExtraList[call.Extra]
+	sourceType := doc.InferType(sourceID)
+	metaDoc := doc
+	if sourceType.MetaURI != "" && sourceType.MetaURI != doc.URI {
+		if doc.Server == nil {
+			return TypeSet{}, false
+		}
+		metaDoc = doc.Server.Documents[sourceType.MetaURI]
+	}
+	if metaDoc == nil || sourceType.MetaNode == ast.InvalidNode {
+		return TypeSet{}, false
+	}
+	metaValues := metaDoc.metatableFieldAlternativesAt(sourceType.MetaNode, "__pairs", metatableOffsetForDocument(doc, metaDoc, call.Start))
+	var result TypeSet
+	found := false
+	for _, metaValue := range metaValues {
+		fnID := metaDoc.resolvePairsFunction(metaValue)
+		if fnID == ast.InvalidNode {
+			continue
+		}
+		var iterators functionReturnValueBuffer
+		var visited [32]functionReturnVisit
+		metaDoc.collectFunctionReturnValues(fnID, 0, &iterators, &visited, 0)
+		if iterators.incomplete {
+			found = true
+			continue
+		}
+		for iteratorIndex := 0; iteratorIndex < iterators.len(); iteratorIndex++ {
+			iteratorExprID := iterators.at(iteratorIndex)
+			iteratorID := metaDoc.resolvePairsFunction(iteratorExprID)
+			if iteratorID == ast.InvalidNode {
+				continue
+			}
+			var values functionReturnValueBuffer
+			visited = [32]functionReturnVisit{}
+			metaDoc.collectFunctionReturnValues(iteratorID, idx, &values, &visited, 0)
+			if values.incomplete {
+				found = true
+				continue
+			}
+			if values.len() == 0 {
+				result.Basics |= TypeNil
+				found = true
+			}
+			for valueIndex := 0; valueIndex < values.len(); valueIndex++ {
+				valueID := values.at(valueIndex)
+				part := TypeSet{Basics: TypeNil}
+				if valueID != ast.InvalidNode {
+					part = metaDoc.InferType(valueID)
+				}
+				result.Basics |= part.Basics
+				if result.CustomName == "" {
+					result.CustomName = part.CustomName
+				}
+				found = true
+			}
+		}
+	}
+	return result, found
+}
+
+func (doc *Document) resolvePairsFunction(id ast.NodeID) ast.NodeID {
+	if id == ast.InvalidNode || int(id) >= len(doc.Tree.Nodes) {
+		return ast.InvalidNode
+	}
+	if doc.Tree.Nodes[id].Kind == ast.KindParenExpr {
+		return doc.resolvePairsFunction(doc.Tree.Nodes[id].Left)
+	}
+	if doc.Tree.Nodes[id].Kind == ast.KindIdent {
+		if def := doc.referenceAt(id); def != ast.InvalidNode {
+			return doc.getAssignedValue(def)
+		}
+	}
+	if doc.Tree.Nodes[id].Kind == ast.KindFunctionExpr {
+		return id
+	}
+	return ast.InvalidNode
+}
+
+func (doc *Document) resolvePairsCallFunction(call ast.Node) ast.NodeID {
+	if call.Kind == ast.KindCallExpr {
+		return doc.resolvePairsFunction(call.Left)
+	}
+	if call.Kind != ast.KindMethodCall || doc.Server == nil || call.Right == ast.InvalidNode {
+		return ast.InvalidNode
+	}
+	ctx := doc.Server.resolveSymbolNode(doc.URI, doc, call.Right)
+	if ctx == nil || ctx.TargetDoc == nil || ctx.TargetDefID == ast.InvalidNode {
+		return ast.InvalidNode
+	}
+	fnID := ctx.TargetDoc.getAssignedValue(ctx.TargetDefID)
+	if fnID != ast.InvalidNode && int(fnID) < len(ctx.TargetDoc.Tree.Nodes) && ctx.TargetDoc.Tree.Nodes[fnID].Kind == ast.KindFunctionExpr {
+		return fnID
+	}
+	if int(ctx.TargetDefID) < len(ctx.TargetDoc.Tree.Nodes) && ctx.TargetDoc.Tree.Nodes[ctx.TargetDefID].Kind == ast.KindFunctionExpr {
+		return ctx.TargetDefID
+	}
+	return ast.InvalidNode
+}
+
+type functionReturnVisit struct {
+	function ast.NodeID
+	index    int
+}
+
+type functionReturnValueBuffer struct {
+	values     [64]ast.NodeID
+	count      int
+	spill      []ast.NodeID
+	incomplete bool
+}
+
+func (buffer *functionReturnValueBuffer) add(id ast.NodeID) {
+	if buffer.count < len(buffer.values) {
+		buffer.values[buffer.count] = id
+		buffer.count++
+		return
+	}
+	buffer.spill = append(buffer.spill, id)
+}
+
+func (buffer *functionReturnValueBuffer) len() int {
+	return buffer.count + len(buffer.spill)
+}
+
+func (buffer *functionReturnValueBuffer) at(index int) ast.NodeID {
+	if index < buffer.count {
+		return buffer.values[index]
+	}
+	return buffer.spill[index-buffer.count]
+}
+
+func (doc *Document) collectFunctionReturnValues(fnID ast.NodeID, returnIndex int, found *functionReturnValueBuffer, visited *[32]functionReturnVisit, depth int) {
+	if fnID == ast.InvalidNode || int(fnID) >= len(doc.Tree.Nodes) {
+		return
+	}
+	key := functionReturnVisit{function: fnID, index: returnIndex}
+	if depth >= 32 {
+		found.incomplete = true
+		return
+	}
+	for i := 0; i < depth; i++ {
+		if visited[i] == key {
+			found.incomplete = true
+			return
+		}
+	}
+	visited[depth] = key
+	var walk func(ast.NodeID)
+	walk = func(id ast.NodeID) {
+		if id == ast.InvalidNode {
+			return
+		}
+		n := doc.Tree.Nodes[id]
+		if n.Kind == ast.KindFunctionExpr && id != fnID {
+			return
+		}
+		if n.Kind == ast.KindReturn {
+			if n.Left == ast.InvalidNode {
+				found.add(ast.InvalidNode)
+				return
+			}
+			list := doc.Tree.Nodes[n.Left]
+			if returnIndex < 0 {
+				return
+			}
+			if list.Count > 0 {
+				lastIndex := int(list.Count) - 1
+				lastExprID := doc.Tree.ExtraList[list.Extra+uint32(lastIndex)]
+				finalExprID := lastExprID
+				for finalExprID != ast.InvalidNode && doc.Tree.Nodes[finalExprID].Kind == ast.KindParenExpr {
+					finalExprID = doc.Tree.Nodes[finalExprID].Left
+				}
+				if finalExprID != ast.InvalidNode && (doc.Tree.Nodes[finalExprID].Kind == ast.KindCallExpr || doc.Tree.Nodes[finalExprID].Kind == ast.KindMethodCall) && returnIndex >= lastIndex {
+					call := doc.Tree.Nodes[finalExprID]
+					calleeID := doc.resolvePairsCallFunction(call)
+					if calleeID != ast.InvalidNode {
+						doc.collectFunctionReturnValues(calleeID, returnIndex-lastIndex, found, visited, depth+1)
+					} else {
+						found.incomplete = true
+					}
+					return
+				}
+			}
+			if returnIndex < int(list.Count) {
+				found.add(doc.Tree.ExtraList[list.Extra+uint32(returnIndex)])
+			} else {
+				found.add(ast.InvalidNode)
+			}
+			return
+		}
+		walk(n.Left)
+		walk(n.Right)
+		for i := uint32(0); i < n.Count; i++ {
+			walk(doc.Tree.ExtraList[n.Extra+i])
+		}
+	}
+	walk(fnID)
 }
 
 func (doc *Document) getLuaDocParamType(defID ast.NodeID, paramIndex int, funcDoc *LuaDoc) string {
@@ -721,17 +1006,81 @@ func (doc *Document) inferMemberExpr(node ast.Node) TypeSet {
 
 	var t TypeSet
 
-	rightNode := doc.Tree.Nodes[node.Right]
-	if rightNode.Kind != ast.KindIdent {
+	if node.Right == ast.InvalidNode || int(node.Right) >= len(doc.Tree.Nodes) {
 		return TypeSet{}
 	}
-
-	fieldName := doc.nodeSource(node.Right)
+	rightNode := doc.Tree.Nodes[node.Right]
+	var fieldName []byte
+	switch rightNode.Kind {
+	case ast.KindIdent:
+		if node.Kind == ast.KindIndexExpr {
+			return TypeSet{}
+		}
+		fieldName = doc.nodeSource(node.Right)
+	case ast.KindString:
+		if result, ok := doc.evalNode(node.Right, 0); ok && result.kind == ast.KindString {
+			fieldName = []byte(result.str)
+		}
+	default:
+		return TypeSet{}
+	}
 	if len(fieldName) == 0 {
 		return TypeSet{}
 	}
-
+	scopedClassHierarchy := false
+	if doc.Server != nil && doc.Server.GlobalIndex != nil && leftType.CustomName != "" {
+		resource, scope := doc.Server.globalIndexContext(doc)
+		className := luaDocGenericClassName(leftType.CustomName)
+		_, rootArgs, _ := splitLuaDocGenericType(leftType.CustomName)
+		hierarchy := doc.Server.GlobalIndex.LookupLuaDocClassHierarchy(resource, scope, className)
+		fields := doc.Server.luaDocClassMemberCandidates(resource, scope, className, string(fieldName), hierarchy)
+		genericBindings := luaDocGenericBindingsForHierarchy(hierarchy, rootArgs)
+		reachable := doc.Server.luaDocClassFieldReachability(doc, hierarchy)
+		scopedClassHierarchy = len(hierarchy) > 0
+		for _, candidate := range fields {
+			field := candidate.Entry
+			fieldDoc := doc.Server.Documents[field.URI]
+			if fieldDoc != nil && doc.Server.canSeeLuaDocClassFieldLookup(fieldDoc, candidate, reachable) {
+				if field.LuaDoc != nil && field.LuaDoc.TypeString != "" {
+					fieldType := field.LuaDoc.TypeString
+					if candidate.ClassIndex >= 0 && candidate.ClassIndex < len(genericBindings) {
+						fieldType = substituteLuaDocGenericType(fieldType, genericBindings[candidate.ClassIndex])
+					}
+					if inferred := ParseTypeString(fieldType); inferred.Basics != TypeUnknown || inferred.CustomName != "" {
+						return inferred
+					}
+				}
+				if field.Type.Primitive != TypeUnknown {
+					return TypeSet{Basics: field.Type.Primitive}
+				}
+				if valID := fieldDoc.getAssignedValue(field.NodeID); valID != ast.InvalidNode {
+					return fieldDoc.InferType(valID)
+				}
+			}
+		}
+	}
 	propHash := ast.HashBytes(fieldName)
+	var writeCandidates []newIndexWriteCandidate
+	var routedWrites map[newIndexCandidateKey]bool
+	writeRoutingReady := false
+	loadWriteRouting := func() map[newIndexCandidateKey]bool {
+		if !writeRoutingReady {
+			if doc.Server != nil {
+				writeCandidates = doc.Server.newIndexWriteCandidates(string(fieldName))
+			} else {
+				writeCandidates = buildNewIndexWriteCandidates([]*Document{doc}, string(fieldName))
+			}
+			routedWrites = routedNewIndexCandidates(writeCandidates, string(fieldName))
+			writeRoutingReady = true
+		}
+		return routedWrites
+	}
+	isRoutedCandidate := func(candidate newIndexWriteCandidate, receiver TypeSet, offset uint32) bool {
+		if routed, ok := loadWriteRouting()[newIndexCandidateKey{doc: candidate.doc, node: candidate.node}]; ok {
+			return routed
+		}
+		return candidate.doc.isNewIndexRoutedWrite(receiver, string(fieldName), offset)
+	}
 
 	mergeType := func(rt TypeSet) {
 		if rt.Basics == TypeUnknown && rt.CustomName == "" {
@@ -803,6 +1152,23 @@ func (doc *Document) inferMemberExpr(node ast.Node) TypeSet {
 		if recDef != ast.InvalidNode {
 			recHash := ast.HashBytes(tDoc.nodeSource(recDef))
 
+			if tDoc == doc && leftType.MetaNode != ast.InvalidNode {
+				loadWriteRouting()
+				for _, candidate := range writeCandidates {
+					if candidate.doc != doc || candidate.tree != doc.Tree || candidate.assignStart >= node.Start || int(candidate.member) >= len(doc.Tree.Nodes) {
+						continue
+					}
+					member := doc.Tree.Nodes[candidate.member]
+					if doc.referenceAt(member.Left) != recDef || isRoutedCandidate(candidate, doc.InferType(member.Left), candidate.assignStart) {
+						continue
+					}
+					if assigned := doc.getAssignedValue(candidate.node); assigned != ast.InvalidNode {
+						t = doc.InferType(assigned)
+						break
+					}
+				}
+				return
+			}
 			for _, fd := range tDoc.Resolver.FieldDefs {
 				if fd.ReceiverDef == recDef && fd.ReceiverHash == recHash && fd.PropHash == propHash {
 					valID := tDoc.getAssignedValue(fd.NodeID)
@@ -836,8 +1202,21 @@ func (doc *Document) inferMemberExpr(node ast.Node) TypeSet {
 	recDef, recHash, _ := doc.Resolver.GetReceiverContext(node.Left)
 
 	for _, fd := range doc.Resolver.FieldDefs {
+		if leftType.MetaNode != ast.InvalidNode && leftType.DeclNode != ast.InvalidNode && leftType.DeclURI == doc.URI {
+			continue // The ordered own-write pass above already handled this table.
+		}
 		if fd.ReceiverHash == recHash && (recDef == ast.InvalidNode || fd.ReceiverDef == recDef) {
 			if fd.PropHash == propHash {
+				if fd.NodeID != ast.InvalidNode && int(fd.NodeID) < len(doc.Tree.Nodes) {
+					prop := doc.Tree.Nodes[fd.NodeID]
+					if prop.Parent != ast.InvalidNode && int(prop.Parent) < len(doc.Tree.Nodes) {
+						receiverType := doc.InferType(doc.Tree.Nodes[prop.Parent].Left)
+						candidate := newIndexWriteCandidate{doc: doc, node: fd.NodeID}
+						if isRoutedCandidate(candidate, receiverType, prop.Start) {
+							continue
+						}
+					}
+				}
 				valID := doc.getAssignedValue(fd.NodeID)
 				if valID != ast.InvalidNode {
 					mergeType(doc.InferType(valID))
@@ -847,53 +1226,101 @@ func (doc *Document) inferMemberExpr(node ast.Node) TypeSet {
 			}
 		}
 	}
+	for _, writeType := range doc.newIndexWriteValues(leftType, string(fieldName), node.Start) {
+		mergeType(writeType)
+	}
 
 	// 3. Metatables
-	if leftType.MetaNode != ast.InvalidNode {
+	if leftType.MetaNode != ast.InvalidNode && (t.Basics == TypeUnknown || t.Basics&TypeNil != 0) && t.CustomName == "" {
 		metaDoc := doc
 		if leftType.MetaURI != "" && leftType.MetaURI != doc.URI && doc.Server != nil {
 			metaDoc = doc.Server.Documents[leftType.MetaURI]
 		}
 
 		if metaDoc != nil {
-			indexDoc, indexTableID := metaDoc.getIndexTable(leftType.MetaNode)
-			if indexDoc != nil && indexTableID != ast.InvalidNode {
-				checkTableFields(indexDoc, indexTableID)
+			if inherited, ok := metaDoc.inferMetatableFieldAt(leftType.MetaNode, fieldName, make(map[metatableVisit]struct{}), 0, metatableOffsetForDocument(doc, metaDoc, node.Start)); ok {
+				t.Basics &^= TypeNil
+				mergeType(inherited)
 			}
 		}
 	}
 
 	// 4. Global Classes
-	if leftType.CustomName != "" && doc.Server != nil {
-		currClassName := leftType.CustomName
-		for range 10 {
+	if leftType.CustomName != "" && doc.Server != nil && !scopedClassHierarchy {
+		classQueue := []string{leftType.CustomName}
+		visitedClasses := make(map[string]struct{})
+		for len(classQueue) > 0 {
+			currClassName := classQueue[0]
+			classQueue = classQueue[1:]
 			if currClassName == "" {
-				break
+				continue
 			}
+			if _, seen := visitedClasses[currClassName]; seen {
+				continue
+			}
+			visitedClasses[currClassName] = struct{}{}
 
 			classHash := ast.HashBytes([]byte(currClassName))
 			if syms, ok := doc.Server.inferGlobalSymbols(doc, classHash, propHash); ok && len(syms) > 0 {
 				sym := syms[0]
 				if gDoc, ok := doc.Server.Documents[sym.URI]; ok {
+					foundAnnotation := false
+					for _, entry := range doc.Server.GlobalIndex.SymbolsByHash(GlobalKey{ReceiverHash: classHash, PropHash: propHash}) {
+						if entry != nil && entry.URI == sym.URI && entry.NodeID == sym.NodeID && entry.LuaDoc != nil && entry.LuaDoc.TypeString != "" {
+							mergeType(entry.LuaDoc.ParsedType())
+							foundAnnotation = true
+							break
+						}
+					}
 					valID := gDoc.getAssignedValue(sym.NodeID)
-					if valID != ast.InvalidNode {
+					if foundAnnotation {
+						// The indexed LuaDoc field retains callable details that the
+						// synthetic declaration node cannot express.
+					} else if valID != ast.InvalidNode {
 						mergeType(gDoc.InferType(valID))
 					} else {
-						t.Basics |= TypeAny
+						foundType := false
+						if doc.Server.GlobalIndex != nil {
+							for _, entry := range doc.Server.GlobalIndex.SymbolsByHash(GlobalKey{ReceiverHash: classHash, PropHash: propHash}) {
+								if entry == nil || entry.URI != sym.URI || entry.NodeID != sym.NodeID {
+									continue
+								}
+								if entry.LuaDoc != nil && entry.LuaDoc.TypeString != "" {
+									mergeType(entry.LuaDoc.ParsedType())
+									foundType = true
+									break
+								}
+								if entry.Type.Primitive != TypeUnknown {
+									t.Basics |= entry.Type.Primitive
+									foundType = true
+									break
+								}
+							}
+						}
+						if !foundType {
+							t.Basics |= TypeAny
+						}
 					}
 
 					break
 				}
 			}
 			classEntry := doc.Server.inferFirstGlobalSymbolEntry(doc, 0, classHash)
-			if classEntry == nil || classEntry.Parent == "" {
-				break
+			if classEntry == nil {
+				continue
 			}
-
-			currClassName = classEntry.Parent
+			classQueue = append(classQueue, symbolParents(classEntry)...)
 		}
 	}
 
+	if t.Basics == TypeUnknown && t.CustomName == "" && doc.Server != nil && doc.Server.getDocumentFiveMProfile(doc).IsResourceProfile() {
+		if glmType, ok := fiveMGLMMemberType(leftType, string(fieldName)); ok {
+			return glmType
+		}
+		if glmType, ok := fiveMGLMSwizzleType(leftType, string(fieldName)); ok {
+			return glmType
+		}
+	}
 	return t
 }
 
@@ -905,12 +1332,92 @@ func (doc *Document) inferCallExpr(node ast.Node) TypeSet {
 	} else if doc.Tree.Nodes[funcIdentID].Kind == ast.KindMemberExpr {
 		funcIdentID = doc.Tree.Nodes[funcIdentID].Right
 	}
+	if node.Kind == ast.KindCallExpr && doc.Server != nil && doc.Server.getDocumentFiveMProfile(doc).IsResourceProfile() {
+		if inferred, ok := doc.fiveMGLMDirectVectorCallType(node, funcIdentID); ok {
+			return inferred
+		}
+	}
 
 	if funcIdentID == ast.InvalidNode {
 		return TypeSet{}
 	}
+	if node.Kind == ast.KindCallExpr || node.Kind == ast.KindMethodCall {
+		if inferred, ok := doc.inferLuaDocGenericCall(node); ok {
+			return inferred
+		}
+	}
+	if node.Kind == ast.KindMethodCall {
+		callable := doc.inferMemberExpr(node)
+		if callable.CallSig != "" && len(callable.CallRet) > 0 {
+			return ParseTypeString(callable.CallRet[0].Type)
+		}
+	}
+	if node.Kind == ast.KindCallExpr {
+		resolveOperator := func(receiver TypeSet, name string) (TypeSet, bool) {
+			return doc.inferOperatorMetamethodAt(receiver, name, node.Start)
+		}
+		callable := doc.InferType(node.Left)
+		if result, ok := InferMetatableCallOperator(callable, resolveOperator); ok {
+			return result
+		}
+		if callable.CallSig != "" && len(callable.CallRet) > 0 {
+			return ParseTypeString(callable.CallRet[0].Type)
+		}
+		if callable.CustomName != "" {
+			arguments := make([]TypeSet, 0, node.Count)
+			for i := uint32(0); i < node.Count && node.Extra+i < uint32(len(doc.Tree.ExtraList)); i++ {
+				arguments = append(arguments, doc.InferType(doc.Tree.ExtraList[node.Extra+i]))
+			}
+			if result, ok := doc.inferLuaDocCallOverload(callable, arguments); ok {
+				return result
+			}
+			var argument TypeSet
+			if len(arguments) > 0 {
+				argument = arguments[0]
+			}
+			if result, ok := doc.inferLuaDocOperator(callable, argument, "__call"); ok {
+				return result
+			}
+		}
+	}
 
-	if doc.Server != nil {
+	if node.Kind == ast.KindCallExpr && doc.Tree.Nodes[node.Left].Kind == ast.KindIdent && doc.referenceAt(node.Left) == ast.InvalidNode && bytes.Equal(doc.nodeSource(node.Left), []byte("getmetatable")) && node.Count > 0 && node.Extra < uint32(len(doc.Tree.ExtraList)) {
+		arg := doc.InferType(doc.Tree.ExtraList[node.Extra])
+		metaDoc := doc
+		if arg.MetaURI != "" && arg.MetaURI != doc.URI {
+			if doc.Server == nil {
+				return TypeSet{}
+			}
+			metaDoc = doc.Server.Documents[arg.MetaURI]
+		}
+		if metaDoc != nil && arg.MetaNode != ast.InvalidNode && int(arg.MetaNode) < len(metaDoc.Tree.Nodes) {
+			lookupOffset := metatableOffsetForDocument(doc, metaDoc, node.Start)
+			protectedValues := metaDoc.metatableFieldAlternativesAt(arg.MetaNode, "__metatable", lookupOffset)
+			if len(protectedValues) != 0 {
+				var result TypeSet
+				for _, protected := range protectedValues {
+					if int(protected) < len(metaDoc.Tree.Nodes) && metaDoc.Tree.Nodes[protected].Kind != ast.KindNil {
+						result.Basics |= metaDoc.InferType(protected).Basics
+					}
+				}
+				if result.Basics != 0 {
+					return result
+				}
+			}
+			return TypeSet{Basics: TypeTable, DeclNode: arg.MetaNode, DeclURI: metaDoc.URI}
+		}
+		if arg.Basics == TypeTable {
+			return TypeSet{Basics: TypeNil}
+		}
+	}
+	if node.Kind == ast.KindCallExpr && doc.Tree.Nodes[node.Left].Kind == ast.KindIdent {
+		if def := doc.referenceAt(node.Left); def != ast.InvalidNode {
+			if value := doc.getAssignedValue(def); value != ast.InvalidNode && doc.Tree.Nodes[value].Kind == ast.KindFunctionExpr {
+				return doc.inferFunctionReturnType(value)
+			}
+		}
+	}
+	if doc.Server != nil || (doc.Tree.Nodes[funcIdentID].Kind == ast.KindIdent && bytes.Equal(doc.nodeSource(funcIdentID), []byte("setmetatable"))) {
 		if doc.Tree.Nodes[funcIdentID].Kind == ast.KindIdent {
 			funcName := doc.nodeSource(funcIdentID)
 			if bytes.Equal(funcName, []byte("require")) && node.Count > 0 && node.Extra < uint32(len(doc.Tree.ExtraList)) {
@@ -930,11 +1437,16 @@ func (doc *Document) inferCallExpr(node ast.Node) TypeSet {
 						return t
 					}
 				}
-			} else if bytes.Equal(funcName, []byte("setmetatable")) && node.Count >= 2 && node.Extra+1 < uint32(len(doc.Tree.ExtraList)) {
+			} else if node.Kind == ast.KindCallExpr && node.Left == funcIdentID && doc.referenceAt(funcIdentID) == ast.InvalidNode && bytes.Equal(funcName, []byte("setmetatable")) && node.Count >= 2 && node.Extra+1 < uint32(len(doc.Tree.ExtraList)) {
 				arg1ID := doc.Tree.ExtraList[node.Extra]
 				arg2ID := doc.Tree.ExtraList[node.Extra+1]
 
 				t := doc.InferType(arg1ID)
+				if doc.Tree.Nodes[arg2ID].Kind == ast.KindNil {
+					t.MetaNode = ast.InvalidNode
+					t.MetaURI = ""
+					return t
+				}
 
 				metaNodeID := arg2ID
 				metaURI := doc.URI
@@ -968,6 +1480,9 @@ func (doc *Document) inferCallExpr(node ast.Node) TypeSet {
 			}
 		}
 
+		if doc.Server == nil {
+			return TypeSet{}
+		}
 		ctx := doc.Server.resolveSymbolNode(doc.URI, doc, funcIdentID)
 		if ctx != nil && ctx.TargetDefID != ast.InvalidNode && ctx.TargetDoc != nil {
 			if inferredCallable := ctx.TargetDoc.InferType(ctx.TargetDefID); inferredCallable.CallSig != "" && len(inferredCallable.CallRet) > 0 {
@@ -1073,6 +1588,10 @@ func (doc *Document) findFieldInTable(tableID ast.NodeID, fieldName string) ast.
 				if string(name) == fieldName {
 					return field.Right
 				}
+			}
+		} else if field.Kind == ast.KindIndexField {
+			if key, ok := doc.evalNode(field.Left, 0); ok && key.kind == ast.KindString && key.str == fieldName {
+				return field.Right
 			}
 		}
 	}

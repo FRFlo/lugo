@@ -262,27 +262,12 @@ func (doc *Document) evalNode(id ast.NodeID, depth int) (evalResult, bool) {
 
 		return evalResult{kind: ast.KindNumber, num: floatVal}, true
 	case ast.KindString:
-		raw := ast.String(doc.Source()[node.Start:node.End])
-		if len(raw) >= 2 && (raw[0] == '\'' || raw[0] == '"') {
-			unq, err := strconv.Unquote(raw)
-			if err == nil {
-				return evalResult{kind: ast.KindString, str: unq}, true
-			}
-
-			return evalResult{kind: ast.KindString, str: raw[1 : len(raw)-1]}, true
-		} else if strings.HasPrefix(raw, "[") {
-			idx := strings.IndexByte(raw[1:], '[')
-			if idx != -1 {
-				start := 2 + idx
-				if start < len(raw) && raw[start] == '\n' {
-					start++
-				}
-
-				end := len(raw) - (2 + idx)
-				if start <= end {
-					return evalResult{kind: ast.KindString, str: raw[start:end]}, true
-				}
-			}
+		// The source buffer may have been released after document eviction. Keep
+		// string-key evaluation working from the compact token text retained for
+		// metatable index reconstruction.
+		raw := ast.String(doc.nodeSource(id))
+		if decoded, ok := decodeLuaString(raw); ok {
+			return evalResult{kind: ast.KindString, str: decoded}, true
 		}
 
 		return evalResult{}, false
@@ -358,6 +343,164 @@ func (doc *Document) evalNode(id ast.NodeID, depth int) (evalResult, bool) {
 	}
 
 	return evalResult{}, false
+}
+
+// decodeLuaString decodes Lua 5.4 quoted and long string literals. Go's
+// strconv.Unquote uses different escape rules (notably for decimal escapes
+// and \z), so it cannot be used for source text from Lua.
+func decodeLuaString(raw string) (string, bool) {
+	if len(raw) >= 2 && (raw[0] == '\'' || raw[0] == '"') && raw[len(raw)-1] == raw[0] {
+		body := raw[1 : len(raw)-1]
+		if strings.IndexByte(body, '\\') < 0 {
+			return body, true
+		}
+		var out strings.Builder
+		if !strings.Contains(body, `\z`) {
+			out.Grow(len(body))
+		}
+		for i := 1; i < len(raw)-1; i++ {
+			c := raw[i]
+			if c != '\\' {
+				out.WriteByte(c)
+				continue
+			}
+			i++
+			if i >= len(raw)-1 {
+				return "", false
+			}
+			switch c = raw[i]; c {
+			case 'a':
+				out.WriteByte('\a')
+			case 'b':
+				out.WriteByte('\b')
+			case 'f':
+				out.WriteByte('\f')
+			case 'n':
+				out.WriteByte('\n')
+			case 'r':
+				out.WriteByte('\r')
+			case 't':
+				out.WriteByte('\t')
+			case 'v':
+				out.WriteByte('\v')
+			case '\\', '\'', '"':
+				out.WriteByte(c)
+			case 'z':
+				for i+1 < len(raw)-1 && isLuaWhitespace(raw[i+1]) {
+					i++
+				}
+			case 'u':
+				if i+2 >= len(raw)-1 || raw[i+1] != '{' {
+					return "", false
+				}
+				end := strings.IndexByte(raw[i+2:len(raw)-1], '}')
+				if end <= 0 {
+					return "", false
+				}
+				end += i + 2
+				value, err := strconv.ParseUint(raw[i+2:end], 16, 31)
+				if err != nil {
+					return "", false
+				}
+				if value < 0x80 {
+					out.WriteByte(byte(value))
+				} else {
+					var encoded [6]byte
+					pos, maxFirst := len(encoded), uint64(0x3f)
+					for {
+						pos--
+						encoded[pos] = byte(0x80 | (value & 0x3f))
+						value >>= 6
+						maxFirst >>= 1
+						if value <= maxFirst {
+							break
+						}
+					}
+					pos--
+					encoded[pos] = byte((^maxFirst << 1) | value)
+					out.Write(encoded[pos:])
+				}
+				i = end
+			case 'x':
+				if i+2 >= len(raw)-1 {
+					return "", false
+				}
+				v, err := strconv.ParseUint(raw[i+1:i+3], 16, 8)
+				if err != nil {
+					return "", false
+				}
+				out.WriteByte(byte(v))
+				i += 2
+			case '\n':
+				out.WriteByte('\n')
+				if i+1 < len(raw)-1 && raw[i+1] == '\r' {
+					i++
+				}
+			case '\r':
+				out.WriteByte('\n')
+				if i+1 < len(raw)-1 && raw[i+1] == '\n' {
+					i++
+				}
+			default:
+				if c < '0' || c > '9' {
+					return "", false
+				}
+				value := int(c - '0')
+				for n := 1; n < 3 && i+1 < len(raw)-1 && raw[i+1] >= '0' && raw[i+1] <= '9'; n++ {
+					i++
+					value = value*10 + int(raw[i]-'0')
+				}
+				if value > 255 {
+					return "", false
+				}
+				out.WriteByte(byte(value))
+			}
+		}
+		return out.String(), true
+	}
+
+	if len(raw) >= 4 && raw[0] == '[' {
+		equals := 0
+		for 1+equals < len(raw) && raw[1+equals] == '=' {
+			equals++
+		}
+		openEnd := 1 + equals
+		if openEnd >= len(raw) || raw[openEnd] != '[' {
+			return "", false
+		}
+		close := "]" + strings.Repeat("=", equals) + "]"
+		if len(raw) < openEnd+1+len(close) || !strings.HasSuffix(raw, close) {
+			return "", false
+		}
+		body := raw[openEnd+1 : len(raw)-len(close)]
+		if strings.HasPrefix(body, "\r\n") || strings.HasPrefix(body, "\n\r") {
+			body = body[2:]
+		} else if strings.HasPrefix(body, "\n") || strings.HasPrefix(body, "\r") {
+			body = body[1:]
+		}
+		if strings.ContainsRune(body, '\r') {
+			var normalized strings.Builder
+			normalized.Grow(len(body))
+			for i := 0; i < len(body); i++ {
+				c := body[i]
+				if c == '\r' || c == '\n' {
+					normalized.WriteByte('\n')
+					if i+1 < len(body) && ((c == '\r' && body[i+1] == '\n') || (c == '\n' && body[i+1] == '\r')) {
+						i++
+					}
+				} else {
+					normalized.WriteByte(c)
+				}
+			}
+			return normalized.String(), true
+		}
+		return body, true
+	}
+	return "", false
+}
+
+func isLuaWhitespace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f'
 }
 
 func applyOp(left, right evalResult, op token.Kind) (evalResult, bool) {
