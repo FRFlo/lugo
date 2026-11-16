@@ -3,9 +3,9 @@ const os = require("node:os");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const vscode = require("vscode");
-const { LanguageClient, ErrorAction, CloseAction } = require("vscode-languageclient/node");
+const { LanguageClient, ErrorAction, CloseAction, State } = require("vscode-languageclient/node");
 const { PostHog } = require("posthog-node");
-const { discoverResources, renderResource } = require("./fivem_resources");
+const { discoverResources, parseManifest, renderResource } = require("./fivem_resources");
 
 const DEFAULT_LIMIT = 50;
 const STORAGE_KEY = "lugo.telemetry.buffer.v1";
@@ -132,23 +132,27 @@ class FiveMResourceProvider {
 	constructor() {
 		this.resources = [];
 		this.refreshVersion = 0;
+		this.manifestVersions = new Map();
+		this.removedManifests = new Set();
 		this._onDidChangeTreeData = new vscode.EventEmitter();
 		this.onDidChangeTreeData = this._onDidChangeTreeData.event;
 	}
 	async refresh() {
 		const version = ++this.refreshVersion;
+		this.manifestVersions.clear();
+		this.removedManifests.clear();
 		const diagnostics = vscode.languages.getDiagnostics().map(([uri, values]) => ({ path: uri.fsPath, count: values.length }));
 		this.resources = [];
 		this._onDidChangeTreeData.fire();
 		const workspaceFolders = (vscode.workspace.workspaceFolders || []).map(folder => folder.uri.fsPath);
-			let resources;
+		let resources;
 		try {
 			resources = await discoverResources(workspaceFolders, diagnostics, resource => {
 			if (version !== this.refreshVersion) return;
 			this.resources.push(resource);
 			this.resources.sort((a, b) => a.name.localeCompare(b.name) || a.manifestPath.localeCompare(b.manifestPath));
 			this._onDidChangeTreeData.fire();
-			});
+			}, () => version !== this.refreshVersion);
 		} catch (error) {
 			telemetry?.record("resource_discovery_failed", errorMetadata(error));
 			throw error;
@@ -158,13 +162,69 @@ class FiveMResourceProvider {
 		}
 		if (version === this.refreshVersion) {
 			this.resources = resources;
-			this._onDidChangeTreeData.fire();
+			this.updateDiagnostics();
 		}
 		return this.resources;
 	}
+	async refreshManifest(manifestPath) {
+		if (!this.resources.some(resource => resource.manifestPath === manifestPath)) return false;
+		const scanVersion = this.refreshVersion;
+		const version = (this.manifestVersions.get(manifestPath) || 0) + 1;
+		this.manifestVersions.set(manifestPath, version);
+		let content;
+		try {
+			content = await fs.promises.readFile(manifestPath, "utf8");
+		} catch {
+			return scanVersion !== this.refreshVersion || this.manifestVersions.get(manifestPath) !== version;
+		}
+		if (scanVersion !== this.refreshVersion || this.manifestVersions.get(manifestPath) !== version) return true;
+		const index = this.resources.findIndex(resource => resource.manifestPath === manifestPath);
+		if (index < 0) return false;
+		this.resources[index] = parseManifest(content, manifestPath);
+		this.resources.sort((a, b) => a.name.localeCompare(b.name) || a.manifestPath.localeCompare(b.manifestPath));
+		this.updateDiagnostics();
+		return true;
+	}
+	removeManifest(manifestPath) {
+		const index = this.resources.findIndex(resource => resource.manifestPath === manifestPath);
+		if (index < 0 && !this.removedManifests.has(manifestPath)) return false;
+		this.manifestVersions.set(manifestPath, (this.manifestVersions.get(manifestPath) || 0) + 1);
+		this.removedManifests.add(manifestPath);
+		if (index >= 0) {
+			this.resources.splice(index, 1);
+			this._onDidChangeTreeData.fire();
+		}
+		return true;
+	}
+	async addManifest(manifestPath, knownWorkspaceRoot = false) {
+		if (this.resources.some(resource => resource.manifestPath === manifestPath)) return this.refreshManifest(manifestPath);
+		const parent = path.dirname(manifestPath);
+		if (!knownWorkspaceRoot && !this.removedManifests.has(manifestPath) && !this.resources.some(resource => path.dirname(resource.manifestPath) === parent)) return false;
+		const scanVersion = this.refreshVersion;
+		const version = (this.manifestVersions.get(manifestPath) || 0) + 1;
+		this.manifestVersions.set(manifestPath, version);
+		let content;
+		try { content = await fs.promises.readFile(manifestPath, "utf8"); } catch {
+			return scanVersion !== this.refreshVersion || this.manifestVersions.get(manifestPath) !== version;
+		}
+		if (scanVersion !== this.refreshVersion || this.manifestVersions.get(manifestPath) !== version) return true;
+		this.removedManifests.delete(manifestPath);
+		this.resources.push(parseManifest(content, manifestPath));
+		this.resources.sort((a, b) => a.name.localeCompare(b.name) || a.manifestPath.localeCompare(b.manifestPath));
+		this.updateDiagnostics();
+		return true;
+	}
+	updateDiagnostics() {
+		const diagnostics = vscode.languages.getDiagnostics().map(([uri, values]) => ({ path: uri.fsPath, count: values.length }));
+		for (const resource of this.resources) {
+			const root = path.dirname(resource.manifestPath) + path.sep;
+			resource.diagnostics = diagnostics.filter(item => item.path === resource.manifestPath || item.path.startsWith(root)).reduce((total, item) => total + item.count, 0);
+		}
+		this._onDidChangeTreeData.fire();
+	}
 	getTreeItem(resource) { return new FiveMResourceItem(resource); }
 	getChildren() { return this.resources; }
-	dispose() { this._onDidChangeTreeData.dispose(); }
+	dispose() { this.refreshVersion++; this._onDidChangeTreeData.dispose(); }
 }
 
 const posthogClient = new PostHog("phc_AtCceYjFoZzdnFgfKNMGArJGbLMyFzzqvjBx7SQCou6k", { host: "https://eu.i.posthog.com" });
@@ -242,23 +302,20 @@ function buildInitializationOptions() {
 		searchConfig = vscode.workspace.getConfiguration("search"),
 		lugoConfig = vscode.workspace.getConfiguration("lugo");
 
-	let ignoreGlobs = lugoConfig.get("workspace.ignoreGlobs") || [];
+	let ignoreGlobs = [...(lugoConfig.get("workspace.ignoreGlobs") || [])];
 
-	const nativeExcludes = {
-		...(filesConfig.get("exclude") || {}),
-		...(searchConfig.get("exclude") || {}),
-	};
-
-	for (const [key, val] of Object.entries(nativeExcludes)) {
-		if (val === true) {
-			ignoreGlobs.push(key);
+	for (const nativeExcludes of [filesConfig.get("exclude") || {}, searchConfig.get("exclude") || {}]) {
+		for (const [key, val] of Object.entries(nativeExcludes)) {
+			if (val === true) {
+				ignoreGlobs.push(key);
+			}
 		}
 	}
 
 	ignoreGlobs = [...new Set(ignoreGlobs)];
 
 	return {
-		libraryPaths: resolveLibraryPathsToAbsolute(lugoConfig.get("workspace.libraryPaths") || []),
+		libraryPaths: configuredLibraryPaths(),
 		ignoreGlobs: ignoreGlobs,
 		knownGlobals: lugoConfig.get("environment.knownGlobals") || [],
 		frameworkAdapters: lugoConfig.get("fivem.frameworkAdapters") || [],
@@ -366,22 +423,21 @@ function folderUriToWorkspaceGlob(folderUri) {
 /**
  * Resolves library path globs to absolute paths for the LSP.
  * Workspace-relative globs (e.g. "lib/**") are resolved against each
- * workspace folder root. Absolute paths are passed through as-is.
+ * workspace folder root. A trailing /** denotes the directory itself.
  */
-function resolveLibraryPathsToAbsolute(globs) {
-	const workspaceFolders = vscode.workspace.workspaceFolders || [];
+function resolveLibraryPathsToAbsolute(globs, workspaceFolders = vscode.workspace.workspaceFolders || []) {
 	const resolved = [];
 
 	for (const glob of globs) {
+		let pattern = glob.endsWith("/**") ? glob.slice(0, -3) : glob;
 		if (path.isAbsolute(glob)) {
-			// Already absolute — use as-is (backward compat)
-			resolved.push(glob);
+			const root = path.parse(glob).root;
+			if (pattern === root.slice(0, -1)) pattern = root;
+			resolved.push(pattern);
 			continue;
 		}
 
 		// Workspace-relative glob: resolve against each workspace folder
-		const pattern = glob.endsWith("/**") ? glob.slice(0, -3) : glob;
-
 		for (const folder of workspaceFolders) {
 			const absPath = path.join(folder.uri.fsPath, pattern);
 
@@ -398,6 +454,57 @@ function resolveLibraryPathsToAbsolute(globs) {
 	}
 
 	return resolved;
+}
+
+function configuredLibraryPaths() {
+	const folders = vscode.workspace.workspaceFolders || [];
+	if (folders.length === 0) {
+		return resolveLibraryPathsToAbsolute(vscode.workspace.getConfiguration("lugo").get("workspace.libraryPaths") || [], []);
+	}
+	const paths = folders.flatMap(folder => resolveLibraryPathsToAbsolute(
+		vscode.workspace.getConfiguration("lugo", folder.uri).get("workspace.libraryPaths") || [], [folder]
+	));
+	return [...new Set(paths)];
+}
+
+async function creationMayAffectResources(event) {
+	for (const uri of event.files) {
+		const name = path.basename(uri.fsPath);
+		if (name === "fxmanifest.lua" || name === "__resource.lua") return true;
+		try {
+			const stat = await vscode.workspace.fs.stat(uri);
+			// Unknown types and symlinks are kept conservative: they may be directories.
+			if (stat.type !== vscode.FileType.File) return true;
+		} catch {
+			return true;
+		}
+	}
+	return false;
+}
+
+async function deletionMayAffectResources(event, resources, discoveryInProgress, folders) {
+	// A partial discovery is not a reliable inventory of resource directories.
+	if (discoveryInProgress) return event.files.length > 0;
+	if (event.files.some(uri => {
+		const deletedPath = path.resolve(uri.fsPath);
+		const name = path.basename(deletedPath);
+		if (name === "fxmanifest.lua" || name === "__resource.lua") return true;
+		return resources.some(resource => {
+			const relative = path.relative(deletedPath, resource.manifestPath);
+			return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+		});
+	})) return true;
+	// A resource can be displayed using a different workspace alias from the
+	// path in this event. After deletion the target cannot reliably be resolved,
+	// so retain conservative refreshes whenever a workspace root is an alias.
+	for (const folder of folders) {
+		try {
+			if (path.resolve(await fs.promises.realpath(folder.uri.fsPath)) !== path.resolve(folder.uri.fsPath)) return true;
+		} catch {
+			return true;
+		}
+	}
+	return false;
 }
 
 /**
@@ -447,10 +554,14 @@ async function activate(context) {
 	const resourceStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
 	resourceStatus.command = "lugo.fivem.refresh";
 	resourceStatus.tooltip = "Refresh FiveM resources";
+	let resourceDiscoveries = 0;
+	let resourceRefreshDebounce, resourceDiagnosticsDebounce, resourceDisposed = false, resourceRefreshPending = false;
 	const refreshResources = async () => {
 		const startedAt = Date.now();
+		resourceDiscoveries++;
 		try {
 			const resources = await resourceProvider.refresh();
+			if (resourceDisposed) return resources;
 			const diagnostics = resources.reduce((total, resource) => total + resource.diagnostics, 0);
 			resourceStatus.text = `$(server) FiveM: ${resources.length} resources`;
 			resourceStatus.show();
@@ -459,19 +570,92 @@ async function activate(context) {
 		} catch (error) {
 			telemetry?.record("resource_refresh_failed", { ...errorMetadata(error), duration_ms: elapsedMilliseconds(startedAt) });
 			throw error;
+		} finally {
+			resourceDiscoveries--;
+			if (resourceDiscoveries === 0 && resourceRefreshPending) {
+				resourceRefreshPending = false;
+				scheduleResourceRefresh();
+			}
 		}
 	};
-	let resourceRefreshDebounce;
 	const scheduleResourceRefresh = () => {
+		if (resourceDisposed) return;
+		if (resourceDiscoveries > 0) {
+			resourceRefreshPending = true;
+			return;
+		}
 		clearTimeout(resourceRefreshDebounce);
-		resourceRefreshDebounce = setTimeout(() => { void refreshResources().catch(() => telemetry?.record("resource_refresh_automatic_failed")); }, 250);
+		resourceRefreshDebounce = setTimeout(() => {
+			if (resourceDiscoveries > 0) { resourceRefreshPending = true; return; }
+			void refreshResources().catch(() => telemetry?.record("resource_refresh_automatic_failed"));
+		}, 250);
 	};
-	context.subscriptions.push(resourceProvider, resourceView, resourceStatus, { dispose: () => clearTimeout(resourceRefreshDebounce) });
+	const scheduleResourceDiagnostics = () => {
+		clearTimeout(resourceDiagnosticsDebounce);
+		resourceDiagnosticsDebounce = setTimeout(() => resourceProvider.updateDiagnostics(), 250);
+	};
+	context.subscriptions.push(resourceProvider, resourceView, resourceStatus, { dispose: () => { resourceDisposed = true; clearTimeout(resourceRefreshDebounce); clearTimeout(resourceDiagnosticsDebounce); } });
 	context.subscriptions.push(vscode.commands.registerCommand("lugo.fivem.refresh", () => runCommand("lugo.fivem.refresh", refreshResources)));
-	context.subscriptions.push(vscode.languages.onDidChangeDiagnostics(scheduleResourceRefresh));
-	context.subscriptions.push(vscode.workspace.onDidCreateFiles(scheduleResourceRefresh));
-	context.subscriptions.push(vscode.workspace.onDidDeleteFiles(scheduleResourceRefresh));
-	context.subscriptions.push(vscode.workspace.onDidRenameFiles(scheduleResourceRefresh));
+	context.subscriptions.push(vscode.languages.onDidChangeDiagnostics(scheduleResourceDiagnostics));
+	let resourceWorkspaceFolders = (vscode.workspace.workspaceFolders || []).map(folder => folder.uri.toString());
+	context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => {
+		const folders = (vscode.workspace.workspaceFolders || []).map(folder => folder.uri.toString());
+		if (folders.length === resourceWorkspaceFolders.length && folders.every((folder, index) => folder === resourceWorkspaceFolders[index])) return;
+		resourceWorkspaceFolders = folders;
+		scheduleResourceRefresh();
+	}));
+	const addKnownManifests = async uris => {
+		if (resourceDiscoveries > 0 || uris.length === 0 || uris.some(uri => !["fxmanifest.lua", "__resource.lua"].includes(path.basename(uri.fsPath)))) return false;
+		const folders = vscode.workspace.workspaceFolders || [];
+		const handled = await Promise.all(uris.map(uri => resourceProvider.addManifest(uri.fsPath,
+			folders.length === 1 && path.resolve(path.dirname(uri.fsPath)) === path.resolve(folders[0].uri.fsPath))));
+		if (resourceDisposed) return true;
+		if (!handled.every(Boolean)) return false;
+		resourceStatus.text = `$(server) FiveM: ${resourceProvider.resources.length} resources`;
+		resourceStatus.show();
+		return true;
+	};
+	context.subscriptions.push(vscode.workspace.onDidCreateFiles(event => {
+		void addKnownManifests(event.files).then(async handled => {
+			if (!handled && await creationMayAffectResources(event)) scheduleResourceRefresh();
+		});
+	}));
+	const removeKnownManifests = uris => {
+		if (resourceDiscoveries > 0 || uris.length === 0 || uris.some(uri => !["fxmanifest.lua", "__resource.lua"].includes(path.basename(uri.fsPath)))) return false;
+		if (!uris.every(uri => resourceProvider.resources.some(resource => resource.manifestPath === uri.fsPath) || resourceProvider.removedManifests.has(uri.fsPath))) return false;
+		for (const uri of uris) {
+			resourceProvider.removeManifest(uri.fsPath);
+			// A delayed delete notification may arrive after the file was
+			// recreated. Reconcile the inventory if it still exists.
+			void fs.promises.stat(uri.fsPath).then(() => scheduleResourceRefresh()).catch(error => {
+				if (error.code !== "ENOENT") scheduleResourceRefresh();
+			});
+		}
+		resourceStatus.text = `$(server) FiveM: ${resourceProvider.resources.length} resources`;
+		resourceStatus.show();
+		return true;
+	};
+	context.subscriptions.push(vscode.workspace.onDidDeleteFiles(event => {
+		if (removeKnownManifests(event.files)) return;
+		void deletionMayAffectResources(event, resourceProvider.resources, resourceDiscoveries > 0, vscode.workspace.workspaceFolders || []).then(affects => {
+			if (affects || resourceDiscoveries > 0) scheduleResourceRefresh();
+		});
+	}));
+	context.subscriptions.push(vscode.workspace.onDidRenameFiles(event => {
+		const removed = { files: event.files.map(file => file.oldUri) };
+		void deletionMayAffectResources(removed, resourceProvider.resources, resourceDiscoveries > 0, vscode.workspace.workspaceFolders || []).then(async affects => {
+			if (affects || resourceDiscoveries > 0 || await creationMayAffectResources({ files: event.files.map(file => file.newUri) })) scheduleResourceRefresh();
+		});
+	}));
+	const manifestWatcher = vscode.workspace.createFileSystemWatcher("**/{fxmanifest.lua,__resource.lua}");
+	context.subscriptions.push(manifestWatcher, manifestWatcher.onDidChange(uri => {
+		if (resourceDiscoveries > 0) { scheduleResourceRefresh(); return; }
+		void resourceProvider.refreshManifest(uri.fsPath).then(handled => { if (!handled) scheduleResourceRefresh(); }).catch(() => scheduleResourceRefresh());
+	}), manifestWatcher.onDidCreate(uri => {
+		void addKnownManifests([uri]).then(handled => { if (!handled) scheduleResourceRefresh(); });
+	}), manifestWatcher.onDidDelete(uri => {
+		if (!removeKnownManifests([uri])) scheduleResourceRefresh();
+	}));
 	void refreshResources().catch(() => telemetry?.record("resource_refresh_automatic_failed"));
 
 	context.subscriptions.push(
@@ -566,8 +750,9 @@ async function activate(context) {
 }
 
 async function startClient(context) {
-	const initializationOptions = buildInitializationOptions();
-
+	let initialLibraryPaths;
+	let initialSettings;
+	let workspaceSync;
 	const platform = os.platform(),
 		arch = os.arch(),
 		ext = platform === "win32" ? ".exe" : "",
@@ -596,7 +781,13 @@ async function startClient(context) {
 		synchronize: {
 			fileEvents: vscode.workspace.createFileSystemWatcher("**/*.lua"),
 		},
-		initializationOptions: initializationOptions,
+		initializationOptions: () => {
+			const options = buildInitializationOptions();
+			initialLibraryPaths = options.libraryPaths;
+			initialSettings = JSON.stringify({ ...options, libraryPaths: undefined });
+			workspaceSync = { queue: Promise.resolve(), pendingFolders: 0, libraryPaths: options.libraryPaths, lastConfiguration: JSON.stringify(options) };
+			return options;
+		},
 		errorHandler: {
 			error: (error, message, count) => {
 				telemetry?.lspError(error, message?.method, count);
@@ -614,7 +805,77 @@ async function startClient(context) {
 		}
 	};
 
-	client = new LanguageClient("lugo", "Lugo LSP", serverOptions, clientOptions);
+	// The language client's initial workspace-folder catch-up bypasses its
+	// middleware. Enrich both that event and later events before they are sent.
+	class LugoLanguageClient extends LanguageClient {
+		sendNotification(type, params) {
+			const method = typeof type === "string" ? type : type?.method;
+			if (method === "workspace/didChangeWorkspaceFolders") {
+				params = { ...params, libraryPaths: configuredLibraryPaths() };
+				const state = workspaceSync;
+				state.pendingFolders++;
+				const sent = state.queue.then(async () => {
+					if (state !== workspaceSync) return;
+					try {
+						await super.sendNotification(type, params);
+					} catch (error) {
+						if (!this.isRunning() || state !== workspaceSync) throw error;
+						await super.sendNotification(type, params);
+					}
+					if (state === workspaceSync) {
+						state.libraryPaths = params.libraryPaths;
+						state.lastConfiguration = JSON.stringify({ ...JSON.parse(state.lastConfiguration), libraryPaths: params.libraryPaths });
+					}
+				}).finally(() => { state.pendingFolders--; });
+				state.queue = sent.catch(() => {});
+				return sent;
+			}
+			if (method === "workspace/didChangeConfiguration" && params?.settings) {
+				const state = workspaceSync;
+				return this.start().then(() => {
+					if (state !== workspaceSync) return;
+					const sent = state.queue.then(async () => {
+						if (state !== workspaceSync) return;
+						const libraryPaths = state.pendingFolders > 0 ? state.libraryPaths : configuredLibraryPaths();
+						const settings = { ...params.settings, libraryPaths };
+						const serialized = JSON.stringify(settings);
+						if (serialized === state.lastConfiguration) return;
+						await super.sendNotification(type, { ...params, settings });
+						if (state === workspaceSync) {
+							state.libraryPaths = libraryPaths;
+							state.lastConfiguration = serialized;
+						}
+					});
+					state.queue = sent.catch(() => {});
+					return sent;
+				});
+			}
+			return super.sendNotification(type, params);
+		}
+	}
+	client = new LugoLanguageClient("lugo", "Lugo LSP", serverOptions, clientOptions);
+	const startedClient = client;
+	context.subscriptions.push(startedClient.onDidChangeState(event => {
+		if (event.newState !== State.Running) return;
+		const initializedPaths = initialLibraryPaths;
+		// Running is emitted before the initialized notification. start() returns
+		// the in-flight startup promise, including feature registration.
+		void startedClient.start().then(async () => {
+			// The built-in initial folder event is sent during feature registration.
+			// Wait for it to be sent before sending a library catch-up.
+			await workspaceSync.queue;
+			if (client !== startedClient || !startedClient.isRunning() || initializedPaths !== initialLibraryPaths) return;
+			const options = buildInitializationOptions();
+			const paths = options.libraryPaths;
+			if (initialSettings !== JSON.stringify({ ...options, libraryPaths: undefined })) {
+				await startedClient.sendNotification("workspace/didChangeConfiguration", { settings: options });
+				return;
+			}
+			if (initializedPaths && JSON.stringify(paths) !== JSON.stringify(workspaceSync.libraryPaths)) {
+				await startedClient.sendNotification("workspace/didChangeWorkspaceFolders", { event: { added: [], removed: [] }, libraryPaths: paths });
+			}
+		}).catch(error => telemetry?.record("workspace_folder_sync_failed", errorMetadata(error)));
+	}));
 
 	const startedAt = Date.now();
 	try {
@@ -625,8 +886,6 @@ async function startClient(context) {
 		telemetry?.record("lsp_start_failed", { ...errorMetadata(error), duration_ms: elapsedMilliseconds(startedAt) });
 		throw error;
 	}
-
-	void triggerReindex().catch(() => telemetry?.record("reindex_automatic_failed"));
 }
 
 async function exportDebugData() {

@@ -64,10 +64,6 @@ func (s *Server) handleDidOpen(req Request) {
 
 	uri := s.normalizeURI(params.TextDocument.URI)
 
-	if s.isIgnoredURI(uri) {
-		return
-	}
-
 	if s.documentVersions == nil {
 		s.documentVersions = make(map[string]int)
 	}
@@ -76,8 +72,23 @@ func (s *Server) handleDidOpen(req Request) {
 	}
 	s.documentVersions[uri] = params.TextDocument.Version
 	s.OpenFiles[uri] = true
+	if s.isIgnoredURI(uri) {
+		if s.ignoredOpenSources == nil {
+			s.ignoredOpenSources = make(map[string][]byte)
+		}
+		if s.contentExceedsMaxFileSize(params.TextDocument.Text) {
+			s.ignoredOpenSources[uri] = nil
+		} else {
+			s.ignoredOpenSources[uri] = []byte(params.TextDocument.Text)
+		}
+		return
+	}
 
 	if s.contentExceedsMaxFileSize(params.TextDocument.Text) {
+		if s.oversizedOpenFiles == nil {
+			s.oversizedOpenFiles = make(map[string]bool)
+		}
+		s.oversizedOpenFiles[uri] = true
 		s.publishFileSizeDiagnostic(uri)
 		return
 	}
@@ -103,14 +114,6 @@ func (s *Server) handleDidChange(req Request) {
 
 	uri := s.normalizeURI(params.TextDocument.URI)
 
-	if s.isIgnoredURI(uri) {
-		if _, ok := s.Documents[uri]; ok {
-			s.clearDocument(uri)
-		}
-
-		return
-	}
-
 	if s.documentVersions == nil {
 		s.documentVersions = make(map[string]int)
 	}
@@ -118,10 +121,35 @@ func (s *Server) handleDidChange(req Request) {
 		return
 	}
 	s.documentVersions[uri] = params.TextDocument.Version
+	if s.isIgnoredURI(uri) {
+		if len(params.ContentChanges) > 0 {
+			if s.ignoredOpenSources == nil {
+				s.ignoredOpenSources = make(map[string][]byte)
+			}
+			if s.contentExceedsMaxFileSize(params.ContentChanges[0].Text) {
+				s.ignoredOpenSources[uri] = nil
+			} else {
+				s.ignoredOpenSources[uri] = []byte(params.ContentChanges[0].Text)
+			}
+		}
+		if _, ok := s.Documents[uri]; ok {
+			s.clearDocument(uri)
+		}
+		return
+	}
 
 	if len(params.ContentChanges) > 0 {
 		if s.contentExceedsMaxFileSize(params.ContentChanges[0].Text) {
+			if s.oversizedOpenFiles == nil {
+				s.oversizedOpenFiles = make(map[string]bool)
+			}
+			s.oversizedOpenFiles[uri] = true
 			s.publishFileSizeDiagnostic(uri)
+			return
+		}
+		wasOversized := s.oversizedOpenFiles[uri]
+		delete(s.oversizedOpenFiles, uri)
+		if doc := s.Documents[uri]; !wasOversized && doc != nil && doc.Tree != nil && doc.Tree.Source != nil && string(doc.Tree.Source) == params.ContentChanges[0].Text {
 			return
 		}
 
@@ -148,6 +176,9 @@ func (s *Server) handleDidClose(req Request) {
 	uri := s.normalizeURI(params.TextDocument.URI)
 
 	delete(s.OpenFiles, uri)
+	delete(s.ignoredOpenSources, uri)
+	delete(s.oversizedOpenFiles, uri)
+	delete(s.documentVersions, uri)
 	// Evict caches for documents that are no longer open to reclaim memory
 	evictClosedDocumentCaches(s)
 
@@ -171,12 +202,56 @@ func (s *Server) handleDidChangeConfiguration(req Request) {
 		return
 	}
 
+	previousMaxErrors := s.MaxParseErrors
 	needsReindex, needsRepublish := s.applyInitializationOptions(params.Settings)
+	if previousMaxErrors != s.MaxParseErrors {
+		s.updateParseErrorLimit(previousMaxErrors)
+	}
 
 	if needsReindex {
 		s.refreshWorkspace()
 	} else if needsRepublish {
 		s.publishWorkspaceDiagnostics()
+	}
+}
+
+// updateParseErrorLimit changes only syntax diagnostics. The parser's limit
+// affects error collection, not its AST, so symbols do not need reindexing.
+func (s *Server) updateParseErrorLimit(previous int) {
+	current := s.MaxParseErrors
+	for uri, doc := range s.Documents {
+		if doc == nil || doc.Tree == nil {
+			continue
+		}
+		if current > 0 && len(doc.Errors) > current {
+			doc.Errors = doc.Errors[:current]
+			continue
+		}
+		if previous <= 0 || (current > 0 && current <= previous) || len(doc.Errors) < previous {
+			continue
+		}
+		source := doc.Tree.Source
+		if source == nil {
+			var err error
+			if strings.HasPrefix(uri, embeddedStdlibURIPrefix) {
+				source, err = stdlibFS.ReadFile("stdlib/" + strings.TrimPrefix(uri, embeddedStdlibURIPrefix))
+			} else {
+				source, err = os.ReadFile(doc.Path)
+			}
+			if err != nil {
+				s.Log.Warnf("Cannot reload document to update parser errors %s: %v\n", uri, err)
+				continue
+			}
+			// The source may have changed on disk since it was evicted. Rebuild
+			// this document so its AST and symbols match the new diagnostics.
+			s.updateDocument(uri, source)
+			continue
+		}
+		tree := ast.NewTree(source)
+		tree.SetPositionEncoding(s.positionEncoding)
+		p := parser.New(source, tree, current)
+		p.Parse()
+		doc.Errors = append(doc.Errors[:0], p.Errors...)
 	}
 }
 
@@ -192,6 +267,7 @@ func (s *Server) handleDidChangeWatchedFiles(req Request) {
 
 	var (
 		needsWorkspaceRepublish bool
+		moduleSetChanged        bool
 		singleRepublish         []string
 		statFailures            int
 		readFailures            int
@@ -223,7 +299,17 @@ func (s *Server) handleDidChangeWatchedFiles(req Request) {
 				}
 
 				if b, err := os.ReadFile(path); err == nil {
+					if doc := s.Documents[uri]; doc != nil && doc.Tree != nil && doc.Tree.Source != nil && bytes.Equal(doc.Tree.Source, b) {
+						if statErr == nil {
+							doc.ModTime = stat.ModTime()
+						}
+						continue
+					}
+					_, existed := s.Documents[uri]
 					needsRepublish := s.updateDocument(uri, b)
+					if !existed && s.Documents[uri] != nil {
+						moduleSetChanged = true
+					}
 
 					if statErr == nil && s.Documents[uri] != nil {
 						s.Documents[uri].ModTime = stat.ModTime()
@@ -241,6 +327,9 @@ func (s *Server) handleDidChangeWatchedFiles(req Request) {
 				}
 			}
 		case 3: // Deleted
+			if s.Documents[uri] != nil {
+				moduleSetChanged = true
+			}
 			delete(s.documentVersions, uri)
 			// If a manifest file is deleted, evict its FiveM resource state before
 			// removing the document from the workspace cache.
@@ -275,6 +364,10 @@ func (s *Server) handleDidChangeWatchedFiles(req Request) {
 		}
 	}
 
+	if moduleSetChanged {
+		needsWorkspaceRepublish = s.rebindPendingRequireFields() || needsWorkspaceRepublish
+	}
+
 	if statFailures > 0 || readFailures > 0 || oversizedFiles > 0 {
 		telemetryCtx := WithTraceContext(context.Background(), s.trace)
 		RecordTelemetry(telemetryCtx, "lugo.watched_files.refresh_degraded", map[string]any{
@@ -292,6 +385,43 @@ func (s *Server) handleDidChangeWatchedFiles(req Request) {
 			s.publishDiagnostics(uri)
 		}
 	}
+}
+
+// Rebind only references to require() modules after files are added or removed.
+// Closed documents whose source was evicted are reparsed when reopened.
+func (s *Server) rebindPendingRequireFields() bool {
+	changed := false
+	for uri, doc := range s.Documents {
+		if doc == nil || doc.Tree == nil || doc.Tree.Source == nil || doc.Resolver == nil {
+			continue
+		}
+		for i, field := range doc.Resolver.PendingFields {
+			var module string
+			if field.ReceiverDef != ast.InvalidNode {
+				module = s.getRequireModName(doc, doc.getAssignedValue(field.ReceiverDef))
+			} else if int(field.PropNodeID) < len(doc.Tree.Nodes) {
+				parentID := doc.Tree.Nodes[field.PropNodeID].Parent
+				if parentID != ast.InvalidNode && int(parentID) < len(doc.Tree.Nodes) {
+					parent := doc.Tree.Nodes[parentID]
+					if parent.Kind == ast.KindMemberExpr || parent.Kind == ast.KindMethodCall {
+						module = s.getRequireModName(doc, parent.Left)
+					}
+				}
+			}
+			if module == "" {
+				continue
+			}
+			hash := ast.HashBytes(field.ReceiverName)
+			if target := s.resolveModule(uri, module); target != nil {
+				hash = ast.HashBytesConcat([]byte("module:"), nil, []byte(target.URI))
+			}
+			if field.ReceiverHash != hash {
+				doc.Resolver.PendingFields[i].ReceiverHash = hash
+				changed = true
+			}
+		}
+	}
+	return changed
 }
 
 func boundedWatchedFileCount(count int) int {
@@ -319,10 +449,11 @@ func (s *Server) refreshWorkspace() {
 	start := time.Now()
 
 	var (
-		total     int
-		indexed   int
-		unchanged int
-		failed    int
+		total              int
+		indexed            int
+		unchanged          int
+		failed             int
+		moduleNamesChanged bool
 	)
 	defer func() {
 		properties := map[string]any{
@@ -372,9 +503,34 @@ func (s *Server) refreshWorkspace() {
 	if s.FiveMResourceGraph != nil {
 		s.FiveMResourceGraph.Clear()
 	}
+	// Keep the editor's unsaved contents while excluding open files from the
+	// index. The client does not send didOpen again when an ignore is removed.
+	for uri := range s.OpenFiles {
+		if s.isIgnoredURI(uri) {
+			if s.ignoredOpenSources == nil {
+				s.ignoredOpenSources = make(map[string][]byte)
+			}
+			if doc := s.Documents[uri]; doc != nil {
+				moduleNamesChanged = true
+				if !s.oversizedOpenFiles[uri] && (s.MaxFileSize <= 0 || int64(len(doc.Source())) <= s.MaxFileSize) {
+					s.ignoredOpenSources[uri] = doc.Source()
+				} else {
+					s.ignoredOpenSources[uri] = nil
+				}
+				s.clearDocument(uri)
+			} else if source, exists := s.ignoredOpenSources[uri]; !exists || (s.MaxFileSize > 0 && int64(len(source)) > s.MaxFileSize) {
+				s.ignoredOpenSources[uri] = nil
+			}
+		}
+	}
 
 	var pendingJobs []*IndexJob
 	workspaceScanComplete := true
+	if s.visitedDirs == nil {
+		s.visitedDirs = make(map[string]bool, 256)
+	} else {
+		clear(s.visitedDirs)
+	}
 
 	s.indexEmbeddedStdlib(&pendingJobs, &unchanged)
 
@@ -504,6 +660,9 @@ func (s *Server) refreshWorkspace() {
 
 		total += len(res.Source)
 		indexed++
+		if res.Job.Doc == nil {
+			moduleNamesChanged = true
+		}
 		completedResults = append(completedResults, res)
 	}
 
@@ -563,9 +722,25 @@ func (s *Server) refreshWorkspace() {
 		}
 	}
 
+	for uri, source := range s.ignoredOpenSources {
+		if s.OpenFiles[uri] && !s.isIgnoredURI(uri) {
+			delete(s.ignoredOpenSources, uri)
+			delete(s.oversizedOpenFiles, uri)
+			if source == nil {
+				s.sendShowMessage(2, "Lugo: reopen an excluded oversized document to restore its current contents.")
+			} else if s.MaxFileSize > 0 && int64(len(source)) > s.MaxFileSize {
+				s.publishFileSizeDiagnostic(uri)
+			} else {
+				s.updateDocument(uri, source)
+				moduleNamesChanged = true
+			}
+		}
+	}
+
 	if workspaceScanComplete {
 		for uri := range s.Documents {
 			if !s.activeURIs[uri] && !s.OpenFiles[uri] {
+				moduleNamesChanged = true
 				s.clearDocument(uri)
 			}
 		}
@@ -576,6 +751,65 @@ func (s *Server) refreshWorkspace() {
 			total += len(doc.Source())
 
 			s.updateDocument(uri, doc.Source())
+		}
+	}
+
+	// Root changes can alter the classification and module name of documents
+	// whose contents did not change and therefore were not parsed above.
+	var reclassified []*Document
+	needsRebuild := make(map[*Document]bool)
+	for uri, doc := range s.Documents {
+		isLibrary := s.checkIsLibrary(uri, doc.LowerPath)
+		isWorkspace := s.checkIsWorkspace(uri, doc.LowerPath)
+		moduleName := s.computeModuleName(uri, doc.Path, doc.LowerPath)
+		if doc.IsLibrary == isLibrary && doc.IsWorkspace == isWorkspace && doc.ModuleName == moduleName {
+			continue
+		}
+		if doc.IsWorkspace && !isWorkspace && !s.OpenFiles[uri] && !s.IsCI {
+			WriteMessage(s.Writer, OutgoingNotification{RPC: "2.0", Method: "textDocument/publishDiagnostics", Params: PublishDiagnosticsParams{URI: uri, Diagnostics: []Diagnostic{}}})
+		}
+		moduleNamesChanged = moduleNamesChanged || doc.ModuleName != moduleName
+		doc.IsLibrary, doc.IsWorkspace, doc.ModuleName = isLibrary, isWorkspace, moduleName
+		doc.FiveMProfile = FiveMExecutionProfile{}
+		doc.FiveMProfileCached = false
+		reclassified = append(reclassified, doc)
+		needsRebuild[doc] = true
+	}
+	if moduleNamesChanged {
+		// A require in another document may now resolve to a different module.
+		for _, doc := range s.Documents {
+			if !needsRebuild[doc] && doc.Resolver != nil && len(doc.Resolver.PendingFields) > 0 {
+				reclassified = append(reclassified, doc)
+			}
+		}
+	}
+
+	for _, doc := range s.Documents {
+		if doc.IsFiveMManifest {
+			res := s.parseFiveMManifest(doc)
+			s.registerFiveMManifestResource(res)
+		}
+	}
+	// Rebuild affected symbol entries only after all module names and the
+	// resource graph have been updated. Closed documents may have evicted source.
+	for _, doc := range reclassified {
+		if doc.Tree == nil {
+			continue
+		}
+		if doc.Tree.Source == nil {
+			source, err := os.ReadFile(doc.Path)
+			if err != nil {
+				s.Log.Warnf("Cannot reload reclassified document %s: %v\n", doc.Path, err)
+				continue
+			}
+			doc.Tree.Reset(source)
+			p := s.sharedParser
+			p.MaxErrors = s.MaxParseErrors
+			p.Reset(source, doc.Tree)
+			p.Parse()
+			s.finalizeDocumentUpdate(doc.URI, source, doc.Tree, p.Errors, doc)
+		} else {
+			s.finalizeDocumentUpdate(doc.URI, doc.Source(), doc.Tree, doc.Errors, doc)
 		}
 	}
 
@@ -662,8 +896,6 @@ func (s *Server) indexWorkspace(rootPathOrURI string, pendingJobs *[]*IndexJob, 
 
 	if s.visitedDirs == nil {
 		s.visitedDirs = make(map[string]bool, 256)
-	} else {
-		clear(s.visitedDirs)
 	}
 
 	complete := true
@@ -725,6 +957,11 @@ func (s *Server) indexWorkspace(rootPathOrURI string, pendingJobs *[]*IndexJob, 
 				walk(fullPath, isSym)
 			} else if len(name) > 4 && name[len(name)-4:] == ".lua" {
 				uri := s.pathToURI(fullPath)
+				// Workspace folders and library paths can overlap. Mark jobs when
+				// queued so the same tree is never parsed by multiple workers.
+				if s.activeURIs != nil && s.activeURIs[uri] {
+					continue
+				}
 
 				s.uriCache[uri] = uri
 
@@ -783,6 +1020,9 @@ func (s *Server) indexWorkspace(rootPathOrURI string, pendingJobs *[]*IndexJob, 
 				if statErr == nil {
 					modTime = fileStat.ModTime()
 				}
+				if s.activeURIs != nil {
+					s.activeURIs[uri] = true
+				}
 
 				*pendingJobs = append(*pendingJobs, &IndexJob{
 					Uri:            uri,
@@ -838,7 +1078,7 @@ func (s *Server) updateDocument(uri string, source []byte) bool {
 	)
 
 	if existing, exists := s.Documents[uri]; exists {
-		if bytes.Equal(existing.Tree.Source, source) {
+		if existing.Tree.Source != nil && bytes.Equal(existing.Tree.Source, source) {
 			return false
 		}
 
@@ -1758,6 +1998,15 @@ func (s *Server) isIgnoredURI(uri string) bool {
 	return s.isIgnored(path, filepath.Base(path))
 }
 
+// pathWithinDirectory compares clean paths at a directory boundary. Both paths
+// must use the OS separator and the same case normalization.
+func pathWithinDirectory(path, root string) bool {
+	if root == "" || !strings.HasPrefix(path, root) {
+		return false
+	}
+	return len(path) == len(root) || root[len(root)-1] == filepath.Separator || path[len(root)] == filepath.Separator
+}
+
 func (s *Server) checkIsLibrary(uri, lowerPath string) bool {
 	if strings.HasPrefix(uri, embeddedStdlibURIPrefix) {
 		return true
@@ -1768,7 +2017,7 @@ func (s *Server) checkIsLibrary(uri, lowerPath string) bool {
 	}
 
 	for _, libPath := range s.lowerLibraryPaths {
-		if strings.HasPrefix(lowerPath, libPath) {
+		if pathWithinDirectory(lowerPath, libPath) {
 			return true
 		}
 	}
@@ -1786,7 +2035,7 @@ func (s *Server) checkIsWorkspace(uri, lowerPath string) bool {
 	}
 
 	for _, libPath := range s.lowerLibraryPaths {
-		if strings.HasPrefix(lowerPath, libPath) {
+		if pathWithinDirectory(lowerPath, libPath) {
 			return false
 		}
 	}
@@ -1796,7 +2045,7 @@ func (s *Server) checkIsWorkspace(uri, lowerPath string) bool {
 	}
 
 	for _, wf := range s.lowerWorkspaceFolders {
-		if strings.HasPrefix(lowerPath, wf) {
+		if pathWithinDirectory(lowerPath, wf) {
 			return true
 		}
 	}
@@ -1863,7 +2112,7 @@ func (s *Server) computeModuleName(uri, path, lowerPath string) string {
 	)
 
 	for i, wf := range s.lowerWorkspaceFolders {
-		if strings.HasPrefix(lowerPath, wf) {
+		if pathWithinDirectory(lowerPath, wf) {
 			if len(wf) > bestLen {
 				bestLen = len(wf)
 				bestRoot = s.uriToPath(s.WorkspaceFolders[i])
@@ -1872,7 +2121,7 @@ func (s *Server) computeModuleName(uri, path, lowerPath string) string {
 	}
 
 	for i, lib := range s.lowerLibraryPaths {
-		if strings.HasPrefix(lowerPath, lib) {
+		if pathWithinDirectory(lowerPath, lib) {
 			if len(lib) > bestLen {
 				bestLen = len(lib)
 				bestRoot = s.LibraryPaths[i]
@@ -2000,11 +2249,11 @@ func (s *Server) resolveModule(currentURI string, modName string) *Document {
 		if strings.HasSuffix(path, suffix1) || strings.HasSuffix(path, suffix2) {
 			score := 1
 
-			if currentDir != "" && strings.HasPrefix(path, currentDir) {
+			if currentDir != "" && pathWithinDirectory(filepath.FromSlash(path), filepath.FromSlash(currentDir)) {
 				score = 3
 			} else {
 				for _, rootDir := range rootDirs {
-					if strings.HasPrefix(path, rootDir) {
+					if pathWithinDirectory(filepath.FromSlash(path), filepath.FromSlash(rootDir)) {
 						score = 2
 						break
 					}
