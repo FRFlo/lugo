@@ -595,8 +595,32 @@ func (s *Server) visibleGlobalSymbolsFromEntries(srcDoc *Document, entries []*Sy
 		return nil
 	}
 
-	filtered := make([]GlobalSymbol, 0, min(len(entries), max))
-	seen := make(map[TargetKey]struct{}, len(entries))
+	// Hash buckets are often sparse after visibility filtering, so keep their
+	// output lazy. A consistently visible prefix is a useful signal for dense
+	// buckets, where reserving capacity avoids repeated slice and map growth.
+	capacity := 0
+	const sampleSize = 8
+	if len(entries) >= 1024 {
+		visible := 0
+		for _, entry := range entries[:sampleSize] {
+			if entry == nil {
+				continue
+			}
+			tgtDoc, ok := s.Documents[entry.URI]
+			if ok && s.canSeeSymbol(srcDoc, tgtDoc) {
+				visible++
+			}
+		}
+		if visible == sampleSize {
+			capacity = len(entries)
+		}
+	}
+
+	var seen map[TargetKey]struct{}
+	if capacity > 0 {
+		seen = make(map[TargetKey]struct{}, capacity)
+	}
+	filtered := make([]GlobalSymbol, 0, capacity)
 
 	for _, entry := range entries {
 		if entry == nil {
@@ -609,6 +633,9 @@ func (s *Server) visibleGlobalSymbolsFromEntries(srcDoc *Document, entries []*Sy
 		}
 
 		target := TargetKey{URI: entry.URI, Def: entry.NodeID}
+		if seen == nil {
+			seen = make(map[TargetKey]struct{})
+		}
 		if _, ok := seen[target]; ok {
 			continue
 		}
@@ -618,7 +645,26 @@ func (s *Server) visibleGlobalSymbolsFromEntries(srcDoc *Document, entries []*Sy
 	}
 
 	slices.SortStableFunc(filtered, func(a, b GlobalSymbol) int {
-		return s.globalSymbolPriority(a.URI) - s.globalSymbolPriority(b.URI)
+		pa, pb := s.globalSymbolPriority(a.URI), s.globalSymbolPriority(b.URI)
+		if pa != pb {
+			return pa - pb
+		}
+		if a.IsRoot != b.IsRoot {
+			if a.IsRoot {
+				return -1
+			}
+			return 1
+		}
+		if a.URI != b.URI {
+			return strings.Compare(a.URI, b.URI)
+		}
+		if a.NodeID < b.NodeID {
+			return -1
+		}
+		if a.NodeID > b.NodeID {
+			return 1
+		}
+		return 0
 	})
 	if max > 0 && len(filtered) > max {
 		filtered = filtered[:max]
@@ -679,45 +725,16 @@ func (s *Server) setGlobalIndexSymbol(resource ResourceURI, scope GlobalIndexSco
 	defer s.GlobalIndex.mu.Unlock()
 
 	res := s.GlobalIndex.ensureResourceLocked(resource)
-	table := res.tableForScope(scope)
-	if previous := table[name]; previous != nil {
-		s.GlobalIndex.removeEntryFromHashLocked(previous)
-	}
-
 	entry.Name = name
 	if entry.URI == "" {
 		entry.URI = string(resource)
 	}
-	table[name] = entry
-
-	if entry.Key == (GlobalKey{}) {
-		return
-	}
-
-	entries := s.GlobalIndex.HashIndex[entry.Key]
-	priority := s.globalSymbolPriority(entry.URI)
-	insertAt := len(entries)
-	for i, existing := range entries {
-		if existing == nil {
-			continue
-		}
-		if existing.URI == entry.URI && existing.NodeID == entry.NodeID {
-			copy(entries[i:], entries[i+1:])
-			entries[len(entries)-1] = nil
-			entries = entries[:len(entries)-1]
-			insertAt = len(entries)
-			break
-		}
-		if s.globalSymbolPriority(existing.URI) > priority {
-			insertAt = i
-			break
+	for _, old := range append([]*SymbolEntry(nil), res.Candidates[scope][name]...) {
+		if old != nil && old.URI == entry.URI && old.NodeID == entry.NodeID && old.Key == entry.Key && old.Parent == entry.Parent && (old.Export != nil) == (entry.Export != nil) && (old.Export == nil || old.Export.SourceURI == entry.Export.SourceURI) {
+			s.GlobalIndex.removeCandidateLocked(res, scope, name, old)
 		}
 	}
-
-	entries = append(entries, nil)
-	copy(entries[insertAt+1:], entries[insertAt:])
-	entries[insertAt] = entry
-	s.GlobalIndex.HashIndex[entry.Key] = entries
+	s.GlobalIndex.addCandidateLocked(res, scope, name, entry)
 }
 
 func (idx *GlobalIndex) removeEntryFromHashLocked(stale *SymbolEntry) {
@@ -1972,16 +1989,6 @@ func (s *Server) iterateGlobalReferences(ctx *SymbolContext) iter.Seq[GlobalRefe
 							continue
 						}
 
-						exportRes := s.getFiveMExportResource(dDoc, node.Left)
-						if exportRes == "" {
-							continue
-						}
-
-						targetRes := s.resolveFiveMResource(exportRes)
-						if targetRes == nil || targetRes.RootURI != resObj.RootURI {
-							continue
-						}
-
 						if node.Right == ast.InvalidNode || int(node.Right) >= len(dDoc.Tree.Nodes) {
 							continue
 						}
@@ -1992,6 +1999,16 @@ func (s *Server) iterateGlobalReferences(ctx *SymbolContext) iter.Seq[GlobalRefe
 						}
 
 						if ast.String(dDoc.Source()[right.Start:right.End]) != ctx.IdentName {
+							continue
+						}
+
+						exportRes := s.getFiveMExportResource(dDoc, node.Left)
+						if exportRes == "" {
+							continue
+						}
+
+						targetRes := s.resolveFiveMResource(exportRes)
+						if targetRes == nil || targetRes.RootURI != resObj.RootURI {
 							continue
 						}
 
@@ -2074,7 +2091,7 @@ func (s *Server) getGlobalSymbols(srcDoc *Document, recHash, propHash uint64) ([
 			continue
 		}
 
-		nextRec := s.getGlobalAlias(currRec)
+		nextRec := s.getGlobalAlias(srcDoc, currRec)
 		if nextRec == 0 {
 			break
 		}
@@ -2235,37 +2252,33 @@ func (s *Server) removeGlobalIndexDocumentSymbols(uri string) {
 			continue
 		}
 
+		for scope, names := range res.Candidates {
+			for name, candidates := range names {
+				for _, entry := range append([]*SymbolEntry(nil), candidates...) {
+					if entry != nil && (entry.URI == uri || (entry.Export != nil && string(entry.Export.SourceURI) == uri)) {
+						s.GlobalIndex.removeCandidateLocked(res, scope, name, entry)
+					}
+				}
+			}
+		}
+		// Preserve entries written through the legacy public tables while
+		// removing their hash references.
 		for _, table := range []SymbolTable{res.Client, res.Server, res.Shared} {
 			for name, entry := range table {
 				if entry != nil && entry.URI == uri {
 					delete(table, name)
+					s.GlobalIndex.removeEntryFromHashLocked(entry)
 				}
 			}
 		}
 	}
-
-	for key, entries := range s.GlobalIndex.HashIndex {
-		kept := entries[:0]
-		for _, entry := range entries {
-			if entry == nil || entry.URI == uri {
-				continue
-			}
-			kept = append(kept, entry)
-		}
-
-		if len(kept) == 0 {
-			delete(s.GlobalIndex.HashIndex, key)
-		} else {
-			s.GlobalIndex.HashIndex[key] = kept
-		}
-	}
 }
 
-func (s *Server) getGlobalAlias(hash uint64) uint64 {
+func (s *Server) getGlobalAlias(srcDoc *Document, hash uint64) uint64 {
 	key := GlobalKey{ReceiverHash: 0, PropHash: hash}
 	if entries := s.GlobalIndex.SymbolsByHash(key); len(entries) > 0 {
-		for _, entry := range entries {
-			if alias := s.getGlobalAliasFromSymbol(globalSymbolFromEntry(entry)); alias != 0 {
+		for _, symbol := range s.visibleGlobalSymbolsFromEntries(srcDoc, entries, 0) {
+			if alias := s.getGlobalAliasFromSymbol(symbol); alias != 0 {
 				return alias
 			}
 		}

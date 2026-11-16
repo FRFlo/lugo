@@ -218,7 +218,19 @@ func (s *Server) handleCodeAction(req Request) {
 
 	var allEdits []TextEdit
 
-	if hasSafeFixDiag {
+	// A client requesting source.fixAll is asking for a document-wide action.
+	// The server has already computed safe fixes from the current document, so
+	// that explicit request does not depend on the client echoing diagnostics.
+	// Keep diagnostic-driven quick fixes and ordinary codeAction requests as-is.
+	wantsFixAll := false
+	for _, onlyKind := range params.Context.Only {
+		if onlyKind == "source.fixAll" || strings.HasPrefix("source.fixAll.", onlyKind+".") {
+			wantsFixAll = true
+			break
+		}
+	}
+
+	if hasSafeFixDiag || wantsFixAll {
 		for _, diag := range params.Context.Diagnostics {
 			switch diag.Code {
 			case "unused-local", "unused-parameter", "unused-loop-var", "unused-vararg", "unused-function", "unreachable-code", "ambiguous-return", "self-assignment", "empty-block", "redundant-return", "redundant-value", "redundant-parameter":

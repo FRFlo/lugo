@@ -33,7 +33,8 @@ func (s *Server) buildFiveMSQLDiagnostics(doc *Document) []Diagnostic {
 	if doc == nil || doc.Tree == nil {
 		return nil
 	}
-	schemas := sqlSchemas(doc.Source())
+	var schemas map[string]sqlSchema
+	schemasInitialized := false
 	var out []Diagnostic
 	for id := ast.NodeID(1); int(id) < len(doc.Tree.Nodes); id++ {
 		n := doc.Tree.Nodes[id]
@@ -65,6 +66,10 @@ func (s *Server) buildFiveMSQLDiagnostics(doc *Document) []Diagnostic {
 			continue
 		}
 		sql := unquoteLuaString(string(doc.Source()[doc.Tree.Nodes[query].Start:doc.Tree.Nodes[query].End]))
+		if !schemasInitialized {
+			schemas = sqlSchemas(doc.Source())
+			schemasInitialized = true
+		}
 		if args := callArgument(doc, n, 1); args != ast.InvalidNode && doc.Tree.Nodes[args].Kind == ast.KindTableExpr {
 			named := sqlNamedPlaceholders(sql)
 			if len(named) > 0 {
@@ -235,19 +240,23 @@ func sqlSchemaDiagnostics(doc *Document, id ast.NodeID, sql string, schemas map[
 
 func (s *Server) sqlAdapterCall(name string) (string, bool) {
 	lower := strings.ToLower(name)
-	adapters := defaultFiveMSQLAdapters
-	if s != nil && len(s.SQLAdapters) > 0 {
-		adapters = append(append([]FiveMSQLAdapterMetadata{}, adapters...), s.SQLAdapters...)
+	var custom []FiveMSQLAdapterMetadata
+	if s != nil {
+		custom = s.SQLAdapters
 	}
-	for _, a := range adapters {
-		for _, c := range append(append([]string{}, a.Calls...), a.SyncCalls...) {
-			if strings.ToLower(c) == lower {
-				for _, sync := range a.SyncCalls {
-					if strings.EqualFold(sync, c) {
-						return a.Name, true
+	for _, adapters := range [2][]FiveMSQLAdapterMetadata{defaultFiveMSQLAdapters, custom} {
+		for _, a := range adapters {
+			for _, calls := range [2][]string{a.Calls, a.SyncCalls} {
+				for _, c := range calls {
+					if strings.ToLower(c) == lower {
+						for _, sync := range a.SyncCalls {
+							if strings.EqualFold(sync, c) {
+								return a.Name, true
+							}
+						}
+						return a.Name, false
 					}
 				}
-				return a.Name, false
 			}
 		}
 	}

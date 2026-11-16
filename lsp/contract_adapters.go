@@ -1,6 +1,7 @@
 package lsp
 
 import (
+	"bytes"
 	"regexp"
 	"strings"
 
@@ -10,8 +11,26 @@ import (
 // fiveMNUIContractLinks adapts the existing literal NUI scanner into the
 // shared model. It is intentionally read-only; diagnostics remain unchanged.
 func (s *Server) fiveMNUIContractLinks(doc *Document) []FiveMContractLink {
+	return s.fiveMNUIContractLinksWithCache(doc, nil)
+}
+
+type fiveMNUIContractScan struct {
+	callbackMatches [][]int
+	messageMatches  [][]int
+}
+
+type fiveMNUIContractScanCache map[*Document]fiveMNUIContractScan
+
+func newFiveMNUIContractScanCache() fiveMNUIContractScanCache {
+	return make(fiveMNUIContractScanCache)
+}
+
+func (s *Server) fiveMNUIContractLinksWithCache(doc *Document, cache fiveMNUIContractScanCache) []FiveMContractLink {
 	if s == nil || doc == nil || s.getDocResourceRoot(doc) == "" {
 		return nil
+	}
+	if cache == nil {
+		cache = newFiveMNUIContractScanCache()
 	}
 	var links []FiveMContractLink
 	for _, file := range s.nuiResourceFiles(doc) {
@@ -20,7 +39,16 @@ func (s *Server) fiveMNUIContractLinks(doc *Document) []FiveMContractLink {
 				if lua == nil || s.getDocResourceRoot(lua) != s.getDocResourceRoot(doc) {
 					continue
 				}
-				for _, match := range nuiCallbackLuaRE.FindAllSubmatchIndex(lua.Source(), -1) {
+				scan, ok := cache[lua]
+				if !ok {
+					source := lua.Source()
+					scan = fiveMNUIContractScan{
+						callbackMatches: nuiCallbackLuaRE.FindAllSubmatchIndex(source, -1),
+						messageMatches:  nuiMessageRE.FindAllSubmatchIndex(source, -1),
+					}
+					cache[lua] = scan
+				}
+				for _, match := range scan.callbackMatches {
 					if string(lua.Source()[match[2]:match[3]]) != handler.name {
 						continue
 					}
@@ -36,7 +64,7 @@ func (s *Server) fiveMNUIContractLinks(doc *Document) []FiveMContractLink {
 					}
 					links = append(links, FiveMContractLink{From: from, To: to, Confidence: FiveMContractConfidenceHigh})
 				}
-				for _, match := range nuiMessageRE.FindAllSubmatchIndex(lua.Source(), -1) {
+				for _, match := range scan.messageMatches {
 					if string(lua.Source()[match[4]:match[5]]) != handler.name {
 						continue
 					}
@@ -99,14 +127,18 @@ func fiveMConvarContractSymbols(doc *Document) []FiveMContractSymbol {
 	if doc == nil {
 		return nil
 	}
+	source := doc.Source()
+	if !bytes.Contains(source, []byte("Convar")) {
+		return []FiveMContractSymbol{}
+	}
 	out := []FiveMContractSymbol{}
-	for _, match := range fiveMConvarContractRE.FindAllSubmatchIndex(doc.Source(), -1) {
-		name := string(doc.Source()[match[4]:match[5]])
+	for _, match := range fiveMConvarContractRE.FindAllSubmatchIndex(source, -1) {
+		name := string(source[match[4]:match[5]])
 		direction := FiveMContractLuaToHost
-		if strings.HasPrefix(string(doc.Source()[match[0]:match[1]]), "Get") {
+		if strings.HasPrefix(string(source[match[0]:match[1]]), "Get") {
 			direction = FiveMContractHostToLua
 		}
-		out = append(out, FiveMContractSymbol{Name: name, Kind: FiveMContractConvar, Location: fiveMContractLocation(doc.URI, doc.Source(), match[4], match[5]), Profile: doc.FiveMProfile.Kind, Direction: direction})
+		out = append(out, FiveMContractSymbol{Name: name, Kind: FiveMContractConvar, Location: fiveMContractLocation(doc.URI, source, match[4], match[5]), Profile: doc.FiveMProfile.Kind, Direction: direction})
 	}
 	return out
 }

@@ -33,7 +33,7 @@ type Document struct {
 	Errors []parser.ParseError
 
 	// Caches
-	TypeCache          []TypeSet
+	TypeCache          typeCache
 	Inferring          []bool
 	LuaDocCache        []*LuaDoc
 	ActualReads        []uint16
@@ -390,7 +390,7 @@ func (doc *Document) IterateCommentsAbove(id ast.NodeID) iter.Seq[token.Token] {
 
 			gap := src[c.End:lastValidOffset]
 
-			if bytes.Count(gap, []byte{'\n'}) <= 1 {
+			if hasAtMostOneNewline(gap) {
 				if !yield(c) {
 					return
 				}
@@ -401,6 +401,13 @@ func (doc *Document) IterateCommentsAbove(id ast.NodeID) iter.Seq[token.Token] {
 			}
 		}
 	}
+}
+
+// hasAtMostOneNewline preserves the comment attachment rule while stopping
+// as soon as a second line break proves the gap is too large.
+func hasAtMostOneNewline(gap []byte) bool {
+	first := bytes.IndexByte(gap, '\n')
+	return first < 0 || bytes.IndexByte(gap[first+1:], '\n') < 0
 }
 
 func (doc *Document) getCommentsAbove(id ast.NodeID) []byte {

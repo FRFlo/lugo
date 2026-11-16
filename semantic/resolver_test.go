@@ -1,6 +1,8 @@
 package semantic_test
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/FRFlo/lugo/ast"
@@ -259,5 +261,102 @@ func BenchmarkResolver(b *testing.B) {
 	for b.Loop() {
 		res.Reset()
 		res.Resolve(root)
+	}
+}
+
+func TestResolverFieldDefinitionsSurviveReset(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		source     string
+		wantFields int
+	}{
+		{name: "small", source: "local obj = {}\nobj.value = 1", wantFields: 1},
+		{name: "large", source: manyFieldAssignments(700), wantFields: 700},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := []byte(tc.source)
+			tree := ast.NewTree(src)
+			p := parser.New(src, tree, 0)
+			root := p.Parse()
+			r := semantic.New(tree)
+			r.Resolve(root)
+			if len(r.FieldDefs) != tc.wantFields {
+				t.Fatalf("resolved %d fields, want %d", len(r.FieldDefs), tc.wantFields)
+			}
+			r.Reset()
+			r.Resolve(root)
+			if len(r.FieldDefs) != tc.wantFields {
+				t.Fatalf("after Reset resolved %d fields, want %d", len(r.FieldDefs), tc.wantFields)
+			}
+			if tc.wantFields == 1 && r.FieldDefs[0].NodeID == ast.InvalidNode {
+				t.Fatal("small field definition was not recorded")
+			}
+		})
+	}
+}
+
+func BenchmarkResolverNewByFileSize(b *testing.B) {
+	for _, tc := range []struct {
+		name string
+		src  []byte
+	}{
+		{name: "small", src: []byte("local obj = {}\nobj.value = 1\n")},
+		{name: "medium", src: []byte(manyFieldAssignments(50))},
+		{name: "large", src: []byte(manyFieldAssignments(700))},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			tree := ast.NewTree(tc.src)
+			root := parser.New(tc.src, tree, 0).Parse()
+
+			b.Run("New", func(b *testing.B) {
+				b.ReportAllocs()
+				b.ResetTimer()
+				for b.Loop() {
+					_ = semantic.New(tree)
+				}
+			})
+
+			b.Run("NewResolve", func(b *testing.B) {
+				b.ReportAllocs()
+				b.ResetTimer()
+				for b.Loop() {
+					r := semantic.New(tree)
+					r.Resolve(root)
+				}
+			})
+		})
+	}
+}
+
+func manyFieldAssignments(count int) string {
+	var src strings.Builder
+	src.WriteString("local obj = {}\n")
+	for i := range count {
+		fmt.Fprintf(&src, "obj.field%d = %d\n", i, i)
+	}
+	return src.String()
+}
+
+func BenchmarkResolverResetByFileSize(b *testing.B) {
+	for _, tc := range []struct {
+		name string
+		src  []byte
+	}{
+		{name: "small", src: []byte("local obj = {}\nobj.value = 1\n")},
+		{name: "medium", src: []byte(manyFieldAssignments(50))},
+		{name: "large", src: []byte(manyFieldAssignments(700))},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			tree := ast.NewTree(tc.src)
+			p := parser.New(tc.src, tree, 0)
+			root := p.Parse()
+			r := semantic.New(tree)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				r.Reset()
+				r.Resolve(root)
+			}
+		})
 	}
 }

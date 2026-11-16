@@ -65,22 +65,39 @@ type Resolver struct {
 }
 
 func New(tree *ast.Tree) *Resolver {
+	// Most indexed files are small. Avoid reserving large resolver workspaces
+	// for them, while keeping the existing capacities for large ASTs so they
+	// do not repeatedly grow during resolution.
+	fieldCap, globalRefCap, scopeCap, nameCap := 512, 512, 256, 2048
+	globalDefCap, pendingCap, scopeStartCap, selfCap := 256, 128, 64, 16
+	localCap, shadowCap, duplicateCap, reassignmentCap := 512, 64, 16, 128
+	if len(tree.Nodes) < 2048 {
+		fieldCap, globalRefCap, scopeCap, nameCap = 128, 128, 64, 512
+		globalDefCap, pendingCap, scopeStartCap, selfCap = 64, 32, 16, 8
+		localCap, shadowCap, duplicateCap, reassignmentCap = 128, 32, 8, 32
+	}
+	if len(tree.Nodes) < 256 {
+		fieldCap, globalRefCap, scopeCap, nameCap = 16, 16, 16, 128
+		globalDefCap, pendingCap, scopeStartCap, selfCap = 8, 8, 8, 4
+		localCap, shadowCap, duplicateCap, reassignmentCap = 16, 8, 4, 8
+	}
+
 	return &Resolver{
 		Tree:            tree,
 		References:      make([]ast.NodeID, len(tree.Nodes)),
-		LocalDefs:       make([]ast.NodeID, 0, 512),
-		ShadowedOuter:   make([]ShadowPair, 0, 64),
-		PendingFields:   make([]FieldRef, 0, 128),
-		FieldDefs:       make([]FieldDef, 0, 512),
-		fieldMap:        make(map[FieldKey]ast.NodeID, 512),
-		GlobalDefs:      make([]ast.NodeID, 0, 256),
-		GlobalRefs:      make([]ast.NodeID, 0, 512),
-		scopeStack:      make([]ast.NodeID, 0, 256),
-		scopeStarts:     make([]int, 0, 64),
-		selfStack:       make([]ast.NodeID, 0, 16),
-		DuplicateLocals: make([]ast.NodeID, 0, 16),
-		Reassignments:   make([]Reassignment, 0, 128),
-		nameArena:       make([]byte, 0, 2048),
+		LocalDefs:       make([]ast.NodeID, 0, localCap),
+		ShadowedOuter:   make([]ShadowPair, 0, shadowCap),
+		PendingFields:   make([]FieldRef, 0, pendingCap),
+		FieldDefs:       make([]FieldDef, 0, fieldCap),
+		fieldMap:        make(map[FieldKey]ast.NodeID, fieldCap),
+		GlobalDefs:      make([]ast.NodeID, 0, globalDefCap),
+		GlobalRefs:      make([]ast.NodeID, 0, globalRefCap),
+		scopeStack:      make([]ast.NodeID, 0, scopeCap),
+		scopeStarts:     make([]int, 0, scopeStartCap),
+		selfStack:       make([]ast.NodeID, 0, selfCap),
+		DuplicateLocals: make([]ast.NodeID, 0, duplicateCap),
+		Reassignments:   make([]Reassignment, 0, reassignmentCap),
+		nameArena:       make([]byte, 0, nameCap),
 	}
 }
 

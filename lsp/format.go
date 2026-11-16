@@ -179,6 +179,14 @@ func (f *Formatter) Format(doc *Document, formatRange *Range) []TextEdit {
 	)
 
 	for i, tok := range tokens {
+		if formatRange != nil && prevTok.Kind != 0 && prevTok.End > rangeEnd {
+			return edits
+		}
+		gapBegin := uint32(0)
+		if prevTok.Kind != 0 {
+			gapBegin = prevTok.End
+		}
+		emitGap := formatRange == nil || !(tok.Start < rangeStart || gapBegin > rangeEnd)
 		var (
 			gap []byte
 			nl  int
@@ -312,7 +320,9 @@ func (f *Formatter) Format(doc *Document, formatRange *Range) []TextEdit {
 				nl = 1
 			}
 
-			gapBuilder.Write(bytes.Repeat([]byte{'\n'}, nl))
+			if emitGap {
+				gapBuilder.Write(bytes.Repeat([]byte{'\n'}, nl))
+			}
 
 			isLineStart = true
 			lineIdx += nl
@@ -322,18 +332,26 @@ func (f *Formatter) Format(doc *Document, formatRange *Range) []TextEdit {
 			currentLineIndent = f.calculateLineIndent(stack, tokens, i, source)
 			if currentLineIndent > 0 {
 				if f.UseTabs {
-					gapBuilder.Write(bytes.Repeat([]byte{'\t'}, currentLineIndent))
+					if emitGap {
+						gapBuilder.Write(bytes.Repeat([]byte{'\t'}, currentLineIndent))
+					}
 				} else {
-					gapBuilder.Write(bytes.Repeat([]byte{' '}, currentLineIndent*f.IndentSize))
+					if emitGap {
+						gapBuilder.Write(bytes.Repeat([]byte{' '}, currentLineIndent*f.IndentSize))
+					}
 				}
 			}
 
 			isLineStart = false
 		} else if prevTok.Kind != 0 {
 			if f.needsSpace(prevTok.Kind, tok.Kind, prevPrev) {
-				gapBuilder.WriteByte(' ')
+				if emitGap {
+					gapBuilder.WriteByte(' ')
+				}
 			} else if (prevTok.Kind == token.LBrace || tok.Kind == token.RBrace) && bytes.IndexByte(gap, ' ') != -1 {
-				gapBuilder.WriteByte(' ')
+				if emitGap {
+					gapBuilder.WriteByte(' ')
+				}
 			}
 		}
 
@@ -348,7 +366,7 @@ func (f *Formatter) Format(doc *Document, formatRange *Range) []TextEdit {
 		gapEnd := tok.Start
 		origGap := source[gapStart:gapEnd]
 
-		if !bytes.Equal(origGap, newGap) {
+		if emitGap && !bytes.Equal(origGap, newGap) {
 			inRange := true
 
 			if formatRange != nil {

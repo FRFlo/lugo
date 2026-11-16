@@ -23,11 +23,12 @@ type DepInfo struct {
 // workspace diagnostic publication is in progress. Cross-file FiveM checks
 // otherwise re-scan every document for every diagnostic, which becomes O(D²).
 type workspaceDiagnosticFacts struct {
-	commands []fiveMCommandUse
-	mappings []fiveMKeyMapping
-	aces     map[string]bool
-	convars  fiveMConvarFacts
-	nui      map[string]nuiResourceFacts
+	graphDiagnostics []Diagnostic
+	commands         []fiveMCommandUse
+	mappings         []fiveMKeyMapping
+	aces             map[string]bool
+	convars          fiveMConvarFacts
+	nui              map[string]nuiResourceFacts
 }
 
 var workspaceDiagnosticFactCaches sync.Map // map[*Server]*workspaceDiagnosticFacts
@@ -38,6 +39,9 @@ func (s *Server) beginWorkspaceDiagnosticFacts() *workspaceDiagnosticFacts {
 		nui:     s.collectFiveMNUIResourceFacts(),
 	}
 	facts.commands, facts.mappings, facts.aces = s.collectFiveMCommands()
+	if s.GlobalIndex != nil {
+		_, facts.graphDiagnostics = s.GlobalIndex.TopologicalSort()
+	}
 	workspaceDiagnosticFactCaches.Store(s, facts)
 	return facts
 }
@@ -185,7 +189,12 @@ func (s *Server) buildFiveMResourceGraphDiagnostics(doc *Document) []Diagnostic 
 		return nil
 	}
 	identity := normalizeFiveMResourceAlias(res.Name)
-	_, graphDiags := s.GlobalIndex.TopologicalSort()
+	var graphDiags []Diagnostic
+	if facts := s.workspaceDiagnosticFacts(); facts != nil {
+		graphDiags = facts.graphDiagnostics
+	} else {
+		_, graphDiags = s.GlobalIndex.TopologicalSort()
+	}
 	out := make([]Diagnostic, 0, len(res.Manifest.Entries))
 	for _, entry := range res.Manifest.Entries {
 		if entry.LoaderInjected || entry.ReservedKey || (entry.EmittedName != "dependency" && entry.EmittedName != "dependencie") {
@@ -326,6 +335,9 @@ func (s *Server) publishWorkspaceDiagnostics() {
 	var diagCount int
 
 	for uri, doc := range s.Documents {
+		if doc != nil && isNUIAssetURI(uri) {
+			continue
+		}
 		if doc.IsWorkspace || s.OpenFiles[uri] {
 			s.publishDiagnostics(uri)
 
@@ -354,7 +366,7 @@ func (s *Server) publishWorkspaceDiagnostics() {
 				continue
 			}
 			nuiSeen[asset.uri] = true
-			assetDoc := &Document{Server: s, URI: asset.uri, Path: s.uriToPath(asset.uri), Tree: ast.NewTree(asset.src), FiveMProfile: resource.profile, FiveMProfileCached: true}
+			assetDoc := &Document{Server: s, URI: asset.uri, Path: s.uriToPath(asset.uri), Tree: newNUISourceView(asset.src), FiveMProfile: resource.profile, FiveMProfileCached: true}
 			assetStarted := time.Now()
 			RecordTelemetry(telemetryCtx, "lugo.diagnostics_document.start", map[string]any{})
 			diags := s.buildFiveMNUIContractDiagnostics(assetDoc)
@@ -2242,7 +2254,7 @@ func (s *Server) checkGlobalShadowing(uri string, nameBytes []byte, isLoopVar bo
 		resource, scope := s.globalIndexContext(doc)
 		var visibleSym *GlobalSymbol
 
-		for _, entry := range s.GlobalIndex.VisibleSymbols(resource, scope) {
+		for _, entry := range s.GlobalIndex.VisibleSymbolsByKey(resource, scope, key) {
 			if entry == nil || entry.Key != key {
 				continue
 			}
@@ -2287,6 +2299,20 @@ func (s *Server) checkGlobalShadowing(uri string, nameBytes []byte, isLoopVar bo
 			RelatedInformation: related,
 		})
 	}
+}
+
+// Research-only constructor. Never pass this view to parser/reset or index it.
+func newNUISourceView(src []byte) *ast.Tree {
+	lines := make([]uint32, 1, len(src)/30+1)
+	for offset := 0; offset < len(src); {
+		i := bytes.IndexByte(src[offset:], '\n')
+		if i < 0 {
+			break
+		}
+		offset += i + 1
+		lines = append(lines, uint32(offset))
+	}
+	return &ast.Tree{Source: src, LineOffsets: lines, PositionEncoding: "utf-16"}
 }
 
 func (s *Server) getRootDef(doc *Document, exprID ast.NodeID) ast.NodeID {

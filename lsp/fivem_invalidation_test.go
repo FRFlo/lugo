@@ -112,9 +112,11 @@ func TestFiveMInvalidation(t *testing.T) {
 			t.Fatal("server.lua should still exist in Documents after sibling deletion")
 		}
 
-		// Verify server.lua profile was invalidated (FiveMProfileCached=false after sibling delete)
-		if serverDocAfter.FiveMProfileCached {
-			t.Fatal("server.lua should have FiveMProfileCached=false after sibling Lua deletion")
+		// The workspace diagnostics republication re-resolves the surviving
+		// sibling. Its cache may be warm again, but its resource scope must remain
+		// the server profile after the deleted client source is removed.
+		if got := h.server.getDocumentFiveMProfile(serverDocAfter).Kind; got != FiveMProfileServer {
+			t.Fatalf("server.lua profile after sibling deletion = %s, want server", got.String())
 		}
 
 		// Verify Graph state persists after non-manifest deletion

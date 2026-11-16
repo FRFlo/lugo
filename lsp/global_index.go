@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/FRFlo/lugo/ast"
 )
@@ -53,9 +54,10 @@ type ResourceScope struct {
 	Identity ResourceURI
 
 	// Symbol Tables
-	Client SymbolTable
-	Server SymbolTable
-	Shared SymbolTable
+	Client     SymbolTable
+	Server     SymbolTable
+	Shared     SymbolTable
+	Candidates map[GlobalIndexScope]map[SymbolName][]*SymbolEntry
 
 	// Metadata
 	Dependencies []ResourceURI
@@ -95,10 +97,15 @@ func NewGlobalIndex(maxMemory ...uint64) *GlobalIndex {
 
 func NewResourceScope(uri ResourceURI) *ResourceScope {
 	return &ResourceScope{
-		URI:          uri,
-		Client:       make(SymbolTable),
-		Server:       make(SymbolTable),
-		Shared:       make(SymbolTable),
+		URI:    uri,
+		Client: make(SymbolTable),
+		Server: make(SymbolTable),
+		Shared: make(SymbolTable),
+		Candidates: map[GlobalIndexScope]map[SymbolName][]*SymbolEntry{
+			GlobalIndexScopeClient: make(map[SymbolName][]*SymbolEntry),
+			GlobalIndexScopeServer: make(map[SymbolName][]*SymbolEntry),
+			GlobalIndexScopeShared: make(map[SymbolName][]*SymbolEntry),
+		},
 		ScriptScopes: make(map[ResourceURI]GlobalIndexScope),
 	}
 }
@@ -152,26 +159,183 @@ func (idx *GlobalIndex) AddSymbol(resource ResourceURI, scope GlobalIndexScope, 
 	defer idx.mu.Unlock()
 
 	res := idx.ensureResourceLocked(resource)
-	previous := res.tableForScope(scope)[name]
 	entry.Name = name
 	if entry.URI == "" {
 		entry.URI = string(resource)
 	}
-	table := res.tableForScope(scope)
-	if previous != nil && previous != entry && entry.Key != (GlobalKey{}) && previous.Key == entry.Key {
-		entries := removeSymbolEntry(idx.HashIndex[entry.Key], previous)
+	for _, old := range append([]*SymbolEntry(nil), res.Candidates[scope][name]...) {
+		if old != nil && old.URI == entry.URI && old.NodeID == entry.NodeID && old.Key == entry.Key && old.Parent == entry.Parent && (old.Export != nil) == (entry.Export != nil) && (old.Export == nil || old.Export.SourceURI == entry.Export.SourceURI) {
+			idx.removeCandidateLocked(res, scope, name, old)
+		}
+	}
+	idx.addCandidateLocked(res, scope, name, entry)
+
+	return entry
+}
+
+func candidateLess(a, b *SymbolEntry) bool {
+	if a.IsRoot != b.IsRoot {
+		return a.IsRoot
+	}
+	if a.URI != b.URI {
+		return a.URI < b.URI
+	}
+	if a.NodeID != b.NodeID {
+		return a.NodeID < b.NodeID
+	}
+	if a.Key.ReceiverHash != b.Key.ReceiverHash {
+		return a.Key.ReceiverHash < b.Key.ReceiverHash
+	}
+	if a.Key.PropHash != b.Key.PropHash {
+		return a.Key.PropHash < b.Key.PropHash
+	}
+	if a.Parent != b.Parent {
+		return a.Parent < b.Parent
+	}
+	if (a.Export != nil) != (b.Export != nil) {
+		return a.Export != nil
+	}
+	if a.Export != nil && b.Export != nil {
+		return a.Export.SourceURI < b.Export.SourceURI
+	}
+	return false
+}
+
+func (idx *GlobalIndex) addCandidateLocked(res *ResourceScope, scope GlobalIndexScope, name SymbolName, entry *SymbolEntry) {
+	if res.Candidates == nil {
+		res.Candidates = NewResourceScope(res.URI).Candidates
+	}
+	byName := res.Candidates[scope]
+	if byName == nil {
+		byName = make(map[SymbolName][]*SymbolEntry)
+		res.Candidates[scope] = byName
+	}
+	list := byName[name]
+	for i, old := range list {
+		if old == entry || (old != nil && old.URI == entry.URI && old.NodeID == entry.NodeID && old.Key == entry.Key && old.Parent == entry.Parent && (old.Export != nil) == (entry.Export != nil) && (old.Export == nil || old.Export.SourceURI == entry.Export.SourceURI)) {
+			list = append(list[:i], list[i+1:]...)
+			break
+		}
+	}
+	list = append(list, entry)
+	slices.SortFunc(list, func(a, b *SymbolEntry) int {
+		if candidateLess(a, b) {
+			return -1
+		}
+		if candidateLess(b, a) {
+			return 1
+		}
+		return 0
+	})
+	byName[name] = list
+	res.tableForScope(scope)[name] = list[0]
+	if entry.Key != (GlobalKey{}) {
+		for _, old := range idx.HashIndex[entry.Key] {
+			if old == entry {
+				return
+			}
+		}
+		idx.HashIndex[entry.Key] = append(idx.HashIndex[entry.Key], entry)
+		slices.SortFunc(idx.HashIndex[entry.Key], func(a, b *SymbolEntry) int {
+			if candidateLess(a, b) {
+				return -1
+			}
+			if candidateLess(b, a) {
+				return 1
+			}
+			return 0
+		})
+	}
+}
+
+func (idx *GlobalIndex) removeCandidateLocked(res *ResourceScope, scope GlobalIndexScope, name SymbolName, entry *SymbolEntry) {
+	byName := res.Candidates[scope]
+	list := byName[name]
+	for i, old := range list {
+		if old == entry {
+			list = append(list[:i], list[i+1:]...)
+			break
+		}
+	}
+	if len(list) == 0 {
+		delete(byName, name)
+		delete(res.tableForScope(scope), name)
+	} else {
+		byName[name] = list
+		res.tableForScope(scope)[name] = list[0]
+	}
+	if entry.Key != (GlobalKey{}) {
+		entries := removeSymbolEntry(idx.HashIndex[entry.Key], entry)
 		if len(entries) == 0 {
 			delete(idx.HashIndex, entry.Key)
 		} else {
 			idx.HashIndex[entry.Key] = entries
 		}
 	}
-	table[name] = entry
-	if entry.Key != (GlobalKey{}) {
-		idx.HashIndex[entry.Key] = append(idx.HashIndex[entry.Key], entry)
-	}
+}
 
-	return entry
+func candidateEntries(res *ResourceScope, scope GlobalIndexScope) []*SymbolEntry {
+	if res == nil {
+		return nil
+	}
+	byName := candidateBuckets(res, scope)
+	entries := make([]*SymbolEntry, 0)
+	for _, name := range sortedCandidateNames(byName) {
+		list := byName[name]
+		for _, entry := range list {
+			if entry != nil {
+				entries = append(entries, entry)
+			}
+		}
+	}
+	return entries
+}
+
+func candidateBuckets(res *ResourceScope, scope GlobalIndexScope) map[SymbolName][]*SymbolEntry {
+	buckets := make(map[SymbolName][]*SymbolEntry)
+	if res == nil {
+		return buckets
+	}
+	for name, entries := range res.Candidates[scope] {
+		buckets[name] = append([]*SymbolEntry(nil), entries...)
+	}
+	// Keep direct writes through the public compatibility tables visible.
+	for name, entry := range res.tableForScopeRead(scope) {
+		if entry == nil {
+			continue
+		}
+		found := false
+		for _, existing := range buckets[name] {
+			if existing == entry {
+				found = true
+				break
+			}
+		}
+		if !found {
+			buckets[name] = append(buckets[name], entry)
+		}
+	}
+	for name := range buckets {
+		slices.SortFunc(buckets[name], func(a, b *SymbolEntry) int {
+			if candidateLess(a, b) {
+				return -1
+			}
+			if candidateLess(b, a) {
+				return 1
+			}
+			return 0
+		})
+	}
+	return buckets
+}
+
+func sortedCandidateNames(m map[SymbolName][]*SymbolEntry) []SymbolName {
+	names := make([]SymbolName, 0, len(m))
+	for name := range m {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
 }
 
 func (idx *GlobalIndex) LookupByHash(key GlobalKey) []SymbolEntry {
@@ -209,20 +373,17 @@ func (idx *GlobalIndex) AllSymbols() iter.Seq2[ResourceURI, *SymbolEntry] {
 		}
 
 		idx.mu.RLock()
-		symbols := make([]indexedSymbol, 0, idx.symbolCountLocked())
+		// Do not call symbolCountLocked here: it used to build a complete
+		// candidate snapshot solely to size this snapshot, doubling the work.
+		var symbols []indexedSymbol
 		resources := sortedResourceKeys(idx.Resources)
 		for _, uri := range resources {
 			res := idx.Resources[uri]
-			appendTableSymbols := func(table SymbolTable) {
-				for _, name := range sortedSymbolNames(table) {
-					if entry := table[name]; entry != nil {
-						symbols = append(symbols, indexedSymbol{resource: uri, entry: entry})
-					}
+			for _, scope := range [...]GlobalIndexScope{GlobalIndexScopeClient, GlobalIndexScopeServer, GlobalIndexScopeShared} {
+				for _, entry := range candidateEntries(res, scope) {
+					symbols = append(symbols, indexedSymbol{resource: uri, entry: entry})
 				}
 			}
-			appendTableSymbols(res.Client)
-			appendTableSymbols(res.Server)
-			appendTableSymbols(res.Shared)
 		}
 		idx.mu.RUnlock()
 
@@ -232,6 +393,90 @@ func (idx *GlobalIndex) AllSymbols() iter.Seq2[ResourceURI, *SymbolEntry] {
 			}
 		}
 	}
+}
+
+// SymbolsForReceivers returns symbols whose receiver hash is requested, keeping
+// the same resource, scope, and name ordering as AllSymbols. It snapshots only
+// matching entries while holding the read lock so callers can inspect them
+// after the lock is released.
+func (idx *GlobalIndex) SymbolsForReceivers(receivers map[uint64]bool) []*SymbolEntry {
+	if idx == nil || len(receivers) == 0 {
+		return nil
+	}
+
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+
+	var symbols []*SymbolEntry
+	for _, uri := range sortedResourceKeys(idx.Resources) {
+		res := idx.Resources[uri]
+		if res == nil {
+			continue
+		}
+		for _, scope := range [...]GlobalIndexScope{GlobalIndexScopeClient, GlobalIndexScopeServer, GlobalIndexScopeShared} {
+			nameSet := make(map[SymbolName][]*SymbolEntry, len(res.Candidates[scope]))
+			for name := range res.Candidates[scope] {
+				nameSet[name] = nil
+			}
+			for name := range res.tableForScopeRead(scope) {
+				nameSet[name] = nil
+			}
+			for _, name := range sortedCandidateNames(nameSet) {
+				entries := res.Candidates[scope][name]
+				matches := false
+				for _, entry := range entries {
+					if entry != nil && receivers[entry.Key.ReceiverHash] {
+						matches = true
+						break
+					}
+				}
+				representative := res.tableForScopeRead(scope)[name]
+				if representative != nil && receivers[representative.Key.ReceiverHash] {
+					present := false
+					for _, entry := range entries {
+						if entry == representative {
+							present = true
+							break
+						}
+					}
+					matches = matches || !present
+				}
+				if !matches {
+					continue
+				}
+				// Dynamic SymbolEntry fields can invalidate the stored candidate
+				// order, so rebuild and sort only buckets that can contribute.
+				entries = append([]*SymbolEntry(nil), entries...)
+				if representative != nil {
+					present := false
+					for _, entry := range entries {
+						if entry == representative {
+							present = true
+							break
+						}
+					}
+					if !present {
+						entries = append(entries, representative)
+					}
+				}
+				slices.SortFunc(entries, func(a, b *SymbolEntry) int {
+					if candidateLess(a, b) {
+						return -1
+					}
+					if candidateLess(b, a) {
+						return 1
+					}
+					return 0
+				})
+				for _, entry := range entries {
+					if entry != nil && receivers[entry.Key.ReceiverHash] {
+						symbols = append(symbols, entry)
+					}
+				}
+			}
+		}
+	}
+	return symbols
 }
 
 func (idx *GlobalIndex) SymbolsByHash(key GlobalKey) []*SymbolEntry {
@@ -272,9 +517,19 @@ func (idx *GlobalIndex) VisibleSymbols(fromResource ResourceURI, scope GlobalInd
 			return
 		}
 		if includeScoped {
-			visible = appendUniqueEntries(visible, seen, res.tableForScopeRead(scope))
+			for _, entry := range candidateEntries(res, scope) {
+				if _, ok := seen[entry]; !ok {
+					seen[entry] = struct{}{}
+					visible = append(visible, entry)
+				}
+			}
 		}
-		visible = appendUniqueEntries(visible, seen, res.Shared)
+		for _, entry := range candidateEntries(res, GlobalIndexScopeShared) {
+			if _, ok := seen[entry]; !ok {
+				seen[entry] = struct{}{}
+				visible = append(visible, entry)
+			}
+		}
 	}
 
 	res := idx.Resources[fromResource]
@@ -288,6 +543,92 @@ func (idx *GlobalIndex) VisibleSymbols(fromResource ResourceURI, scope GlobalInd
 	return visible
 }
 
+// VisibleSymbolsByKey returns the live visible entries matching key in the
+// same order as VisibleSymbols. It scans the current tables on every call so
+// direct edits to public tables or SymbolEntry fields cannot leave a stale
+// lookup cache behind.
+func (idx *GlobalIndex) VisibleSymbolsByKey(fromResource ResourceURI, scope GlobalIndexScope, key GlobalKey) []*SymbolEntry {
+	if idx == nil {
+		return nil
+	}
+
+	type candidate struct {
+		entry *SymbolEntry
+		order int
+		name  SymbolName
+	}
+
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+
+	var candidates []candidate
+	order := 0
+	res := idx.Resources[fromResource]
+	appendScopeEntries := func(res *ResourceScope, scope GlobalIndexScope) {
+		for name, entries := range res.Candidates[scope] {
+			for _, entry := range entries {
+				if entry != nil && entry.Key == key {
+					candidates = append(candidates, candidate{entry: entry, order: order, name: name})
+				}
+			}
+		}
+		// Public compatibility tables can be mutated directly. Add those live
+		// entries as well; pointer deduplication below removes representatives
+		// that also appear in the candidate buckets.
+		for name, entry := range res.tableForScopeRead(scope) {
+			if entry != nil && entry.Key == key {
+				candidates = append(candidates, candidate{entry: entry, order: order, name: name})
+			}
+		}
+		order++
+	}
+	appendScope := func(res *ResourceScope, includeScoped bool) {
+		if res == nil {
+			return
+		}
+		if includeScoped {
+			appendScopeEntries(res, scope)
+		}
+		if scope != GlobalIndexScopeShared {
+			appendScopeEntries(res, GlobalIndexScopeShared)
+		}
+	}
+	appendScope(res, true)
+	if res != nil {
+		for _, dep := range res.Dependencies {
+			appendScope(idx.Resources[dep], true)
+		}
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	slices.SortStableFunc(candidates, func(a, b candidate) int {
+		if a.order != b.order {
+			return a.order - b.order
+		}
+		if nameOrder := strings.Compare(string(a.name), string(b.name)); nameOrder != 0 {
+			return nameOrder
+		}
+		if candidateLess(a.entry, b.entry) {
+			return -1
+		}
+		if candidateLess(b.entry, a.entry) {
+			return 1
+		}
+		return 0
+	})
+	visible := make([]*SymbolEntry, 0, len(candidates))
+	seen := make(map[*SymbolEntry]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		if _, ok := seen[candidate.entry]; ok {
+			continue
+		}
+		seen[candidate.entry] = struct{}{}
+		visible = append(visible, candidate.entry)
+	}
+	return visible
+}
+
 func (idx *GlobalIndex) WorkspaceSymbols(query string, limit int) []*SymbolEntry {
 	if idx == nil || limit == 0 {
 		return nil
@@ -296,35 +637,169 @@ func (idx *GlobalIndex) WorkspaceSymbols(query string, limit int) []*SymbolEntry
 	type scoredSymbol struct {
 		entry *SymbolEntry
 		score int
+		order int
+		key   SymbolName
 	}
 
 	idx.mu.RLock()
 	query = strings.ToLower(query)
 	matches := make([]scoredSymbol, 0)
+	if limit > 0 {
+		matches = make([]scoredSymbol, 0, min(limit, 100))
+	}
+	order := 0
+	less := func(a, b scoredSymbol) bool {
+		if a.score != b.score {
+			return a.score < b.score
+		}
+		if names := strings.Compare(string(a.entry.Name), string(b.entry.Name)); names != 0 {
+			return names < 0
+		}
+		if a.order != b.order {
+			return a.order < b.order
+		}
+		return a.key < b.key
+	}
+	keepCandidate := func(candidate scoredSymbol) {
+		if len(matches) < limit {
+			matches = append(matches, candidate)
+			child := len(matches) - 1
+			for child > 0 {
+				parent := (child - 1) / 2
+				if !less(matches[parent], matches[child]) {
+					break
+				}
+				matches[parent], matches[child] = matches[child], matches[parent]
+				child = parent
+			}
+			return
+		}
+		if !less(candidate, matches[0]) {
+			return
+		}
+		matches[0] = candidate
+		parent := 0
+		for {
+			left := parent*2 + 1
+			if left >= len(matches) {
+				return
+			}
+			worst := left
+			right := left + 1
+			if right < len(matches) && less(matches[left], matches[right]) {
+				worst = right
+			}
+			if !less(matches[parent], matches[worst]) {
+				return
+			}
+			matches[parent], matches[worst] = matches[worst], matches[parent]
+			parent = worst
+		}
+	}
 	for _, uri := range sortedResourceKeys(idx.Resources) {
 		res := idx.Resources[uri]
-		appendMatches := func(table SymbolTable) {
-			for _, name := range sortedSymbolNames(table) {
-				entry := table[name]
-				if entry == nil {
-					continue
+		appendMatches := func(scope GlobalIndexScope) {
+			if res == nil {
+				return
+			}
+			// Candidate names are already the keys we need to score. Avoid
+			// copying every bucket before knowing whether the query matches it.
+			nameSet := make(map[SymbolName][]*SymbolEntry, len(res.Candidates[scope]))
+			for name := range res.Candidates[scope] {
+				nameSet[name] = nil
+			}
+			for name := range res.tableForScopeRead(scope) {
+				nameSet[name] = nil
+			}
+			names := sortedCandidateNames(nameSet)
+			if limit > 0 {
+				// Candidate ordering is determined by score and name. For identical
+				// names, keep traversal order (resource, then scope) as the stable
+				// sort below did.
+				for _, name := range names {
+					if score, ok := workspaceSymbolScore(strings.ToLower(string(name)), query); ok {
+						entries := append([]*SymbolEntry(nil), res.Candidates[scope][name]...)
+						if entry := res.tableForScopeRead(scope)[name]; entry != nil {
+							found := false
+							for _, existing := range entries {
+								if existing == entry {
+									found = true
+									break
+								}
+							}
+							if !found {
+								entries = append(entries, entry)
+							}
+						}
+						slices.SortFunc(entries, func(a, b *SymbolEntry) int {
+							if candidateLess(a, b) {
+								return -1
+							}
+							if candidateLess(b, a) {
+								return 1
+							}
+							return 0
+						})
+						for _, entry := range entries {
+							if entry != nil {
+								keepCandidate(scoredSymbol{entry: entry, score: score, order: order, key: name})
+							}
+						}
+					}
 				}
+				// Public compatibility tables may contain names outside the
+				// candidate index. Score those representatives individually.
+				return
+			}
+			for _, name := range names {
 				if score, ok := workspaceSymbolScore(strings.ToLower(string(name)), query); ok {
-					matches = append(matches, scoredSymbol{entry: entry, score: score})
+					entries := append([]*SymbolEntry(nil), res.Candidates[scope][name]...)
+					if entry := res.tableForScopeRead(scope)[name]; entry != nil {
+						found := false
+						for _, existing := range entries {
+							if existing == entry {
+								found = true
+								break
+							}
+						}
+						if !found {
+							entries = append(entries, entry)
+						}
+					}
+					slices.SortFunc(entries, func(a, b *SymbolEntry) int {
+						if candidateLess(a, b) {
+							return -1
+						}
+						if candidateLess(b, a) {
+							return 1
+						}
+						return 0
+					})
+					for _, entry := range entries {
+						if entry != nil {
+							matches = append(matches, scoredSymbol{entry: entry, score: score})
+						}
+					}
 				}
 			}
 		}
-		appendMatches(res.Client)
-		appendMatches(res.Server)
-		appendMatches(res.Shared)
+		appendMatches(GlobalIndexScopeClient)
+		order++
+		appendMatches(GlobalIndexScopeServer)
+		order++
+		appendMatches(GlobalIndexScopeShared)
+		order++
 	}
 	idx.mu.RUnlock()
 
 	slices.SortStableFunc(matches, func(a, b scoredSymbol) int {
-		if a.score != b.score {
-			return a.score - b.score
+		if less(a, b) {
+			return -1
 		}
-		return strings.Compare(string(a.entry.Name), string(b.entry.Name))
+		if less(b, a) {
+			return 1
+		}
+		return 0
 	})
 	if limit > 0 && len(matches) > limit {
 		matches = matches[:limit]
@@ -349,28 +824,108 @@ func (idx *GlobalIndex) TypoSuggestions(name SymbolName, fromResource ResourceUR
 	}
 
 	needle := strings.ToLower(string(name))
-	candidates := idx.VisibleSymbols(fromResource, scope)
-	seen := make(map[SymbolName]struct{}, len(candidates))
+	needleASCII := true
+	for i := 0; i < len(needle); i++ {
+		if needle[i] >= utf8.RuneSelf {
+			needleASCII = false
+			break
+		}
+	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+
+	seen := make(map[SymbolName]struct{})
 	suggestions := make([]suggestion, 0, max)
-	for _, entry := range candidates {
+	threshold := 3
+	if len(needle) > 8 {
+		threshold = 4
+	}
+	asciiLower := func(b byte) byte {
+		if b >= 'A' && b <= 'Z' {
+			return b + ('a' - 'A')
+		}
+		return b
+	}
+	consider := func(entry *SymbolEntry) {
 		if entry == nil || entry.Name == "" || entry.Name == name {
-			continue
+			return
+		}
+		candidateName := entry.Name
+		isASCII := needleASCII
+		if isASCII {
+			for i := 0; i < len(candidateName); i++ {
+				if candidateName[i] >= utf8.RuneSelf {
+					isASCII = false
+					break
+				}
+			}
+		}
+		var dist int
+		if isASCII {
+			lengthDiff := len(needle) - len(candidateName)
+			if lengthDiff < 0 {
+				lengthDiff = -lengthDiff
+			}
+			maxLen := len(needle)
+			if len(candidateName) > maxLen {
+				maxLen = len(candidateName)
+			}
+			if lengthDiff > threshold || maxLen > 63 {
+				return
+			}
+			var lowered [63]byte
+			for i := range candidateName {
+				lowered[i] = asciiLower(candidateName[i])
+			}
+			dist = levenshteinFast(needle, string(lowered[:len(candidateName)]), threshold)
+		} else {
+			candidate := strings.ToLower(string(candidateName))
+			// Lowercasing Unicode can change byte length, so only reject after it.
+			lengthDiff := len(needle) - len(candidate)
+			if lengthDiff < 0 {
+				lengthDiff = -lengthDiff
+			}
+			if lengthDiff > threshold {
+				return
+			}
+			dist = levenshteinFast(needle, candidate, threshold)
+		}
+		if dist > threshold {
+			return
 		}
 		if _, ok := seen[entry.Name]; ok {
-			continue
+			return
 		}
 		seen[entry.Name] = struct{}{}
-
-		candidate := strings.ToLower(string(entry.Name))
-		threshold := 3
-		if len(needle) > 8 {
-			threshold = 4
-		}
-		dist := levenshteinFast(needle, candidate, threshold)
-		if dist > threshold {
-			continue
-		}
 		suggestions = append(suggestions, suggestion{name: entry.Name, dist: dist})
+	}
+	appendScope := func(res *ResourceScope, includeScoped bool) {
+		if res == nil {
+			return
+		}
+		visit := func(candidateScope GlobalIndexScope) {
+			for _, entries := range res.Candidates[candidateScope] {
+				for _, entry := range entries {
+					consider(entry)
+				}
+			}
+			// Compatibility tables are public and may contain live entries that
+			// are absent from Candidates.
+			for _, entry := range res.tableForScopeRead(candidateScope) {
+				consider(entry)
+			}
+		}
+		if includeScoped {
+			visit(scope)
+		}
+		visit(GlobalIndexScopeShared)
+	}
+	res := idx.Resources[fromResource]
+	appendScope(res, true)
+	if res != nil {
+		for _, dep := range res.Dependencies {
+			appendScope(idx.Resources[dep], true)
+		}
 	}
 
 	slices.SortStableFunc(suggestions, func(a, b suggestion) int {
@@ -405,7 +960,40 @@ func (idx *GlobalIndex) LookupByScope(resource ResourceURI, scope GlobalIndexSco
 	}
 	idx.touchLocked(res)
 
+	if candidates := res.Candidates[scope][name]; len(candidates) > 0 {
+		return candidates[0]
+	}
 	return res.tableForScope(scope)[name]
+}
+
+// LookupCandidatesByScope returns every indexed definition for a name in a
+// resource scope, in deterministic priority order.
+func (idx *GlobalIndex) LookupCandidatesByScope(resource ResourceURI, scope GlobalIndexScope, name SymbolName) []*SymbolEntry {
+	if idx == nil || name == "" {
+		return nil
+	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	res := idx.Resources[resource]
+	if res == nil {
+		return nil
+	}
+	entries := append([]*SymbolEntry(nil), res.Candidates[scope][name]...)
+	slices.SortFunc(entries, func(a, b *SymbolEntry) int {
+		if candidateLess(a, b) {
+			return -1
+		}
+		if candidateLess(b, a) {
+			return 1
+		}
+		return 0
+	})
+	if len(entries) == 0 {
+		if entry := res.tableForScopeRead(scope)[name]; entry != nil {
+			entries = append(entries, entry)
+		}
+	}
+	return entries
 }
 
 func (idx *GlobalIndex) RegisterFiveMResource(res *FiveMResource) *ResourceScope {
@@ -455,6 +1043,44 @@ func (idx *GlobalIndex) RegisterFiveMResource(res *FiveMResource) *ResourceScope
 	idx.registerFiveMScriptScopesLocked(scope, res)
 
 	return scope
+}
+
+// UnregisterFiveMResource removes a manifest's dependency topology while
+// preserving the scope itself for any remaining document-local symbols.
+func (idx *GlobalIndex) UnregisterFiveMResource(root ResourceURI) {
+	if idx == nil || root == "" {
+		return
+	}
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+
+	scope := idx.Resources[root]
+	if scope == nil {
+		return
+	}
+	identity := resourceIdentity(scope)
+	idx.removeResourceIdentityLocked(scope, identity)
+	if idx.DepGraph != nil && len(idx.resourceIdentities[identity]) == 0 {
+		for dependency := range idx.DepGraph.Dependencies[identity] {
+			delete(idx.DepGraph.Dependents[dependency], identity)
+		}
+		for dependent := range idx.DepGraph.Dependents[identity] {
+			delete(idx.DepGraph.Dependencies[dependent], identity)
+		}
+		delete(idx.DepGraph.Dependencies, identity)
+		delete(idx.DepGraph.Dependents, identity)
+	}
+
+	scope.Identity = root
+	scope.Dependencies = nil
+	scope.Dependents = nil
+	clear(scope.ScriptScopes)
+	idx.addResourceIdentityLocked(scope, root)
+	if idx.DepGraph != nil {
+		idx.DepGraph.AddResource(root)
+	}
+	idx.refreshResourceEdgesLocked(identity)
+	idx.refreshResourceEdgesLocked(root)
 }
 
 func (idx *GlobalIndex) TopologicalSort() ([]ResourceURI, []Diagnostic) {
@@ -524,7 +1150,7 @@ func (idx *GlobalIndex) PruneResource(uri ResourceURI) bool {
 		return false
 	}
 	idx.evictSourceLocked(uri)
-	if len(res.Client) != 0 || len(res.Server) != 0 || len(res.Shared) != 0 {
+	if idx.symbolCountForResourceLocked(res) != 0 {
 		return false
 	}
 	if idx.DepGraph != nil {
@@ -737,9 +1363,17 @@ func (idx *GlobalIndex) symbolCountLocked() int {
 		if res == nil {
 			continue
 		}
-		count += len(res.Client) + len(res.Server) + len(res.Shared)
+		count += idx.symbolCountForResourceLocked(res)
 	}
 
+	return count
+}
+
+func (idx *GlobalIndex) symbolCountForResourceLocked(res *ResourceScope) int {
+	count := 0
+	for _, scope := range [...]GlobalIndexScope{GlobalIndexScopeClient, GlobalIndexScopeServer, GlobalIndexScopeShared} {
+		count += len(candidateEntries(res, scope))
+	}
 	return count
 }
 

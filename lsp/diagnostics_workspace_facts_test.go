@@ -2,8 +2,36 @@ package lsp
 
 import (
 	"fmt"
+	"reflect"
 	"testing"
 )
+
+func TestWorkspaceGraphDiagnosticsSnapshotRefresh(t *testing.T) {
+	h := newFiveMFixtureHarnessWithoutIndex(t)
+	h.writeWorkspaceFile("alpha/fxmanifest.lua", "fx_version 'cerulean'\ngame 'gta5'\ndependency 'beta'\n")
+	h.writeWorkspaceFile("beta/fxmanifest.lua", "fx_version 'cerulean'\ngame 'gta5'\ndependency 'alpha'\n")
+	h.reindex()
+	uri := h.server.pathToURI(h.root + "/alpha/fxmanifest.lua")
+	doc := h.server.Documents[uri]
+	uncached := h.server.buildFiveMResourceGraphDiagnostics(doc)
+	if !hasDiagnosticCode(uncached, "fivem-circular-dependency") {
+		t.Fatalf("expected a cycle before updating the manifest: %+v", uncached)
+	}
+	facts := h.server.beginWorkspaceDiagnosticFacts()
+	cached := h.server.buildFiveMResourceGraphDiagnostics(doc)
+	h.server.endWorkspaceDiagnosticFacts(facts)
+	if !reflect.DeepEqual(cached, uncached) {
+		t.Fatalf("cached diagnostics differ: got %+v, want %+v", cached, uncached)
+	}
+
+	h.writeWorkspaceFile("beta/fxmanifest.lua", "fx_version 'cerulean'\ngame 'gta5'\n")
+	h.reindex()
+	facts = h.server.beginWorkspaceDiagnosticFacts()
+	defer h.server.endWorkspaceDiagnosticFacts(facts)
+	if got := h.server.buildFiveMResourceGraphDiagnostics(h.server.Documents[uri]); hasDiagnosticCode(got, "fivem-circular-dependency") {
+		t.Fatalf("cycle survived the next publication: %+v", got)
+	}
+}
 
 func TestWorkspaceDiagnosticFactsCacheIsPublicationScoped(t *testing.T) {
 	h := newFiveMFixtureHarnessWithoutIndex(t)

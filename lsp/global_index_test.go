@@ -3,6 +3,7 @@ package lsp
 import (
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/FRFlo/lugo/ast"
@@ -239,6 +240,128 @@ func TestGlobalIndex(t *testing.T) {
 			t.Fatalf("TypoSuggestions included invisible server symbol: %#v", got)
 		}
 	})
+
+	t.Run("TypoSuggestionsMatchesVisibleSymbols", func(t *testing.T) {
+		idx := NewGlobalIndex()
+		idx.EnsureResource("app").Dependencies = []ResourceURI{"dep"}
+		dep := idx.EnsureResource("dep")
+		idx.AddSymbol("app", GlobalIndexScopeClient, "PlayerName", &SymbolEntry{})
+		idx.AddSymbol("app", GlobalIndexScopeShared, "PlayerNme", &SymbolEntry{})
+		idx.AddSymbol("app", GlobalIndexScopeServer, "PlayerNam", &SymbolEntry{})
+		idx.AddSymbol("dep", GlobalIndexScopeClient, "playername", &SymbolEntry{})
+		idx.AddSymbol("dep", GlobalIndexScopeShared, "PläyerName", &SymbolEntry{})
+		idx.AddSymbol("dep", GlobalIndexScopeServer, "PlayerNane", &SymbolEntry{})
+		// The candidate key and entry name are intentionally different. A direct
+		// table representative must also be considered even without a bucket.
+		idx.Resources["app"].Candidates[GlobalIndexScopeClient]["unrelated"] = []*SymbolEntry{{Name: "PlayerNme"}}
+		idx.Resources["app"].Client["PlayerNmae"] = &SymbolEntry{Name: "PlayerName"}
+		dep.Shared["direct"] = &SymbolEntry{Name: "PlayerNami"}
+		idx.Resources["app"].Candidates[GlobalIndexScopeClient]["nil"] = []*SymbolEntry{nil}
+
+		for _, tc := range []struct {
+			name  SymbolName
+			scope GlobalIndexScope
+			max   int
+		}{
+			{name: "PlayerNane", scope: GlobalIndexScopeClient, max: 10},
+			{name: "PlayerNane", scope: GlobalIndexScopeServer, max: 10},
+			{name: "PlayerNane", scope: GlobalIndexScopeShared, max: 10},
+			{name: "PlayerNane", scope: GlobalIndexScopeClient, max: 1},
+			{name: "PlayerNane", scope: GlobalIndexScopeClient, max: 0},
+			{name: "PläyerNmae", scope: GlobalIndexScopeClient, max: 10},
+			{name: "", scope: GlobalIndexScopeClient, max: 10},
+		} {
+			got := idx.TypoSuggestions(tc.name, "app", tc.scope, tc.max)
+			want := legacyTypoSuggestions(idx, tc.name, "app", tc.scope, tc.max)
+			if !slices.Equal(got, want) {
+				t.Errorf("TypoSuggestions(%q, %q, %d) = %#v, want %#v", tc.name, tc.scope, tc.max, got, want)
+			}
+		}
+		mutable := &SymbolEntry{Name: "PlayerNema"}
+		idx.Resources["app"].Shared["mutable-key"] = mutable
+		assertEquivalent := func(label string) {
+			t.Helper()
+			got := idx.TypoSuggestions("PlayerNane", "app", GlobalIndexScopeClient, 10)
+			want := legacyTypoSuggestions(idx, "PlayerNane", "app", GlobalIndexScopeClient, 10)
+			if !slices.Equal(got, want) {
+				t.Errorf("%s: TypoSuggestions = %#v, want %#v", label, got, want)
+			}
+		}
+		assertEquivalent("direct table insertion")
+		mutable.Name = "PlayerNamo"
+		assertEquivalent("direct entry rename")
+		delete(idx.Resources["app"].Shared, "mutable-key")
+		assertEquivalent("direct table deletion")
+		assertPanics := func(label string, fn func()) {
+			t.Helper()
+			defer func() {
+				if recover() == nil {
+					t.Errorf("%s did not panic for a negative max", label)
+				}
+			}()
+			fn()
+		}
+		assertPanics("TypoSuggestions", func() { idx.TypoSuggestions("PlayerNane", "app", GlobalIndexScopeClient, -1) })
+		assertPanics("legacyTypoSuggestions", func() { legacyTypoSuggestions(idx, "PlayerNane", "app", GlobalIndexScopeClient, -1) })
+	})
+}
+
+func legacyTypoSuggestions(idx *GlobalIndex, name SymbolName, fromResource ResourceURI, scope GlobalIndexScope, max int) []SymbolName {
+	if idx == nil || name == "" || max == 0 {
+		return nil
+	}
+	type suggestion struct {
+		name SymbolName
+		dist int
+	}
+	needle := strings.ToLower(string(name))
+	seen := make(map[SymbolName]struct{})
+	suggestions := make([]suggestion, 0, max)
+	for _, entry := range idx.VisibleSymbols(fromResource, scope) {
+		if entry == nil || entry.Name == "" || entry.Name == name {
+			continue
+		}
+		if _, ok := seen[entry.Name]; ok {
+			continue
+		}
+		seen[entry.Name] = struct{}{}
+		candidate := strings.ToLower(string(entry.Name))
+		threshold := 3
+		if len(needle) > 8 {
+			threshold = 4
+		}
+		dist := levenshteinFast(needle, candidate, threshold)
+		if dist <= threshold {
+			suggestions = append(suggestions, suggestion{name: entry.Name, dist: dist})
+		}
+	}
+	slices.SortStableFunc(suggestions, func(a, b suggestion) int {
+		if a.dist != b.dist {
+			return a.dist - b.dist
+		}
+		return strings.Compare(string(a.name), string(b.name))
+	})
+	if max > 0 && len(suggestions) > max {
+		suggestions = suggestions[:max]
+	}
+	out := make([]SymbolName, 0, len(suggestions))
+	for _, suggestion := range suggestions {
+		out = append(out, suggestion.name)
+	}
+	return out
+}
+
+func BenchmarkWorkspaceSymbols(b *testing.B) {
+	idx := NewGlobalIndex()
+	for i := range 10000 {
+		name := SymbolName("GeneratedWorkspaceSymbol" + strconv.Itoa(i))
+		idx.AddSymbol(ResourceURI("file:///workspace"), GlobalIndexScopeShared, name, &SymbolEntry{})
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		idx.WorkspaceSymbols("gws", 100)
+	}
 }
 
 func symbolEntryNames(entries []*SymbolEntry) []SymbolName {
@@ -410,14 +533,140 @@ func TestEviction(t *testing.T) {
 	}
 }
 
-func TestGlobalIndexRemovesEmptyHashBucketOnReplacement(t *testing.T) {
+func TestGlobalIndexRetainsSameNameDefinitionsWithinSource(t *testing.T) {
 	idx := NewGlobalIndex()
 	key := GlobalKey{PropHash: 42}
 	first := &SymbolEntry{Key: key, NodeID: ast.NodeID(1)}
 	idx.AddSymbol("resource", GlobalIndexScopeShared, "value", first)
 	second := &SymbolEntry{Key: key, NodeID: ast.NodeID(2)}
 	idx.AddSymbol("resource", GlobalIndexScopeShared, "value", second)
-	if got := idx.LookupByHash(key); len(got) != 1 || got[0].NodeID != second.NodeID {
-		t.Fatalf("LookupByHash() = %#v, want only replacement", got)
+	if got := idx.LookupByHash(key); len(got) != 2 || got[0].NodeID != first.NodeID || got[1].NodeID != second.NodeID {
+		t.Fatalf("LookupByHash() = %#v, want both same-source definitions in NodeID order", got)
+	}
+}
+
+func TestGlobalIndexMultiSourceViewsAndRemoval(t *testing.T) {
+	idx := NewGlobalIndex()
+	key := GlobalKey{ReceiverHash: 17, PropHash: 23}
+	idx.AddSymbol("consumer", GlobalIndexScopeShared, "_U", &SymbolEntry{Name: "_U", URI: "file:///consumer.lua", NodeID: 1, Key: key})
+	idx.AddSymbol("dependency", GlobalIndexScopeShared, "_U", &SymbolEntry{Name: "_U", URI: "file:///dependency.lua", NodeID: 2, Key: key})
+	idx.Resources["consumer"].Dependencies = []ResourceURI{"dependency"}
+
+	if got := idx.SymbolsByHash(key); len(got) != 2 {
+		t.Fatalf("hash view returned %d candidates, want 2", len(got))
+	}
+	if got := idx.VisibleSymbols("consumer", GlobalIndexScopeClient); len(got) != 2 {
+		t.Fatalf("visible view returned %d candidates, want 2", len(got))
+	}
+	if got := idx.VisibleSymbolsByKey("consumer", GlobalIndexScopeClient, key); len(got) != 2 {
+		t.Fatalf("visible key view returned %d candidates, want 2", len(got))
+	}
+	if got := idx.SymbolsForReceivers(map[uint64]bool{17: true}); len(got) != 2 {
+		t.Fatalf("receiver view returned %d candidates, want 2", len(got))
+	}
+	if got := idx.WorkspaceSymbols("_U", -1); len(got) != 2 {
+		t.Fatalf("workspace view returned %d candidates, want 2", len(got))
+	}
+	allCount := 0
+	for range idx.AllSymbols() {
+		allCount++
+	}
+	if allCount != 2 {
+		t.Fatalf("AllSymbols returned %d candidates, want 2", allCount)
+	}
+
+	server := &Server{GlobalIndex: idx}
+	server.removeGlobalIndexDocumentSymbols("file:///consumer.lua")
+	if got := idx.SymbolsByHash(key); len(got) != 1 || got[0].URI != "file:///dependency.lua" {
+		t.Fatalf("hash view after removal = %+v, want surviving dependency", got)
+	}
+	if got := idx.LookupByScope("consumer", GlobalIndexScopeShared, "_U"); got != nil {
+		t.Fatalf("removed consumer entry remained indexed: %+v", got)
+	}
+	if got := idx.LookupByScope("dependency", GlobalIndexScopeShared, "_U"); got == nil || got.URI != "file:///dependency.lua" {
+		t.Fatalf("dependency survivor missing: %+v", got)
+	}
+
+	promotion := NewGlobalIndex()
+	promotion.AddSymbol("resource", GlobalIndexScopeShared, "_U", &SymbolEntry{Name: "_U", URI: "file:///a.lua", NodeID: 1, Key: key})
+	promotion.AddSymbol("resource", GlobalIndexScopeShared, "_U", &SymbolEntry{Name: "_U", URI: "file:///b.lua", NodeID: 2, Key: key})
+	promoter := &Server{GlobalIndex: promotion}
+	promoter.removeGlobalIndexDocumentSymbols("file:///a.lua")
+	if got := promotion.LookupByScope("resource", GlobalIndexScopeShared, "_U"); got == nil || got.URI != "file:///b.lua" {
+		t.Fatalf("representative after deletion = %+v, want promoted b.lua", got)
+	}
+	promoter.removeGlobalIndexDocumentSymbols("file:///b.lua")
+	if got := promotion.SymbolsByHash(key); len(got) != 0 {
+		t.Fatalf("hash candidates after final deletion = %+v, want none", got)
+	}
+}
+
+func TestGlobalIndexKeepsDifferentKeysForSameNode(t *testing.T) {
+	idx := NewGlobalIndex()
+	first := &SymbolEntry{Name: "Alias", URI: "file:///a.lua", NodeID: 7, Key: GlobalKey{PropHash: 1}}
+	second := &SymbolEntry{Name: "Alias", URI: "file:///a.lua", NodeID: 7, Key: GlobalKey{PropHash: 2}}
+	idx.AddSymbol("resource", GlobalIndexScopeShared, "Alias", first)
+	idx.AddSymbol("resource", GlobalIndexScopeShared, "Alias", second)
+	if got := idx.SymbolsByHash(first.Key); len(got) != 1 || got[0] != first {
+		t.Fatalf("first key candidates = %+v", got)
+	}
+	if got := idx.SymbolsByHash(second.Key); len(got) != 1 || got[0] != second {
+		t.Fatalf("second key candidates = %+v", got)
+	}
+}
+
+func TestGlobalIndexUnderscoreCollisionIsOrderIndependent(t *testing.T) {
+	key := GlobalKey{PropHash: 0x554e44455253434f}
+	for _, order := range [][]string{{"file:///zz_stub.lua", "file:///fixture.lua"}, {"file:///fixture.lua", "file:///zz_stub.lua"}} {
+		s := NewServer("underscore-collision")
+		s.GlobalIndex = NewGlobalIndex()
+		for _, uri := range order {
+			doc := &Document{Server: s, URI: uri, Path: uri, Tree: &ast.Tree{}}
+			s.Documents[uri] = doc
+			s.GlobalIndex.AddSymbol("resource", GlobalIndexScopeShared, "_U", &SymbolEntry{Name: "_U", URI: uri, NodeID: 1, Key: key})
+		}
+		entries := s.GlobalIndex.SymbolsByHash(key)
+		if len(entries) != 2 {
+			t.Fatalf("order %v retained %d _U definitions, want 2", order, len(entries))
+		}
+		visible := s.visibleGlobalSymbolsFromEntries(nil, entries, 1)
+		if len(visible) != 1 || visible[0].URI != "file:///fixture.lua" {
+			t.Fatalf("order %v selected _U definition %#v, want fixture", order, visible)
+		}
+	}
+}
+
+func TestVisibleGlobalCandidatesFilterBeforeLimit(t *testing.T) {
+	s := NewServer("visible-collision")
+	src := &Document{Server: s, URI: "file:///root/use.lua", FiveMProfile: FiveMExecutionProfile{Kind: FiveMProfileClient, ResourceRoot: "file:///root"}, FiveMProfileCached: true}
+	hidden := &Document{Server: s, URI: "file:///root/a_server.lua", FiveMProfile: FiveMExecutionProfile{Kind: FiveMProfileServer, ResourceRoot: "file:///root"}, FiveMProfileCached: true}
+	visible := &Document{Server: s, URI: "file:///root/z_client.lua", FiveMProfile: FiveMExecutionProfile{Kind: FiveMProfileClient, ResourceRoot: "file:///root"}, FiveMProfileCached: true}
+	s.Documents[src.URI], s.Documents[hidden.URI], s.Documents[visible.URI] = src, hidden, visible
+	entries := []*SymbolEntry{{Name: "call", URI: hidden.URI, NodeID: 1}, {Name: "call", URI: visible.URI, NodeID: 2}}
+	got := s.visibleGlobalSymbolsFromEntries(src, entries, 1)
+	if len(got) != 1 || got[0].URI != visible.URI {
+		t.Fatalf("visible selection = %#v, want visible client candidate", got)
+	}
+}
+
+func TestGlobalAliasSkipsInvisibleCandidateBeforeSelection(t *testing.T) {
+	s := NewServer("visible-alias")
+	for uri, source := range map[string]string{
+		"file:///root/a_server.lua": "AliasClass = HiddenClass",
+		"file:///root/z_client.lua": "AliasClass = VisibleClass",
+	} {
+		s.updateDocument(uri, []byte(source))
+		profile := FiveMExecutionProfile{Kind: FiveMProfileServer, ResourceRoot: "file:///root"}
+		if uri == "file:///root/z_client.lua" {
+			profile.Kind = FiveMProfileClient
+		}
+		doc := s.Documents[uri]
+		doc.FiveMProfile, doc.FiveMProfileCached = profile, true
+	}
+	source := &Document{Server: s, URI: "file:///root/use.lua", FiveMProfile: FiveMExecutionProfile{Kind: FiveMProfileClient, ResourceRoot: "file:///root"}, FiveMProfileCached: true}
+	s.Documents[source.URI] = source
+	want := ast.HashBytes([]byte("VisibleClass"))
+	if got := s.getGlobalAlias(source, ast.HashBytes([]byte("AliasClass"))); got != want {
+		t.Fatalf("visible alias = %#x, want %#x", got, want)
 	}
 }

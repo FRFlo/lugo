@@ -1,0 +1,64 @@
+{
+  "FiveM resource manifest": {
+    "prefix": "fxmanifest",
+    "body": [
+      "fx_version '${1:cerulean}'",
+      "game '${2:gta5}'",
+      "lua54 'yes'",
+      "",
+      "${3:client_script '${4:client.lua}'}"
+    ],
+    "description": "Create a FiveM fxmanifest.lua resource manifest"
+  },
+  "Register network event": {
+    "prefix": "RegisterNetEvent",
+    "body": [
+      "RegisterNetEvent('${1:resource:event}', function(${2})",
+      "\t${3}",
+      "end)"
+    ],
+    "description": "Register a network event with an inline handler"
+  },
+  "Add event handler": {
+    "prefix": "AddEventHandler",
+    "body": [
+      "AddEventHandler('${1:resource:event}', function(${2})",
+      "\t${3}",
+      "end)"
+    ],
+    "description": "Add a handler for a local or registered event"
+  },
+  "Create thread": {
+    "prefix": "CreateThread",
+    "body": [
+      "CreateThread(function()",
+      "\t${1}",
+      "end)"
+    ],
+    "description": "Start a FiveM script thread"
+  },
+  "Trigger server event": {
+    "prefix": "TriggerServerEvent",
+    "body": ["TriggerServerEvent('${1:resource:event}'${2:, ...})"],
+    "description": "Send an event from a client to the server"
+  },
+  "Trigger client event": {
+    "prefix": "TriggerClientEvent",
+    "body": ["TriggerClientEvent('${1:resource:event}', ${2:source}${3:, ...})"],
+    "description": "Send an event from the server to a client"
+  },
+  "Register command": {
+    "prefix": "RegisterCommand",
+    "body": [
+      "RegisterCommand('${1:command}', function(${2:source}, args, rawCommand)",
+      "\t${3}",
+      "end, ${4:false})"
+    ],
+    "description": "Register a FiveM chat command"
+  },
+  "Get entity coordinates": {
+    "prefix": "GetEntityCoords",
+    "body": ["local ${1:coords} = GetEntityCoords(${2:PlayerPedId()})"],
+    "description": "Get the coordinates of an entity"
+  }
+}

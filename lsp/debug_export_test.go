@@ -51,6 +51,141 @@ func TestBuildDebugExportRejectsOversizedPayload(t *testing.T) {
 	}
 }
 
+func TestBuildDebugExportPreservesMarshalIndentAndExactLimit(t *testing.T) {
+	server := NewServer(`version "quoted" \\`)
+	server.RootURI = "file:///workspace/\"quoted\""
+	source := []byte("local x = 1\n")
+	server.Documents["file:///workspace/\"quoted\".lua"] = &Document{
+		Server: server,
+		URI:    "file:///workspace/\"quoted\".lua",
+		Path:   "/tmp/a\\b.lua",
+		Tree:   parseResolverLua(t, source),
+	}
+	server.GlobalIndex.AddSymbol("file:///workspace", GlobalIndexScopeShared, "escapedName", &SymbolEntry{
+		Key:    GlobalKey{PropHash: ast.HashBytes([]byte("escapedName"))},
+		URI:    "file:///workspace/\"quoted\".lua",
+		NodeID: 1,
+	})
+
+	categories := []string{"tokens", debugExportCategoryGlobalIndex}
+	got, err := server.buildDebugExport(DebugExportParams{Categories: categories})
+	if err != nil {
+		t.Fatalf("buildDebugExport() error = %v", err)
+	}
+	var payload debugExportPayload
+	if err := json.Unmarshal([]byte(got), &payload); err != nil {
+		t.Fatalf("export is not valid JSON: %v", err)
+	}
+	want, err := json.MarshalIndent(debugExportPayload{
+		Metadata: debugExportMetadata{
+			ServerVersion: server.Version, RootURI: server.RootURI,
+			Categories: categories, DocumentCount: 1, IsIndexing: server.IsIndexing,
+		},
+		Documents:   []debugExportDocument{server.exportDebugDocument(server.Documents["file:///workspace/\"quoted\".lua"], source, map[string]bool{"tokens": true})},
+		GlobalIndex: server.exportDebugGlobalIndex(),
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal([]byte(got), want) {
+		t.Fatalf("streaming JSON differs from MarshalIndent\n got: %s\nwant: %s", got, want)
+	}
+
+	server.MaxFileSize = int64(len(got))
+	if exact, err := server.buildDebugExport(DebugExportParams{Categories: categories}); err != nil || exact != got {
+		t.Fatalf("exact-limit export = (%d bytes, %v), want identical %d-byte output", len(exact), err, len(got))
+	}
+	server.MaxFileSize--
+	if partial, err := server.buildDebugExport(DebugExportParams{Categories: categories}); err == nil || partial != "" || !strings.Contains(err.Error(), "debug export exceeds MaxFileSize") {
+		t.Fatalf("one-byte-too-small export = (%q, %v), want empty result and MaxFileSize error", partial, err)
+	}
+}
+
+func TestBuildDebugExportWhitespaceSourceAvoidsSourceSizedTokenCapacity(t *testing.T) {
+	source := bytes.Repeat([]byte{' '}, 3<<20)
+	server := NewServer("test-version")
+	server.MaxFileSize = 4 << 20
+	server.Documents["file:///workspace/spaces.lua"] = &Document{
+		Server: server, URI: "file:///workspace/spaces.lua", Tree: parseResolverLua(t, source),
+	}
+	got, err := server.buildDebugExport(DebugExportParams{Categories: []string{debugExportCategoryTokens}})
+	if err != nil {
+		t.Fatalf("small export from whitespace source failed: %v", err)
+	}
+	var payload debugExportPayload
+	if err := json.Unmarshal([]byte(got), &payload); err != nil {
+		t.Fatalf("export is not valid JSON: %v", err)
+	}
+	if len(payload.Documents) != 1 || len(payload.Documents[0].Tokens) != 0 {
+		t.Fatalf("whitespace token export = %#v, want one document with no tokens", payload.Documents)
+	}
+}
+
+func TestBuildDebugExportPreflightsEscapedToken(t *testing.T) {
+	source := []byte("local escaped = [=[" + strings.Repeat("<", 300) + "]=]\n")
+	server := NewServer("test-version")
+	server.MaxFileSize = 1024
+	server.Documents["file:///workspace/escaped.lua"] = &Document{
+		Server: server, URI: "file:///workspace/escaped.lua", Tree: parseResolverLua(t, source),
+	}
+	content, err := server.buildDebugExport(DebugExportParams{Categories: []string{debugExportCategoryTokens}})
+	if err == nil || content != "" || err.Error() != "debug export exceeds MaxFileSize (1024 bytes)" {
+		t.Fatalf("escaped token export = (%q, %v), want empty result and exact size error", content, err)
+	}
+}
+
+func TestBuildDebugExportPreflightsOversizedGlobalSymbol(t *testing.T) {
+	server := NewServer("test-version")
+	server.MaxFileSize = 1024
+	name := strings.Repeat("<", 8<<10)
+	server.GlobalIndex.AddSymbol("resource", GlobalIndexScopeShared, SymbolName(name), &SymbolEntry{
+		URI: "file:///workspace/symbol.lua",
+	})
+	content, err := server.buildDebugExport(DebugExportParams{Categories: []string{debugExportCategoryGlobalIndex}})
+	if err == nil || content != "" || err.Error() != "debug export exceeds MaxFileSize (1024 bytes)" {
+		t.Fatalf("oversized symbol export = (%q, %v), want empty result and exact size error", content, err)
+	}
+}
+
+func BenchmarkExportDebugTokensWhitespaceCapacity(b *testing.B) {
+	source := bytes.Repeat([]byte{' '}, 3<<20)
+	b.Run("source-sized-reservation", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			// Baseline allocation pattern used before the fix. Keep the
+			// oversized reservation live so allocs/op reports its cost.
+			out := make([]debugExportToken, 0, len(source)/4)
+			if len(out) != 0 || cap(out) != len(source)/4 {
+				b.Fatal("unexpected baseline token slice")
+			}
+		}
+	})
+	b.Run("bounded-reservation", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			out := exportDebugTokens(source, false)
+			if len(out) != 0 {
+				b.Fatal("unexpected non-empty token slice")
+			}
+		}
+	})
+}
+
+func TestBuildDebugExportRejectsGiantASTBeforeMaterializing(t *testing.T) {
+	server := NewServer("test-version")
+	server.MaxFileSize = 1024
+	tree := parseResolverLua(t, []byte("local x = 1\n"))
+	tree.Nodes = append(tree.Nodes, make([]ast.Node, 100_000)...)
+	server.Documents["file:///workspace/giant.lua"] = &Document{
+		Server: server,
+		URI:    "file:///workspace/giant.lua",
+		Tree:   tree,
+	}
+	if content, err := server.buildDebugExport(DebugExportParams{Categories: []string{debugExportCategoryAST}}); err == nil || content != "" || !strings.Contains(err.Error(), "debug export exceeds MaxFileSize") {
+		t.Fatalf("giant AST export = (%q, %v), want empty result and MaxFileSize error", content, err)
+	}
+}
+
 func TestBuildDebugExport(t *testing.T) {
 	source := []byte("local playerName = GetPlayerName()\nprint(playerName)\n")
 	tree := parseResolverLua(t, source)

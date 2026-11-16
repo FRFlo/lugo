@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -76,13 +77,24 @@ func (s *Server) handleDidOpen(req Request) {
 	}
 	s.documentVersions[uri] = params.TextDocument.Version
 	s.OpenFiles[uri] = true
+	if isNUIAssetURI(uri) {
+		s.updateNUIAssetDocument(uri, []byte(params.TextDocument.Text))
+		// Assets participate in NUI contract diagnostics, but never enter the Lua
+		// parser or receive Lua diagnostics.
+		s.publishWorkspaceDiagnostics()
+		return
+	}
 
 	if s.contentExceedsMaxFileSize(params.TextDocument.Text) {
 		s.publishFileSizeDiagnostic(uri)
 		return
 	}
 
+	_, hadDocument := s.Documents[uri]
 	needsRepublish := s.updateDocument(uri, []byte(params.TextDocument.Text))
+	if !hadDocument && documentHasPublicFacts(s.Documents[uri]) {
+		needsRepublish = true
+	}
 
 	if needsRepublish {
 		s.publishWorkspaceDiagnostics()
@@ -120,12 +132,21 @@ func (s *Server) handleDidChange(req Request) {
 	s.documentVersions[uri] = params.TextDocument.Version
 
 	if len(params.ContentChanges) > 0 {
+		if isNUIAssetURI(uri) {
+			s.updateNUIAssetDocument(uri, []byte(params.ContentChanges[0].Text))
+			s.publishWorkspaceDiagnostics()
+			return
+		}
 		if s.contentExceedsMaxFileSize(params.ContentChanges[0].Text) {
 			s.publishFileSizeDiagnostic(uri)
 			return
 		}
 
+		_, hadDocument := s.Documents[uri]
 		needsRepublish := s.updateDocument(uri, []byte(params.ContentChanges[0].Text))
+		if !hadDocument && documentHasPublicFacts(s.Documents[uri]) {
+			needsRepublish = true
+		}
 
 		if needsRepublish {
 			s.publishWorkspaceDiagnostics()
@@ -137,6 +158,39 @@ func (s *Server) handleDidChange(req Request) {
 	}
 }
 
+func isNUIAssetURI(uri string) bool {
+	switch strings.ToLower(filepath.Ext(uri)) {
+	case ".html", ".js", ".ts", ".jsx", ".tsx":
+		return true
+	default:
+		return false
+	}
+}
+
+func documentHasPublicFacts(doc *Document) bool {
+	return doc != nil && (len(doc.ExportedGlobalDefs) != 0 || len(doc.FiveMLuaExports) != 0 || len(doc.FiveMEvents) != 0)
+}
+
+// updateNUIAssetDocument keeps the latest open-buffer bytes available to the
+// NUI scanner without treating JavaScript/HTML as Lua source.
+func (s *Server) updateNUIAssetDocument(uri string, source []byte) {
+	doc := s.Documents[uri]
+	if doc == nil {
+		doc = &Document{Server: s, URI: uri}
+		doc.Path = s.uriToPath(uri)
+		doc.LowerPath = strings.ToLower(doc.Path)
+		doc.Dir = filepath.Dir(doc.Path)
+		doc.ModuleName = s.computeModuleName(uri, doc.Path, doc.LowerPath)
+		s.Documents[uri] = doc
+	}
+	if doc.Tree == nil {
+		doc.Tree = ast.NewTree(source)
+	} else {
+		doc.Tree.Reset(source)
+	}
+	doc.IsWorkspace = false
+}
+
 func (s *Server) handleDidClose(req Request) {
 	var params DidCloseTextDocumentParams
 
@@ -146,6 +200,17 @@ func (s *Server) handleDidClose(req Request) {
 	}
 
 	uri := s.normalizeURI(params.TextDocument.URI)
+	if isNUIAssetURI(uri) {
+		delete(s.OpenFiles, uri)
+		delete(s.documentVersions, uri)
+		if source, err := os.ReadFile(s.uriToPath(uri)); err == nil {
+			s.updateNUIAssetDocument(uri, source)
+		} else {
+			s.clearDocument(uri)
+		}
+		s.publishWorkspaceDiagnostics()
+		return
+	}
 
 	delete(s.OpenFiles, uri)
 	// Evict caches for documents that are no longer open to reclaim memory
@@ -223,7 +288,17 @@ func (s *Server) handleDidChangeWatchedFiles(req Request) {
 				}
 
 				if b, err := os.ReadFile(path); err == nil {
-					needsRepublish := s.updateDocument(uri, b)
+					needsRepublish := false
+					if isNUIAssetURI(uri) {
+						s.updateNUIAssetDocument(uri, b)
+						needsWorkspaceRepublish = true
+					} else {
+						_, hadDocument := s.Documents[uri]
+						needsRepublish = s.updateDocument(uri, b)
+						if !hadDocument && documentHasPublicFacts(s.Documents[uri]) {
+							needsRepublish = true
+						}
+					}
 
 					if statErr == nil && s.Documents[uri] != nil {
 						s.Documents[uri].ModTime = stat.ModTime()
@@ -248,30 +323,58 @@ func (s *Server) handleDidChangeWatchedFiles(req Request) {
 				removeFiveMResource(s, URI(uri))
 			}
 
-			// Always remove the document from the workspace cache
-			s.clearDocument(uri)
+			if isNUIAssetURI(uri) || strings.HasSuffix(uri, ".lua") || strings.HasSuffix(uri, "/fxmanifest.lua") || strings.HasSuffix(uri, "/__resource.lua") {
+				needsWorkspaceRepublish = true
+			}
 
-			// Part B: Invalidate FiveM profile caches for non-manifest Lua deletes inside a resource root
-			// Compare URIs directly to resource roots (URIs) to determine affected documents
-			for root := range s.FiveMResourceGraph.ByRoot {
-				if strings.HasPrefix(uri, root+"/") || uri == root {
-					if strings.HasSuffix(uri, ".lua") && !(strings.HasSuffix(uri, "/fxmanifest.lua") || strings.HasSuffix(uri, "/__resource.lua")) {
-						// Invalidate documents under this resource root
-						for dURI, d := range s.Documents {
-							if d == nil {
-								continue
-							}
-							if strings.HasPrefix(dURI, root+"/") || dURI == root {
-								d.FiveMProfile = FiveMExecutionProfile{}
-								d.FiveMProfileCached = false
-								d.FiveMEvents = d.FiveMEvents[:0]
-							}
+			// A removed Lua source can change profile, events, and cross-file
+			// contracts for every sibling in its resource. Resolve scope from the
+			// retained document before clearDocument removes that context.
+			if strings.HasSuffix(uri, ".lua") && !strings.HasSuffix(uri, "/fxmanifest.lua") && !strings.HasSuffix(uri, "/__resource.lua") {
+				resourceRoot := ""
+				if deletedDoc := s.Documents[uri]; deletedDoc != nil {
+					resourceRoot = s.getDocResourceRoot(deletedDoc)
+				}
+				deletedPath := filepath.Clean(s.uriToPath(uri))
+				if resolved, err := filepath.EvalSymlinks(deletedPath); err == nil {
+					deletedPath = resolved
+				}
+				resourceRootPath := ""
+				for root := range s.FiveMResourceGraph.ByRoot {
+					rootPath := filepath.Clean(s.uriToPath(root))
+					if resolved, err := filepath.EvalSymlinks(rootPath); err == nil {
+						rootPath = resolved
+					}
+					rel, err := filepath.Rel(rootPath, deletedPath)
+					if err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && len(rootPath) > len(resourceRootPath) {
+						resourceRoot = root
+						resourceRootPath = rootPath
+					}
+				}
+				for dURI, d := range s.Documents {
+					if d == nil || dURI == uri {
+						continue
+					}
+					inResource := resourceRoot != "" && s.getDocResourceRoot(d) == resourceRoot
+					if !inResource && resourceRoot != "" {
+						path := filepath.Clean(s.uriToPath(dURI))
+						if resolved, err := filepath.EvalSymlinks(path); err == nil {
+							path = resolved
 						}
-						// Do not continue scanning other roots after invalidation
-						break
+						rel, err := filepath.Rel(resourceRootPath, path)
+						inResource = err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+					}
+					if inResource {
+						d.FiveMProfile = FiveMExecutionProfile{}
+						d.FiveMProfileCached = false
+						d.FiveMEvents = d.FiveMEvents[:0]
 					}
 				}
 			}
+
+			// Invalidate dependent resource documents before removing the source
+			// document; clearDocument evicts its cached resource context.
+			s.clearDocument(uri)
 		}
 	}
 
@@ -362,6 +465,16 @@ func (s *Server) refreshWorkspace() {
 		s.activeURIs = make(map[string]bool, len(s.Documents))
 	} else {
 		clear(s.activeURIs)
+	}
+
+	oldBindings := s.snapshotFiveMBindingsUnder("")
+	oldResources := make(map[string]*FiveMResource)
+	if s.FiveMResourceGraph != nil {
+		for root, node := range s.FiveMResourceGraph.ByRoot {
+			if node != nil {
+				oldResources[root] = node.Resource
+			}
+		}
 	}
 
 	// Graph-based state is authoritative; no local maps to clear
@@ -472,6 +585,7 @@ func (s *Server) refreshWorkspace() {
 		close(results)
 	}()
 
+	completedResults := make([]*IndexResult, 0, len(pendingJobs))
 	for res := range results {
 		uri := res.Uri
 
@@ -495,23 +609,95 @@ func (s *Server) refreshWorkspace() {
 			continue
 		}
 
-		total += len(res.Source)
-		indexed++
+		completedResults = append(completedResults, res)
+	}
 
-		s.finalizeDocumentUpdate(uri, res.Source, res.Tree, res.Errors, res.Job.Doc)
-
-		if indexed%50 == 0 {
-			s.sendProgressNotification("indexing", WorkDoneProgressReport{
-				Kind:       "report",
-				Message:    fmt.Sprintf("Indexed %d files...", indexed),
-				Percentage: 0,
-			})
-		}
-
-		if !res.Job.ModTime.IsZero() && s.Documents[uri] != nil {
-			s.Documents[uri].ModTime = res.Job.ModTime
+	isManifestURI := func(uri string) bool {
+		return strings.HasSuffix(uri, "/fxmanifest.lua") || strings.HasSuffix(uri, "/__resource.lua")
+	}
+	manifestResults := make([]*IndexResult, 0)
+	scriptResults := make([]*IndexResult, 0, len(completedResults))
+	for _, res := range completedResults {
+		if isManifestURI(res.Uri) {
+			manifestResults = append(manifestResults, res)
+		} else {
+			scriptResults = append(scriptResults, res)
 		}
 	}
+	sort.Slice(scriptResults, func(i, j int) bool { return scriptResults[i].Uri < scriptResults[j].Uri })
+	sort.Slice(manifestResults, func(i, j int) bool {
+		left, right := manifestResults[i].Uri, manifestResults[j].Uri
+		leftLegacy, rightLegacy := strings.HasSuffix(left, "/__resource.lua"), strings.HasSuffix(right, "/__resource.lua")
+		if filepath.Dir(left) == filepath.Dir(right) && leftLegacy != rightLegacy {
+			return !leftLegacy // fxmanifest.lua is authoritative over the legacy file.
+		}
+		return left < right
+	})
+	finalizeResults := func(items []*IndexResult) {
+		for _, res := range items {
+			total += len(res.Source)
+			indexed++
+			s.finalizeDocumentUpdate(res.Uri, res.Source, res.Tree, res.Errors, res.Job.Doc)
+			if indexed%50 == 0 {
+				s.sendProgressNotification("indexing", WorkDoneProgressReport{
+					Kind:       "report",
+					Message:    fmt.Sprintf("Indexed %d files...", indexed),
+					Percentage: 0,
+				})
+			}
+			if !res.Job.ModTime.IsZero() && s.Documents[res.Uri] != nil {
+				s.Documents[res.Uri].ModTime = res.Job.ModTime
+			}
+		}
+	}
+	finalizeResults(manifestResults)
+
+	// Rebuild the complete current manifest topology, including unchanged/open
+	// buffers, before publishing any script result. Sorting gives collisions a
+	// repeatable graph registration order; fxmanifest wins over __resource.
+	manifests := make([]string, 0)
+	for uri, doc := range s.Documents {
+		if doc != nil && doc.IsFiveMManifest && isManifestURI(uri) && (s.activeURIs[uri] || s.OpenFiles[uri]) {
+			manifests = append(manifests, uri)
+		}
+	}
+	sort.Slice(manifests, func(i, j int) bool {
+		left, right := manifests[i], manifests[j]
+		leftLegacy, rightLegacy := strings.HasSuffix(left, "/__resource.lua"), strings.HasSuffix(right, "/__resource.lua")
+		if filepath.Dir(left) == filepath.Dir(right) && leftLegacy != rightLegacy {
+			return !leftLegacy
+		}
+		return left < right
+	})
+	registeredRoots := make(map[string]bool, len(manifests))
+	for _, uri := range manifests {
+		manifest := s.parseFiveMManifest(s.Documents[uri])
+		if manifest == nil || registeredRoots[manifest.RootURI] {
+			continue
+		}
+		registeredRoots[manifest.RootURI] = true
+		s.registerFiveMManifestResource(manifest)
+	}
+	s.reconcileFiveMBindings("", oldBindings)
+	for root, previous := range oldResources {
+		current := s.FiveMResourceGraph.ResourceByRoot(root)
+		if previous == nil || (current != nil && current.Equal(previous)) {
+			continue
+		}
+		for dURI, affected := range s.Documents {
+			if affected != nil && (dURI == root || strings.HasPrefix(dURI, root+"/")) {
+				affected.FiveMEvents = affected.FiveMEvents[:0]
+			}
+		}
+	}
+	if s.GlobalIndex != nil {
+		for root := range oldResources {
+			if !registeredRoots[root] {
+				s.GlobalIndex.UnregisterFiveMResource(ResourceURI(root))
+			}
+		}
+	}
+	finalizeResults(scriptResults)
 
 	for uri := range s.Documents {
 		if !s.activeURIs[uri] && !s.OpenFiles[uri] {
@@ -524,13 +710,6 @@ func (s *Server) refreshWorkspace() {
 			total += len(doc.Source())
 
 			s.updateDocument(uri, doc.Source())
-		}
-	}
-
-	for _, doc := range s.Documents {
-		if doc.IsFiveMManifest {
-			res := s.parseFiveMManifest(doc)
-			s.registerFiveMManifestResource(res)
 		}
 	}
 
@@ -783,6 +962,11 @@ func (s *Server) updateDocument(uri string, source []byte) bool {
 
 func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tree, parseErrors []parser.ParseError, doc *Document) bool {
 	var needsWorkspaceRepublish bool
+	var oldPublicFacts uint64
+	hadDocument := doc != nil
+	if doc != nil {
+		oldPublicFacts = documentPublicFacts(doc)
+	}
 	tree.SetPositionEncoding(s.positionEncoding)
 
 	if doc != nil {
@@ -1329,13 +1513,7 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 		}
 	}
 
-	if cap(doc.TypeCache) >= len(tree.Nodes) {
-		doc.TypeCache = doc.TypeCache[:len(tree.Nodes)]
-
-		clear(doc.TypeCache)
-	} else {
-		doc.TypeCache = make([]TypeSet, len(tree.Nodes))
-	}
+	doc.TypeCache.Reset(len(tree.Nodes))
 
 	if cap(doc.Inferring) >= len(tree.Nodes) {
 		doc.Inferring = doc.Inferring[:len(tree.Nodes)]
@@ -1386,26 +1564,133 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 	if doc.IsFiveMManifest {
 		res := s.parseFiveMManifest(doc)
 		oldRes := s.FiveMResourceGraph.ResourceByRoot(res.RootURI)
-		activeRes := s.registerFiveMManifestResource(res)
+		oldBindings := s.snapshotFiveMBindingsUnder(res.RootURI)
+		var activeRes *FiveMResource
+		if !s.IsIndexing {
+			activeRes = s.registerFiveMManifestResource(res)
+		}
 
 		if oldRes == nil || (activeRes != nil && !activeRes.Equal(oldRes)) {
-			for dUri, d := range s.Documents {
-				if strings.HasPrefix(dUri, res.RootURI) {
-					d.FiveMProfile = FiveMExecutionProfile{}
-					d.FiveMProfileCached = false
-					if oldRes != nil {
-						d.FiveMEvents = d.FiveMEvents[:0]
+			needsWorkspaceRepublish = true
+		}
+		if oldRes != nil && activeRes != nil && !activeRes.Equal(oldRes) {
+			for dURI, affected := range s.Documents {
+				if affected != nil && (dURI == res.RootURI || strings.HasPrefix(dURI, res.RootURI+"/")) {
+					affected.FiveMEvents = affected.FiveMEvents[:0]
+				}
+			}
+		}
+		// Manifest registration changes the placement used by globalIndexContext.
+		// Re-publish only documents whose resource/scope changed, including
+		// unchanged scripts that were finalized before this manifest existed.
+		if !s.IsIndexing {
+			bindingsChanged := s.reconcileFiveMBindings(res.RootURI, oldBindings)
+			needsWorkspaceRepublish = bindingsChanged || needsWorkspaceRepublish
+			if bindingsChanged {
+				for dURI, affected := range s.Documents {
+					if affected != nil && (dURI == res.RootURI || strings.HasPrefix(dURI, res.RootURI+"/")) {
+						affected.FiveMEvents = affected.FiveMEvents[:0]
 					}
 				}
 			}
-
-			needsWorkspaceRepublish = true
 		}
+	}
+	if hadDocument && oldPublicFacts != documentPublicFacts(doc) {
+		needsWorkspaceRepublish = true
 	}
 
 	s.Documents[uri] = doc
 
 	return needsWorkspaceRepublish
+}
+
+type fiveMBindingPlacement struct {
+	resource ResourceURI
+	scope    GlobalIndexScope
+}
+
+func (s *Server) snapshotFiveMBindingsUnder(root string) map[string]fiveMBindingPlacement {
+	if s == nil {
+		return nil
+	}
+	placements := make(map[string]fiveMBindingPlacement)
+	for uri, doc := range s.Documents {
+		if doc == nil || (root != "" && uri != root && !strings.HasPrefix(uri, root+"/")) {
+			continue
+		}
+		resource, scope := s.globalIndexContext(doc)
+		placements[uri] = fiveMBindingPlacement{resource: resource, scope: scope}
+	}
+	return placements
+}
+
+func (s *Server) reconcileFiveMBindings(root string, previous map[string]fiveMBindingPlacement) bool {
+	if s == nil {
+		return false
+	}
+	var changed bool
+	for uri, doc := range s.Documents {
+		if doc == nil || doc.IsFiveMManifest || (root != "" && uri != root && !strings.HasPrefix(uri, root+"/")) {
+			continue
+		}
+		old, hadOld := previous[uri]
+		doc.FiveMProfile = FiveMExecutionProfile{}
+		doc.FiveMProfileCached = false
+		currentResource, currentScope := s.globalIndexContext(doc)
+		if hadOld && old.resource == currentResource && old.scope == currentScope {
+			continue
+		}
+		// finalizeDocumentUpdate removes symbols using the old document's source
+		// URI, then republishes them under the now-authoritative placement. Reuse
+		// the parsed tree and parse errors; no file read or parse is needed.
+		s.finalizeDocumentUpdate(uri, doc.Source(), doc.Tree, doc.Errors, doc)
+		changed = true
+	}
+	return changed
+}
+
+// documentPublicFacts captures names that can affect cross-document diagnostics.
+// Node IDs are intentionally excluded so edits to unrelated lines stay local.
+func documentPublicFacts(doc *Document) uint64 {
+	if doc == nil {
+		return 0
+	}
+	const offset64 = uint64(14695981039346656037)
+	const prime64 = uint64(1099511628211)
+	h := offset64
+	write := func(v uint64) {
+		h ^= v
+		h *= prime64
+	}
+	writeString := func(v string) {
+		for i := 0; i < len(v); i++ {
+			write(uint64(v[i]))
+		}
+		write(0xff)
+	}
+	for _, symbol := range doc.ExportedGlobalDefs {
+		write(symbol.Key.ReceiverHash)
+		write(symbol.Key.PropHash)
+		if symbol.IsRoot {
+			write(1)
+		} else {
+			write(0)
+		}
+		if symbol.IsDeprecated {
+			write(1)
+		} else {
+			write(0)
+		}
+		writeString(symbol.DeprecatedMsg)
+	}
+	for _, exp := range doc.FiveMLuaExports {
+		writeString(exp.Name)
+	}
+	for _, event := range doc.FiveMEvents {
+		write(uint64(event.Kind))
+		writeString(event.Name)
+	}
+	return h
 }
 
 func (s *Server) indexEmbeddedStdlib(pendingJobs *[]*IndexJob, unchanged *int) {
