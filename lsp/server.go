@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -58,16 +59,22 @@ type Server struct {
 	Log    *plain.Plain
 
 	// Workspace State
-	Documents          map[string]*Document
-	OpenFiles          map[string]bool
-	documentVersions   map[string]int
-	ignoredOpenSources map[string][]byte
-	oversizedOpenFiles map[string]bool
-	activeURIs         map[string]bool
-	visitedDirs        map[string]bool
-	FiveMResourceGraph *FiveMResourceGraph
-	uriCache           map[string]string
-	symlinkCache       map[string]string
+	Documents               map[string]*Document
+	metatableIndexMu        sync.Mutex
+	metatableIndexVersion   uint64
+	newIndexWrites          *newIndexWriteIndex
+	metatableTypeDependents map[string]map[string]struct{}
+	OpenFiles               map[string]bool
+	documentVersions        map[string]int
+	ignoredOpenSources      map[string][]byte
+	oversizedOpenFiles      map[string]bool
+	activeURIs              map[string]bool
+	visitedDirs             map[string]bool
+	workspaceReadDir        func(string) ([]os.DirEntry, error)
+	workspaceStat           func(string) (fs.FileInfo, error)
+	FiveMResourceGraph      *FiveMResourceGraph
+	uriCache                map[string]string
+	symlinkCache            map[string]string
 
 	// Global Index
 	GlobalIndex       *GlobalIndex
@@ -217,8 +224,10 @@ func evictClosedDocumentCaches(s *Server) {
 		doc.LuaDocCache = nil
 		doc.ActualReads = nil
 		doc.MutatedLocals = nil
+		doc.invalidateMetatableAttachmentIndex()
 		// Tree owns Source; free the underlying source buffer
 		if doc.Tree != nil {
+			doc.cacheEvictedMetatableNodeText()
 			doc.Tree.Source = nil
 			doc.Tree.TrimOversized(maxReusableASTCapacity)
 		}

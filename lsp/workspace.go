@@ -437,6 +437,10 @@ func (s *Server) handleReindex(req Request) {
 	WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: "ok"})
 }
 
+// refreshWorkspace must run through serialized workspace dispatch. Its workers
+// may reset published document trees during the parse phase, so callers must
+// not launch document readers or another refresh concurrently. All consumers
+// run only after the result channel closes and the workers stop mutating trees.
 func (s *Server) refreshWorkspace() {
 	s.Log.Println("Starting workspace re-index...")
 
@@ -521,6 +525,7 @@ func (s *Server) refreshWorkspace() {
 	}
 
 	var pendingJobs []*IndexJob
+	workspaceScanComplete := true
 	if s.visitedDirs == nil {
 		s.visitedDirs = make(map[string]bool, 256)
 	} else {
@@ -532,14 +537,15 @@ func (s *Server) refreshWorkspace() {
 	for _, libPath := range s.LibraryPaths {
 		s.Log.Printf("Indexing external library: %s\n", libPath)
 
-		s.indexWorkspace(libPath, &pendingJobs, &unchanged, &failed)
+		workspaceScanComplete = s.indexWorkspace(libPath, &pendingJobs, &unchanged, &failed) && workspaceScanComplete
 	}
 
 	for _, wf := range s.WorkspaceFolders {
 		s.Log.Printf("Indexing workspace folder: %s\n", wf)
 
-		s.indexWorkspace(wf, &pendingJobs, &unchanged, &failed)
+		workspaceScanComplete = s.indexWorkspace(wf, &pendingJobs, &unchanged, &failed) && workspaceScanComplete
 	}
+	pendingJobs = deduplicateIndexJobs(pendingJobs)
 
 	s.sendProgressNotification("indexing", WorkDoneProgressReport{
 		Kind:    "report",
@@ -628,6 +634,7 @@ func (s *Server) refreshWorkspace() {
 		close(results)
 	}()
 
+	var completedResults []*IndexResult
 	for res := range results {
 		uri := res.Uri
 
@@ -656,19 +663,62 @@ func (s *Server) refreshWorkspace() {
 		if res.Job.Doc == nil {
 			moduleNamesChanged = true
 		}
+		completedResults = append(completedResults, res)
+	}
 
-		s.finalizeDocumentUpdate(uri, res.Source, res.Tree, res.Errors, res.Job.Doc)
+	// Rebuild unchanged manifests before finalizing files from their resources.
+	// The graph was cleared above, and a changed Lua file may otherwise be
+	// indexed against a plain-Lua profile before its unchanged manifest has
+	// been registered again.
+	changedManifests := make(map[string]struct{})
+	for _, res := range completedResults {
+		if strings.HasSuffix(res.Uri, "/fxmanifest.lua") || strings.HasSuffix(res.Uri, "/__resource.lua") {
+			changedManifests[res.Uri] = struct{}{}
+		}
+	}
+	for uri, doc := range s.Documents {
+		if !doc.IsFiveMManifest {
+			continue
+		}
+		if workspaceScanComplete && !s.activeURIs[uri] && !s.OpenFiles[uri] {
+			continue
+		}
+		if _, changed := changedManifests[uri]; changed {
+			continue
+		}
+		s.registerFiveMManifestResource(s.parseFiveMManifest(doc))
+	}
 
-		if indexed%50 == 0 {
+	// Finalize changed manifests first so following files are indexed into the
+	// correct client/server/shared symbol scopes regardless of worker timing.
+	manifestResults := completedResults[:0]
+	otherResults := make([]*IndexResult, 0, len(completedResults))
+	for _, res := range completedResults {
+		if strings.HasSuffix(res.Uri, "/fxmanifest.lua") || strings.HasSuffix(res.Uri, "/__resource.lua") {
+			manifestResults = append(manifestResults, res)
+		} else {
+			otherResults = append(otherResults, res)
+		}
+	}
+	completedResults = append(manifestResults, otherResults...)
+
+	// Parsing may reuse each document's arena, so all worker mutations must
+	// finish before finalization scans any document for cross-file references.
+	// The server dispatches workspace refresh synchronously; while collecting
+	// results above, this goroutine does not inspect document trees or resolvers.
+	for i, res := range completedResults {
+		s.finalizeDocumentUpdate(res.Uri, res.Source, res.Tree, res.Errors, res.Job.Doc)
+
+		if (i+1)%50 == 0 {
 			s.sendProgressNotification("indexing", WorkDoneProgressReport{
 				Kind:       "report",
-				Message:    fmt.Sprintf("Indexed %d files...", indexed),
+				Message:    fmt.Sprintf("Indexed %d files...", i+1),
 				Percentage: 0,
 			})
 		}
 
-		if !res.Job.ModTime.IsZero() && s.Documents[uri] != nil {
-			s.Documents[uri].ModTime = res.Job.ModTime
+		if !res.Job.ModTime.IsZero() && s.Documents[res.Uri] != nil {
+			s.Documents[res.Uri].ModTime = res.Job.ModTime
 		}
 	}
 
@@ -687,10 +737,12 @@ func (s *Server) refreshWorkspace() {
 		}
 	}
 
-	for uri := range s.Documents {
-		if !s.activeURIs[uri] && !s.OpenFiles[uri] {
-			moduleNamesChanged = true
-			s.clearDocument(uri)
+	if workspaceScanComplete {
+		for uri := range s.Documents {
+			if !s.activeURIs[uri] && !s.OpenFiles[uri] {
+				moduleNamesChanged = true
+				s.clearDocument(uri)
+			}
 		}
 	}
 
@@ -780,6 +832,25 @@ func (s *Server) refreshWorkspace() {
 	s.Log.Printf("Total time taken for %d bytes: %s\n", total, took)
 }
 
+func deduplicateIndexJobs(jobs []*IndexJob) []*IndexJob {
+	if len(jobs) < 2 {
+		return jobs
+	}
+	seen := make(map[string]struct{}, len(jobs))
+	unique := jobs[:0]
+	for _, job := range jobs {
+		if job == nil {
+			continue
+		}
+		if _, exists := seen[job.Uri]; exists {
+			continue
+		}
+		seen[job.Uri] = struct{}{}
+		unique = append(unique, job)
+	}
+	return unique
+}
+
 // workspaceIndexBytesBucket deliberately exposes only a coarse size range.
 // Workspace sizes can otherwise reveal more than indexing telemetry needs.
 func workspaceIndexBytesBucket(total int) string {
@@ -799,7 +870,7 @@ func workspaceIndexBytesBucket(total int) string {
 	}
 }
 
-func (s *Server) indexWorkspace(rootPathOrURI string, pendingJobs *[]*IndexJob, unchanged, failed *int) {
+func (s *Server) indexWorkspace(rootPathOrURI string, pendingJobs *[]*IndexJob, unchanged, failed *int) bool {
 	var path string
 
 	if strings.HasPrefix(rootPathOrURI, "file://") {
@@ -810,16 +881,28 @@ func (s *Server) indexWorkspace(rootPathOrURI string, pendingJobs *[]*IndexJob, 
 
 	path = strings.ReplaceAll(path, "/", string(filepath.Separator))
 
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		s.Log.Warnf("%q not found\n", path)
-
-		return
+	stat := s.workspaceStat
+	if stat == nil {
+		stat = os.Stat
+	}
+	if _, err := stat(path); err != nil {
+		if os.IsNotExist(err) {
+			s.Log.Warnf("%q not found\n", path)
+			return true
+		}
+		*failed++
+		return false
 	}
 
 	if s.visitedDirs == nil {
 		s.visitedDirs = make(map[string]bool, 256)
 	}
 
+	complete := true
+	readDir := s.workspaceReadDir
+	if readDir == nil {
+		readDir = os.ReadDir
+	}
 	var walk func(dir string, isSymlink bool)
 
 	walk = func(dir string, isSymlink bool) {
@@ -836,8 +919,10 @@ func (s *Server) indexWorkspace(rootPathOrURI string, pendingJobs *[]*IndexJob, 
 
 		s.visitedDirs[realDir] = true
 
-		entries, err := os.ReadDir(realDir)
+		entries, err := readDir(realDir)
 		if err != nil {
+			*failed++
+			complete = false
 			return
 		}
 
@@ -858,12 +943,12 @@ func (s *Server) indexWorkspace(rootPathOrURI string, pendingJobs *[]*IndexJob, 
 
 			isSym := e.Type()&fs.ModeSymlink != 0
 			if isSym {
-				fileStat, statErr = os.Stat(fullPath)
+				fileStat, statErr = stat(fullPath)
 				if statErr == nil {
 					isDir = fileStat.IsDir()
 				} else {
 					*failed++
-
+					complete = false
 					continue
 				}
 			}
@@ -892,6 +977,12 @@ func (s *Server) indexWorkspace(rootPathOrURI string, pendingJobs *[]*IndexJob, 
 
 				if !isSym {
 					fileStat, statErr = e.Info()
+				}
+
+				if statErr != nil {
+					*failed++
+					complete = false
+					continue
 				}
 
 				if statErr == nil {
@@ -946,6 +1037,7 @@ func (s *Server) indexWorkspace(rootPathOrURI string, pendingJobs *[]*IndexJob, 
 	}
 
 	walk(path, true)
+	return complete
 }
 
 func (s *Server) contentExceedsMaxFileSize(text string) bool {
@@ -1017,11 +1109,13 @@ func (s *Server) updateDocument(uri string, source []byte) bool {
 func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tree, parseErrors []parser.ParseError, doc *Document) bool {
 	var needsWorkspaceRepublish bool
 	tree.SetPositionEncoding(s.positionEncoding)
+	s.forgetMetatableTypeDependencyConsumer(uri)
 
 	if doc != nil {
 		// Canonical source is owned by the Tree; ensure Tree reflects the latest source.
 		// Do not assign to doc.Source here.
 		s.removeDocumentGlobals(uri)
+		doc.clearEvictedMetatableNodeText()
 
 		doc.ExportedGlobalDefs = doc.ExportedGlobalDefs[:0]
 
@@ -1078,10 +1172,12 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 	}
 
 	res := doc.Resolver
+	res.Tree = tree
 
 	res.Reset()
 	res.Resolve(rootID)
 	res.Cleanup()
+	doc.invalidateMetatableAttachmentIndex()
 
 	doc.parseDiagnosticPragmas()
 
@@ -1293,6 +1389,55 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 			}
 
 			s.setGlobalSymbol(GlobalKey{ReceiverHash: recHash, PropHash: propHash}, uri, virtualNodeID, typeName, parentName, true, luadoc.IsDeprecated, luadoc.DeprecatedMsg)
+			if luadoc.Class != nil && s.GlobalIndex != nil {
+				resource, scope := ResourceURI(uri), GlobalIndexScopeShared
+				if indexedDoc := s.Documents[uri]; indexedDoc != nil {
+					resource, scope = s.globalIndexContext(indexedDoc)
+					if resource == "" {
+						resource = ResourceURI(uri)
+					}
+				}
+				if entry := s.GlobalIndex.LookupByScope(resource, scope, SymbolName(typeName)); entry != nil {
+					indexedEntry := *entry
+					if len(luadoc.Class.GenericParams) > 0 || luaDocClassHasGenericParent(luadoc.Class.Parents) {
+						data := LuaDocData{}
+						if entry.LuaDoc != nil {
+							data = *entry.LuaDoc
+						}
+						data.GenericClass = &LuaDocGenericClassData{
+							Params:  append([]LuaDocGeneric(nil), luadoc.Class.GenericParams...),
+							Parents: append([]string(nil), luadoc.Class.Parents...),
+						}
+						indexedEntry.LuaDoc = &data
+					}
+					indexedEntry.Parents = make([]string, 0, len(luadoc.Class.Parents))
+					for _, parentType := range luadoc.Class.Parents {
+						indexedEntry.Parents = append(indexedEntry.Parents, luaDocGenericClassName(parentType))
+					}
+					indexedEntry.Parent = ""
+					if len(indexedEntry.Parents) > 0 {
+						indexedEntry.Parent = indexedEntry.Parents[0]
+					}
+					s.setGlobalIndexSymbol(resource, scope, SymbolName(typeName), &indexedEntry)
+				}
+			}
+			if (len(luadoc.Operators) > 0 || len(luadoc.Overloads) > 0) && s.GlobalIndex != nil {
+				resource, scope := ResourceURI(uri), GlobalIndexScopeShared
+				if indexedDoc := s.Documents[uri]; indexedDoc != nil {
+					resource, scope = s.globalIndexContext(indexedDoc)
+				}
+				if entry := s.GlobalIndex.LookupByScope(resource, scope, SymbolName(typeName)); entry != nil {
+					indexedEntry := *entry
+					data := LuaDocData{}
+					if entry.LuaDoc != nil {
+						data = *entry.LuaDoc
+					}
+					data.Operators = append([]LuaDocOperator(nil), luadoc.Operators...)
+					data.Overloads = append([]string(nil), luadoc.Overloads...)
+					indexedEntry.LuaDoc = &data
+					s.setGlobalIndexSymbol(resource, scope, SymbolName(typeName), &indexedEntry)
+				}
+			}
 
 			if len(luadoc.Fields) > 0 {
 				classHash := ast.HashBytes(nameBytes)
@@ -1322,6 +1467,29 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 					})
 
 					s.setGlobalSymbol(GlobalKey{ReceiverHash: classHash, PropHash: fieldHash}, uri, fieldVirtualNodeID, sb.String(), "", true, luadoc.IsDeprecated, luadoc.DeprecatedMsg)
+
+					// Keep the parsed LuaDoc field type on the indexed entry so
+					// cross-document consumers can resolve both the field and type.
+					if s.GlobalIndex != nil {
+						resource := ResourceURI(uri)
+						scope := GlobalIndexScopeShared
+						if indexedDoc := s.Documents[uri]; indexedDoc != nil {
+							resource, scope = s.globalIndexContext(indexedDoc)
+							if resource == "" {
+								resource = ResourceURI(uri)
+							}
+						}
+						if entry := s.GlobalIndex.LookupByScope(resource, scope, SymbolName(sb.String())); entry != nil {
+							indexedEntry := *entry
+							indexedEntry.LuaDoc = &LuaDocData{TypeString: field.Type}
+							parsedType := indexedEntry.LuaDoc.ParsedType()
+							indexedEntry.Type = Type{Primitive: parsedType.Basics}
+							if parsedType.IsCallable() {
+								indexedEntry.Type.Structural = &StructuralType{Function: &FunctionType{}}
+							}
+							s.setGlobalIndexSymbol(resource, scope, SymbolName(sb.String()), &indexedEntry)
+						}
+					}
 				}
 			}
 		}
@@ -1637,6 +1805,7 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 	}
 
 	s.Documents[uri] = doc
+	s.invalidateMetatableIndexes(uri)
 
 	return needsWorkspaceRepublish
 }
@@ -1711,6 +1880,8 @@ func (s *Server) clearDocument(uri string) {
 	}
 
 	delete(s.Documents, uri)
+	s.invalidateMetatableIndexes(uri)
+	s.forgetMetatableTypeDependenciesFrom(uri)
 	s.dropURICache(uri)
 
 	if !s.IsCI {

@@ -12,7 +12,7 @@ import (
 // this document. It deliberately ignores computed keys: guessing those keys
 // creates considerably more noise than useful information.
 func (s *Server) buildFiveMStateBagDiagnostics(doc *Document) []Diagnostic {
-	if doc == nil || doc.Tree == nil {
+	if doc == nil || doc.Tree == nil || doc.Source() == nil {
 		return nil
 	}
 

@@ -484,6 +484,15 @@ func (s *Server) publishDiagnostics(uri string) {
 		}
 	}
 
+	// Closed documents may retain their AST after source eviction. Their source
+	// ranges cannot be inspected for fresh diagnostics, so clear any previously
+	// published diagnostics without walking source-backed FiveM checks.
+	if doc.Source() == nil {
+		s.diagBuf = s.diagBuf[:0]
+		emitDiagnostics(s.diagBuf)
+		return
+	}
+
 	applyDiagnosticSuppression := func() {
 		n := 0
 

@@ -45,3 +45,32 @@ More description
 		t.Fatalf("annotation flags should not affect description: %q", doc.Description)
 	}
 }
+
+func TestParseLuaDoc_TagNamesRequireBoundary(t *testing.T) {
+	doc := parseLuaDoc([]byte(`
+@parameter payload string
+@returns string
+@fieldname bogus number
+@classify Fake
+@enumtype Fake
+@modular Fake
+@nodiscardSomething
+@asyncSomething
+@packageable
+@typeof string
+@aliasing Fake string
+@genericity T
+@overloading fun(): string
+@operatorish add: string
+@seeAlso Fake
+@exported Fake
+@deprecatedly
+`), false)
+
+	if len(doc.Params) != 0 || len(doc.Returns) != 0 || len(doc.Fields) != 0 {
+		t.Fatalf("prefixed tag names parsed as annotations: params=%+v returns=%+v fields=%+v", doc.Params, doc.Returns, doc.Fields)
+	}
+	if doc.Class != nil || doc.Enum != nil || doc.Module != nil || doc.Type != nil || doc.Alias != nil || len(doc.Generics) != 0 || len(doc.Overloads) != 0 || len(doc.Operators) != 0 || len(doc.See) != 0 || doc.Export != "" || doc.IsDeprecated || doc.IsNoDiscard || doc.IsAsync || doc.IsPackage {
+		t.Fatalf("prefixed tag names changed LuaDoc state: %+v", doc)
+	}
+}

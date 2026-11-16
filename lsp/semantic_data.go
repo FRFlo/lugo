@@ -38,9 +38,29 @@ type Binding struct {
 }
 
 type LuaDocData struct {
-	Description string
-	Params      []LuaDocParam
-	Returns     []LuaDocReturn
+	Description  string
+	TypeString   string
+	GenericClass *LuaDocGenericClassData
+	Operators    []LuaDocOperator
+	Overloads    []string
+	Params       []LuaDocParam
+	Returns      []LuaDocReturn
+}
+
+type LuaDocGenericClassData struct {
+	Params  []LuaDocGeneric
+	Parents []string
+}
+
+// ParsedType reconstructs the type on demand so indexed per-field LuaDoc data
+// retains only its source spelling instead of a large TypeSet with callable
+// parameter and return slices.
+func (data *LuaDocData) ParsedType() TypeSet {
+	if data == nil {
+		return TypeSet{}
+	}
+
+	return ParseTypeString(data.TypeString)
 }
 
 type FiveMData struct {
