@@ -6,6 +6,7 @@
 !vscode/package.json
 !vscode/package-lock.json
 !vscode/language-configuration.json
+!vscode/snippets/fivem.json
 !.vscode/launch.json
 !example.ci.json
 node_modules

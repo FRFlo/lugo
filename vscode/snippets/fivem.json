@@ -1,0 +1,22 @@
+{
+  "FiveM manifest": {
+    "prefix": "fxmanifest",
+    "body": ["fx_version '${1:cerulean}'", "game '${2:gta5}'", "", "${0}"],
+    "description": "FiveM resource manifest"
+  },
+  "Register network event": {
+    "prefix": "RegisterNetEvent",
+    "body": ["RegisterNetEvent('${1:eventName}', function(${2})", "\t${0}", "end)"],
+    "description": "Register a network event handler"
+  },
+  "Add event handler": {
+    "prefix": "AddEventHandler",
+    "body": ["AddEventHandler('${1:eventName}', function(${2})", "\t${0}", "end)"],
+    "description": "Add an event handler"
+  },
+  "Create thread": {
+    "prefix": "CreateThread",
+    "body": ["CreateThread(function()", "\t${0}", "end)"],
+    "description": "Create a FiveM thread"
+  }
+}
