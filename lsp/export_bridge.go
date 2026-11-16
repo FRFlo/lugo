@@ -35,8 +35,10 @@ func (eb *ExportBridge) LookupExport(name SymbolName, fromResource ResourceURI, 
 
 	for _, dep := range eb.lookupDependencies(fromResource) {
 		for _, scope := range lookupScopesForExport(desiredScope) {
-			if entry := eb.Index.LookupByScope(dep, scope, name); entry != nil && entry.Export != nil {
-				return entry
+			for _, entry := range eb.Index.LookupCandidatesByScope(dep, scope, name) {
+				if entry != nil && entry.Export != nil {
+					return entry
+				}
 			}
 		}
 	}

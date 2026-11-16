@@ -129,7 +129,7 @@ local result = unwrap(value)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		doc.TypeCache = nil
+		doc.TypeCache.Drop()
 		doc.Inferring = nil
 		_ = doc.InferType(resultID)
 	}

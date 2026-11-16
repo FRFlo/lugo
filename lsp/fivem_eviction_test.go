@@ -1,6 +1,7 @@
 package lsp
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/FRFlo/lugo/ast"
@@ -8,8 +9,8 @@ import (
 
 // TestFiveMEviction tests cache eviction behavior when documents are closed.
 // evictClosedDocumentCaches is called to drop memory-heavy caches (TypeCache,
-// Inferring, LuaDocCache, ActualReads, MutatedLocals, Tree.Source) for closed
-// documents while preserving Tree and Resolver for cross-document features.
+// Inferring, LuaDocCache) for closed documents while preserving semantic facts,
+// source, Tree and Resolver for cross-document features.
 func TestFiveMEviction(t *testing.T) {
 	t.Run("ClosedDocDropsCaches", func(t *testing.T) {
 		h := newFiveMFixtureHarness(t, "resource_client_server_shared")
@@ -20,10 +21,13 @@ func TestFiveMEviction(t *testing.T) {
 		if doc == nil {
 			t.Fatal("client.lua should be indexed")
 		}
+		for id := range doc.Tree.Nodes {
+			doc.InferType(ast.NodeID(id))
+		}
 
 		// Verify caches are present before eviction
-		if doc.TypeCache == nil {
-			t.Fatal("TypeCache should be populated after indexing")
+		if doc.TypeCache.Empty() {
+			t.Fatal("TypeCache should be populated after inference")
 		}
 		if len(doc.Inferring) == 0 {
 			t.Fatal("Inferring should be populated after indexing")
@@ -37,6 +41,10 @@ func TestFiveMEviction(t *testing.T) {
 		if doc.MutatedLocals == nil {
 			t.Fatal("MutatedLocals should be populated after indexing")
 		}
+		actualReads := append([]uint16(nil), doc.ActualReads...)
+		mutatedLocals := append([]bool(nil), doc.MutatedLocals...)
+		t.Logf("retained semantic backing arrays: %d bytes (ActualReads cap=%d, MutatedLocals cap=%d)",
+			2*cap(doc.ActualReads)+cap(doc.MutatedLocals), cap(doc.ActualReads), cap(doc.MutatedLocals))
 		if doc.Tree == nil {
 			t.Fatal("Tree should exist")
 		}
@@ -54,8 +62,8 @@ func TestFiveMEviction(t *testing.T) {
 		evictClosedDocumentCaches(h.server)
 
 		// Verify caches are evicted
-		if doc.TypeCache != nil {
-			t.Fatal("TypeCache should be nil after eviction")
+		if !doc.TypeCache.Empty() {
+			t.Fatal("TypeCache should be empty after eviction")
 		}
 		if len(doc.Inferring) > 0 {
 			t.Fatal("Inferring should be nil/empty after eviction")
@@ -63,14 +71,14 @@ func TestFiveMEviction(t *testing.T) {
 		if doc.LuaDocCache != nil {
 			t.Fatal("LuaDocCache should be nil after eviction")
 		}
-		if doc.ActualReads != nil {
-			t.Fatal("ActualReads should be nil after eviction")
+		if !reflect.DeepEqual(doc.ActualReads, actualReads) {
+			t.Fatal("ActualReads should be preserved after eviction")
 		}
-		if doc.MutatedLocals != nil {
-			t.Fatal("MutatedLocals should be nil after eviction")
+		if !reflect.DeepEqual(doc.MutatedLocals, mutatedLocals) {
+			t.Fatal("MutatedLocals should be preserved after eviction")
 		}
-		if doc.Tree.Source != nil {
-			t.Fatal("Tree.Source should be nil after eviction")
+		if doc.Tree.Source == nil {
+			t.Fatal("Tree.Source should be retained with the AST after eviction")
 		}
 
 		// Verify Tree and Resolver are preserved
@@ -91,10 +99,13 @@ func TestFiveMEviction(t *testing.T) {
 		if doc == nil {
 			t.Fatal("client.lua should be indexed")
 		}
+		for id := range doc.Tree.Nodes {
+			doc.InferType(ast.NodeID(id))
+		}
 
 		// Verify initial caches
-		if doc.TypeCache == nil {
-			t.Fatal("TypeCache should be populated after indexing")
+		if doc.TypeCache.Empty() {
+			t.Fatal("TypeCache should be populated after inference")
 		}
 		if doc.Tree == nil || doc.Tree.Source == nil {
 			t.Fatal("Tree.Source should be populated after indexing")
@@ -107,7 +118,7 @@ func TestFiveMEviction(t *testing.T) {
 		evictClosedDocumentCaches(h.server)
 
 		// Verify open document STILL has caches
-		if doc.TypeCache == nil {
+		if doc.TypeCache.Empty() {
 			t.Fatal("Open document should retain TypeCache after eviction")
 		}
 		if len(doc.Inferring) == 0 {
@@ -219,19 +230,13 @@ func TestFiveMEviction(t *testing.T) {
 		// Evict caches
 		evictClosedDocumentCaches(h.server)
 
-		// Accessing Source() on a closed document should return nil without panic
-		// The nil-safety guard in Document.Source() handles this case:
-		//   if doc != nil && doc.Tree != nil {
-		//       return doc.Tree.Source
-		//   }
-		// After eviction, doc.Tree != nil but doc.Tree.Source == nil,
-		// so Source() should return nil (not panic)
+		// The retained AST and resolver require the original source bytes.
 		source := doc.Source()
-		if source != nil {
-			t.Fatalf("Source() on closed doc should return nil after eviction, got %d bytes", len(source))
+		if len(source) == 0 {
+			t.Fatal("Source() on closed doc should remain available after eviction")
 		}
 
-		// Also verify the Tree is still present (just Source is nil)
+		// Also verify the Tree and Resolver are still present.
 		if doc.Tree == nil {
 			t.Fatal("Tree should still be present after eviction")
 		}
@@ -266,15 +271,12 @@ func TestFiveMEviction(t *testing.T) {
 
 		evictClosedDocumentCaches(h.server)
 
-		if providerDoc.Tree == nil || providerDoc.Tree.Source != nil {
-			t.Fatal("bridge provider should keep its tree but drop source after eviction")
+		if providerDoc.Tree == nil || providerDoc.Tree.Source == nil {
+			t.Fatal("bridge provider should retain its tree and source after eviction")
 		}
 
-		if comments := providerDoc.getCommentsAbove(defNode); comments != nil {
-			t.Fatal("closed provider should not expose LuaDoc comments once source is evicted")
-		}
 		if providerDoc.GetLuaDoc(defNode) == nil {
-			t.Fatal("closed provider LuaDoc lookup should degrade safely instead of panicking")
+			t.Fatal("closed provider LuaDoc should remain available")
 		}
 
 		hints := h.inlayHints("bridge_export_signature")
@@ -299,8 +301,8 @@ func TestFiveMEviction(t *testing.T) {
 
 		evictClosedDocumentCaches(h.server)
 
-		if providerDoc.Tree == nil || providerDoc.Tree.Source != nil {
-			t.Fatal("bridge provider should keep its tree but drop source after eviction")
+		if providerDoc.Tree == nil || providerDoc.Tree.Source == nil {
+			t.Fatal("bridge provider should retain its tree and source after eviction")
 		}
 
 		marker := h.requireMarker("bridge_ping_call")
@@ -326,8 +328,8 @@ func TestFiveMEviction(t *testing.T) {
 
 		evictClosedDocumentCaches(h.server)
 
-		if providerDoc.Tree == nil || providerDoc.Tree.Source != nil {
-			t.Fatal("bridge provider should keep its tree but drop source after eviction")
+		if providerDoc.Tree == nil || providerDoc.Tree.Source == nil {
+			t.Fatal("bridge provider should retain its tree and source after eviction")
 		}
 
 		_ = h.hover("bridge_ping_call")
@@ -349,8 +351,8 @@ func TestFiveMEviction(t *testing.T) {
 
 		evictClosedDocumentCaches(h.server)
 
-		if providerDoc.Tree == nil || providerDoc.Tree.Source != nil {
-			t.Fatal("bridge provider should keep its tree but drop source after eviction")
+		if providerDoc.Tree == nil || providerDoc.Tree.Source == nil {
+			t.Fatal("bridge provider should retain its tree and source after eviction")
 		}
 
 		_ = h.completion("bridge_proxy_completion")
@@ -384,8 +386,8 @@ Skinchanger.Config.Body = true
 
 		evictClosedDocumentCaches(h.server)
 
-		if providerDoc.Tree == nil || providerDoc.Tree.Source != nil {
-			t.Fatal("provider.lua should keep its tree but drop source after eviction")
+		if providerDoc.Tree == nil || providerDoc.Tree.Source == nil {
+			t.Fatal("provider.lua should retain its tree and source after eviction")
 		}
 
 		_ = h.completion("skinchanger_config_member")

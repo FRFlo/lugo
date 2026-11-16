@@ -275,7 +275,7 @@ for k, v in pairs(source) do local key = k; local value = v end`)
 	}
 	b.ReportAllocs()
 	for b.Loop() {
-		clear(doc.TypeCache)
+		doc.TypeCache.Drop()
 		clear(doc.Inferring)
 		_ = doc.InferType(key)
 		_ = doc.InferType(value)

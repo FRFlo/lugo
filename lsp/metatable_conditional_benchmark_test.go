@@ -31,7 +31,7 @@ func BenchmarkConditionalNewIndexInference(b *testing.B) {
 			for b.Loop() {
 				// InferType caches AST results. Clear only this lookup so each
 				// iteration exercises the newindex-write collection path.
-				doc.TypeCache[member] = TypeSet{}
+				doc.TypeCache.Invalidate(member)
 				_ = doc.InferType(member)
 			}
 		})

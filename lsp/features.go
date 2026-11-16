@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/FRFlo/lugo/ast"
 )
@@ -669,18 +671,22 @@ func (s *Server) handleCompletion(req Request) {
 
 		return
 	}
+	completionData := map[string]any{"uri": uri}
 
 	offset := doc.Tree.Offset(params.Position.Line, params.Position.Character)
 
 	items := make([]CompletionItem, 0, 64)
-	seen := make(map[string]bool)
+	seen := make(map[string]int)
 
-	addCompletion := func(label string, kind CompletionItemKind, detail string, isDep bool, sortText string, insertText string, insertFormat InsertTextFormat) {
-		if label == "" || seen[label] {
-			return
+	addCompletion := func(label string, kind CompletionItemKind, detail string, isDep bool, sortText string, insertText string, insertFormat InsertTextFormat) (int, bool) {
+		if label == "" {
+			return 0, false
+		}
+		if index, ok := seen[label]; ok {
+			return index - 1, false
 		}
 
-		seen[label] = true
+		seen[label] = len(items) + 1
 
 		var tags []CompletionItemTag
 
@@ -697,6 +703,8 @@ func (s *Server) handleCompletion(req Request) {
 			InsertText:       insertText,
 			InsertTextFormat: insertFormat,
 		})
+
+		return len(items) - 1, true
 	}
 
 	if doc.IsFiveMManifest {
@@ -807,7 +815,7 @@ func (s *Server) handleCompletion(req Request) {
 
 		// Attach Data to enable completionItem/resolve.
 		for i := range items {
-			items[i].Data = map[string]any{"uri": uri}
+			items[i].Data = completionData
 		}
 
 		WriteMessage(s.Writer, Response{
@@ -915,7 +923,7 @@ func (s *Server) handleCompletion(req Request) {
 
 							// Attach Data to enable completionItem/resolve.
 							for i := range items {
-								items[i].Data = map[string]any{"uri": uri}
+								items[i].Data = completionData
 							}
 
 							WriteMessage(s.Writer, Response{
@@ -1214,7 +1222,7 @@ func (s *Server) handleCompletion(req Request) {
 		for i := 0; i < 10 && currRec != 0; i++ {
 			validRecs[currRec] = true
 
-			currRec = s.getGlobalAlias(currRec)
+			currRec = s.getGlobalAlias(doc, currRec)
 		}
 
 		if modHash != 0 {
@@ -1554,7 +1562,24 @@ func (s *Server) handleCompletion(req Request) {
 			}
 		}
 	} else {
-		for name, defID := range doc.LocalsAt(offset) {
+		locals := doc.LocalsAt(offset)
+		var globalEntries []*SymbolEntry
+		if s.GlobalIndex != nil {
+			for _, entry := range s.GlobalIndex.AllSymbols() {
+				globalEntries = append(globalEntries, entry)
+			}
+		}
+		capacity := len(items) + 64 + len(luaKeywords) + len(globalEntries)
+		if capacity > 8192 {
+			capacity = 8192
+		}
+		if capacity > cap(items) {
+			reserved := make([]CompletionItem, len(items), capacity)
+			copy(reserved, items)
+			items = reserved
+		}
+
+		for name, defID := range locals {
 			isDep, _ := doc.HasDeprecatedTag(defID)
 
 			kind := VariableCompletion
@@ -1594,8 +1619,9 @@ func (s *Server) handleCompletion(req Request) {
 					}
 
 					isDep, _ := symDoc.HasDeprecatedTag(sym.NodeID)
+					nativeMeta, isNative := fiveMNativeMetadataFor(symDoc, sym.NodeID)
 					detail := "global"
-					if nativeMeta, ok := fiveMNativeMetadataFor(symDoc, sym.NodeID); ok {
+					if isNative {
 						detail = fiveMNativeDetail(nativeMeta)
 					}
 
@@ -1604,14 +1630,9 @@ func (s *Server) handleCompletion(req Request) {
 						sortGroup = "1"
 					}
 
-					addCompletion(label, kind, detail, isDep, sortGroup, insertText, insertFormat)
-					if nativeMeta, ok := fiveMNativeMetadataFor(symDoc, sym.NodeID); ok {
-						for i := len(items) - 1; i >= 0; i-- {
-							if items[i].Label == label {
-								items[i].Documentation = &MarkupContent{Kind: "markdown", Value: fiveMNativeDocumentation(nativeMeta)}
-								break
-							}
-						}
+					itemIndex, _ := addCompletion(label, kind, detail, isDep, sortGroup, insertText, insertFormat)
+					if isNative {
+						items[itemIndex].Documentation = &MarkupContent{Kind: "markdown", Value: fiveMNativeDocumentation(nativeMeta)}
 					}
 
 					return true
@@ -1622,7 +1643,7 @@ func (s *Server) handleCompletion(req Request) {
 		}
 
 		if s.GlobalIndex != nil {
-			for _, entry := range s.GlobalIndex.AllSymbols() {
+			for _, entry := range globalEntries {
 				if entry == nil || entry.Key.ReceiverHash != 0 || entry.Key.PropHash == 0 {
 					continue
 				}
@@ -1669,7 +1690,7 @@ func (s *Server) handleCompletion(req Request) {
 
 	// Attach Data to enable completionItem/resolve.
 	for i := range items {
-		items[i].Data = map[string]any{"uri": uri}
+		items[i].Data = completionData
 	}
 
 	WriteMessage(s.Writer, Response{
@@ -1798,7 +1819,7 @@ func (s *Server) handleSignatureHelp(req Request) {
 	for curr != ast.InvalidNode && int(curr) < len(doc.Tree.Nodes) {
 		node := doc.Tree.Nodes[curr]
 
-		if node.Kind == ast.KindBlock || node.Kind == ast.KindFunctionExpr || node.Kind == ast.KindString {
+		if node.Kind == ast.KindBlock || node.Kind == ast.KindFunctionExpr {
 			break
 		}
 
@@ -1841,15 +1862,13 @@ func (s *Server) handleSignatureHelp(req Request) {
 		exportRes = s.getFiveMExportResource(doc, callNode.Left)
 	}
 
-	resolveID := funcIdentID
-	if callNode.Kind == ast.KindCallExpr {
-		callee := doc.Tree.Nodes[funcIdentID]
-		if callee.Kind == ast.KindMemberExpr && callee.Right != ast.InvalidNode && int(callee.Right) < len(doc.Tree.Nodes) {
-			resolveID = callee.Right
-		}
+	funcNode := doc.Tree.Nodes[funcIdentID]
+	resolveOffset := funcNode.Start
+	if funcNode.Kind == ast.KindMemberExpr && funcNode.Right != ast.InvalidNode && int(funcNode.Right) < len(doc.Tree.Nodes) {
+		resolveOffset = doc.Tree.Nodes[funcNode.Right].Start
 	}
-	ctx := s.resolveSymbolAt(uri, doc.Tree.Nodes[resolveID].Start)
-	if ctx == nil && exportRes == "" {
+	ctx := s.resolveSymbolAt(uri, resolveOffset)
+	if ctx == nil && exportRes == "" && !doc.InferType(funcIdentID).IsCallable() {
 		WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: nil})
 
 		return
@@ -2712,6 +2731,7 @@ func (s *Server) handleDocumentHighlight(req Request) {
 	})
 }
 
+// handleSemanticTokensFull emits token positions in the client's negotiated encoding.
 func (s *Server) handleSemanticTokensFull(req Request) {
 	var params SemanticTokensParams
 
@@ -2888,12 +2908,20 @@ func (s *Server) handleSemanticTokensFull(req Request) {
 		return cmp.Compare(a.Start, b.Start)
 	})
 
+	// Reserve the encoded size in one step. Incremental append growth can round
+	// an ordinary buffer just over maxReusableBufferCapacity, causing the request
+	// cleanup to discard it and repeat the allocation on the next request.
+	if required := len(s.semTokensBuf) * 5; cap(s.semDataBuf) < required {
+		s.semDataBuf = make([]uint32, 0, required)
+	}
 	s.semDataBuf = s.semDataBuf[:0]
 
 	var (
 		prevLine uint32
 		prevCol  uint32
 		lineIdx  uint32
+		lineByte uint32
+		lineCol  uint32
 	)
 
 	lineOffsets := doc.Tree.LineOffsets
@@ -2902,12 +2930,36 @@ func (s *Server) handleSemanticTokensFull(req Request) {
 	for _, t := range s.semTokensBuf {
 		for lineIdx+1 < numLines && lineOffsets[lineIdx+1] <= t.Start {
 			lineIdx++
+			lineByte = lineOffsets[lineIdx]
+			lineCol = 0
 		}
 
 		line := lineIdx
 		col := t.Start - lineOffsets[lineIdx]
-
 		length := t.End - t.Start
+		if s.positionEncoding != "utf-8" {
+			source := doc.Source()
+			for lineByte < t.Start {
+				r, size := utf8.DecodeRune(source[lineByte:t.Start])
+				if r > 0xFFFF && s.positionEncoding == "utf-16" {
+					lineCol += 2
+				} else {
+					lineCol++
+				}
+				lineByte += uint32(size)
+			}
+			col = lineCol
+			length = 0
+			for byteOffset := t.Start; byteOffset < t.End; {
+				r, size := utf8.DecodeRune(source[byteOffset:t.End])
+				if r > 0xFFFF && s.positionEncoding == "utf-16" {
+					length += 2
+				} else {
+					length++
+				}
+				byteOffset += uint32(size)
+			}
+		}
 
 		deltaLine := line - prevLine
 		deltaCol := col
@@ -2931,7 +2983,7 @@ func (s *Server) handleSemanticTokensFull(req Request) {
 	})
 }
 
-// handleSemanticTokensRange provides semantic tokens scoped to a range.
+// handleSemanticTokensRange emits negotiated-encoding positions scoped to a range.
 func (s *Server) handleSemanticTokensRange(req Request) {
 	var params SemanticTokensRangeParams
 
@@ -3121,6 +3173,8 @@ func (s *Server) handleSemanticTokensRange(req Request) {
 		prevLine uint32
 		prevCol  uint32
 		lineIdx  uint32
+		lineByte uint32
+		lineCol  uint32
 	)
 
 	lineOffsets := doc.Tree.LineOffsets
@@ -3129,12 +3183,36 @@ func (s *Server) handleSemanticTokensRange(req Request) {
 	for _, t := range s.semTokensBuf {
 		for lineIdx+1 < numLines && lineOffsets[lineIdx+1] <= t.Start {
 			lineIdx++
+			lineByte = lineOffsets[lineIdx]
+			lineCol = 0
 		}
 
 		line := lineIdx
 		col := t.Start - lineOffsets[lineIdx]
-
 		length := t.End - t.Start
+		if s.positionEncoding != "utf-8" {
+			source := doc.Source()
+			for lineByte < t.Start {
+				r, size := utf8.DecodeRune(source[lineByte:t.Start])
+				if r > 0xFFFF && s.positionEncoding == "utf-16" {
+					lineCol += 2
+				} else {
+					lineCol++
+				}
+				lineByte += uint32(size)
+			}
+			col = lineCol
+			length = 0
+			for byteOffset := t.Start; byteOffset < t.End; {
+				r, size := utf8.DecodeRune(source[byteOffset:t.End])
+				if r > 0xFFFF && s.positionEncoding == "utf-16" {
+					length += 2
+				} else {
+					length++
+				}
+				byteOffset += uint32(size)
+			}
+		}
 
 		deltaLine := line - prevLine
 		deltaCol := col
@@ -3685,6 +3763,15 @@ func (s *Server) handleCallHierarchyIncomingCalls(req Request) {
 			FromRanges: ranges,
 		})
 	}
+	sort.Slice(result, func(i, j int) bool {
+		a, b := result[i].From, result[j].From
+		return callHierarchyItemLess(a, b)
+	})
+	for i := range result {
+		sort.Slice(result[i].FromRanges, func(a, b int) bool {
+			return callHierarchyRangeLess(result[i].FromRanges[a], result[i].FromRanges[b])
+		})
+	}
 
 	if result == nil {
 		result = []CallHierarchyIncomingCall{}
@@ -3801,12 +3888,46 @@ func (s *Server) handleCallHierarchyOutgoingCalls(req Request) {
 			FromRanges: ranges,
 		})
 	}
+	sort.Slice(result, func(i, j int) bool {
+		return callHierarchyItemLess(result[i].To, result[j].To)
+	})
+	for i := range result {
+		sort.Slice(result[i].FromRanges, func(a, b int) bool {
+			return callHierarchyRangeLess(result[i].FromRanges[a], result[i].FromRanges[b])
+		})
+	}
 
 	if result == nil {
 		result = []CallHierarchyOutgoingCall{}
 	}
 
 	WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: result})
+}
+
+func callHierarchyItemLess(a, b CallHierarchyItem) bool {
+	if a.URI != b.URI {
+		return a.URI < b.URI
+	}
+	if callHierarchyRangeLess(a.SelectionRange, b.SelectionRange) {
+		return true
+	}
+	if callHierarchyRangeLess(b.SelectionRange, a.SelectionRange) {
+		return false
+	}
+	return a.Name < b.Name
+}
+
+func callHierarchyRangeLess(a, b Range) bool {
+	if a.Start.Line != b.Start.Line {
+		return a.Start.Line < b.Start.Line
+	}
+	if a.Start.Character != b.Start.Character {
+		return a.Start.Character < b.Start.Character
+	}
+	if a.End.Line != b.End.Line {
+		return a.End.Line < b.End.Line
+	}
+	return a.End.Character < b.End.Character
 }
 
 func (s *Server) buildCallHierarchyItemFromDef(uri string, doc *Document, defID ast.NodeID) CallHierarchyItem {

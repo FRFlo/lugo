@@ -28,8 +28,8 @@ func TestReloadedDocumentReleasesEvictedNodeText(t *testing.T) {
 	doc.Server = server
 	server.Documents[doc.URI] = doc
 	evictClosedDocumentCaches(server)
-	if doc.Source() != nil || len(doc.evictedNodeTextData) == 0 {
-		t.Fatal("setup did not evict the source into compact node text")
+	if doc.Source() == nil || len(doc.evictedNodeTextData) == 0 {
+		t.Fatal("setup did not retain source and compact node text during cache eviction")
 	}
 	if _, ok := doc.evictedGlobalRefs[ast.HashBytes([]byte(staleName))]; !ok {
 		t.Fatal("setup did not retain the stale global hash")

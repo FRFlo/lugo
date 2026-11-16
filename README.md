@@ -157,6 +157,21 @@ You can easily add Lugo as a custom server in your Neovim environment. Since Lug
 
 See [**`example.init.lua`**](example.init.lua) for a complete setup snippet.
 
+### Building from source
+
+Generate the FiveM Lua native stubs before building or testing the server:
+
+```sh
+go run ./cmd/rage-lua-natives -out ./lsp/stdlib
+go test -race ./...
+go build -o lugo .
+```
+
+The generator downloads upstream native metadata. The generated Lua stubs are
+ignored by Git and embedded at build time. A plain `go build` from a clean
+checkout does not download them; such a binary lacks their native definitions
+and may report many additional undefined globals in FiveM projects.
+
 ## CI/CD Pipeline Integration
 
 Lugo can be run directly in your CI/CD pipelines (like GitHub Actions) to enforce the exact same strictness and diagnostics as your local editor. By passing the `--ci` flag along with a configuration JSON file, Lugo bypasses the standard JSON-RPC loop, indexes your workspace and outputs diagnostics in standard GitHub Actions format (`::warning`, `::error`).

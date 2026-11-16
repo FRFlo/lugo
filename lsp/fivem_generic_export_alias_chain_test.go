@@ -122,7 +122,7 @@ exports('identity', identity)
 	h.server.OpenFiles[consumerURI] = true
 	delete(h.server.OpenFiles, providerURI)
 	evictClosedDocumentCaches(h.server)
-	clear(consumer.TypeCache)
+	consumer.TypeCache.Drop()
 	if got := consumer.InferType(resultID); got.Basics != TypeNumber {
 		t.Fatalf("generic export after closed provider eviction = %#v, want number", got)
 	}

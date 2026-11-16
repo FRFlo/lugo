@@ -34,7 +34,7 @@ func TestFiveMGenericExportEvictionVariantsAndReindex(t *testing.T) {
 			checkType := func(want BasicType) {
 				t.Helper()
 				consumer := h.server.Documents[consumerURI]
-				clear(consumer.TypeCache)
+				consumer.TypeCache.Drop()
 				result := findIdentByOccurrence(t, consumer.Tree, "result", 0)
 				if got := consumer.InferType(result); got.Basics != want {
 					t.Fatalf("generic export type = %#v, want %v", got, want)
@@ -68,7 +68,7 @@ func TestFiveMGenericExportAliasCycleAfterEvictionTerminates(t *testing.T) {
 	for range 2 {
 		evictClosedDocumentCaches(h.server)
 		consumer := h.server.Documents[consumerURI]
-		clear(consumer.TypeCache)
+		consumer.TypeCache.Drop()
 		result := findIdentByOccurrence(t, consumer.Tree, "result", 0)
 		if got := consumer.InferType(result); got.Basics == TypeNumber || got.Basics == TypeString {
 			t.Fatalf("cyclic alias resolved after source eviction: %#v", got)

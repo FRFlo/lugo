@@ -614,10 +614,10 @@ func (s *server) capability(method string) func(context.Context, *mcp.CallToolRe
 		case "textDocument/inlayHint", "textDocument/semanticTokens/range":
 			params["range"] = map[string]any{"start": map[string]int{"line": args.Line, "character": args.Character}, "end": map[string]int{"line": args.EndLine, "character": args.EndCharacter}}
 		case "textDocument/formatting":
-			params["options"] = args.Options
+			params["options"] = formattingOptions(args.Options)
 		case "textDocument/rangeFormatting":
 			params["range"] = map[string]any{"start": map[string]int{"line": args.Line, "character": args.Character}, "end": map[string]int{"line": args.EndLine, "character": args.EndCharacter}}
-			params["options"] = args.Options
+			params["options"] = formattingOptions(args.Options)
 		case "textDocument/codeAction":
 			params["range"] = map[string]any{"start": map[string]int{"line": args.Line, "character": args.Character}, "end": map[string]int{"line": args.EndLine, "character": args.EndCharacter}}
 			params["context"] = args.Context
@@ -634,6 +634,17 @@ func (s *server) capability(method string) func(context.Context, *mcp.CallToolRe
 		}
 		return textResult(string(result)), nil
 	}
+}
+
+// formattingOptions supplies editor-friendly defaults only when MCP callers
+// omit the optional options object. Explicit values are passed through so the
+// LSP can continue to reject invalid formatting options.
+func formattingOptions(options map[string]any) map[string]any {
+	if options != nil {
+		return options
+	}
+
+	return map[string]any{"tabSize": 4, "insertSpaces": true}
 }
 
 func (s *server) diagnostics(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -857,41 +868,124 @@ func (s *server) fivemEvents(_ context.Context, req *mcp.CallToolRequest) (*mcp.
 	if err := json.Unmarshal(req.Params.Arguments, &args); err != nil {
 		return nil, err
 	}
-	result := make([]map[string]any, 0)
+	type eventRow struct {
+		resource string
+		name     string
+		kind     int
+		uri      string
+		kindSort string
+	}
+	result := make([]eventRow, 0)
+	// The resource graph's handler/trigger slices are not populated by the
+	// current indexer. Document.FiveMEvents is the canonical parsed source.
+	// Hold the workspace snapshot stable while matching documents to resources;
+	// reindex takes the write lock before replacing these maps and documents.
+	s.workspaceMu.RLock()
 	if graph := s.workspace.FiveMResourceGraph; graph != nil {
-		for name, node := range graph.ByName {
-			if args.Resource != "" && args.Resource != name || node == nil {
+		for uri, doc := range s.workspace.Documents {
+			if doc == nil {
 				continue
 			}
-			events := append(append(append([]lsp.FiveMEventRef{}, node.ServerHandlers...), node.ClientHandlers...), node.SharedHandlers...)
-			events = append(events, node.ServerTriggers...)
-			events = append(events, node.ClientTriggers...)
-			events = append(events, node.SharedTriggers...)
-			for _, event := range events {
-				result = append(result, map[string]any{"resource": name, "name": event.Name, "uri": event.URI, "kind": event.Kind})
+			node := fiveMResourceNodeForURI(graph, uri)
+			if node == nil || node.Resource.Name == "" || args.Resource != "" && args.Resource != node.Resource.Name {
+				continue
+			}
+			for _, event := range doc.FiveMEvents {
+				kind := int(event.Kind)
+				result = append(result, eventRow{resource: node.Resource.Name, name: event.Name, uri: uri, kind: kind, kindSort: fmt.Sprint(kind)})
 			}
 		}
 	}
+	s.workspaceMu.RUnlock()
 	sort.Slice(result, func(i, j int) bool {
-		for _, key := range []string{"resource", "name", "kind", "uri"} {
-			left, right := fmt.Sprint(result[i][key]), fmt.Sprint(result[j][key])
-			if left != right {
-				return left < right
-			}
+		a, b := result[i], result[j]
+		if a.resource != b.resource {
+			return a.resource < b.resource
+		}
+		if a.name != b.name {
+			return a.name < b.name
+		}
+		if a.kindSort != b.kindSort {
+			return a.kindSort < b.kindSort
+		}
+		if a.uri != b.uri {
+			return a.uri < b.uri
 		}
 		return false
 	})
-	data, err := marshalFivemList(result, args, func(item map[string]any) map[string]any {
-		return map[string]any{"resource": item["resource"], "name": item["name"], "kind": item["kind"]}
-	})
+	start := 0
+	if args.Cursor != "" {
+		if _, err := fmt.Sscanf(args.Cursor, "%d", &start); err != nil || start < 0 {
+			return nil, fmt.Errorf("cursor must be a non-negative integer")
+		}
+	}
+	limit := len(result)
+	if args.Limit != nil {
+		if *args.Limit < 1 {
+			return nil, fmt.Errorf("limit must be at least 1")
+		}
+		limit = *args.Limit
+	}
+	if start > len(result) {
+		start = len(result)
+	}
+	end := len(result)
+	if limit < len(result)-start {
+		end = start + limit
+	}
+	page := make([]map[string]any, end-start)
+	for i, row := range result[start:end] {
+		page[i] = map[string]any{"resource": row.resource, "name": row.name, "uri": row.uri, "kind": row.kind}
+	}
+	if args.Detail != nil && !*args.Detail {
+		for i, row := range result[start:end] {
+			page[i] = map[string]any{"resource": row.resource, "name": row.name, "kind": row.kind}
+		}
+	}
+	if args.Limit == nil && args.Cursor == "" && args.Detail == nil {
+		data, err := json.MarshalIndent(page, "", "  ")
+		if err != nil {
+			return nil, err
+		}
+		return structuredResult(string(data)), nil
+	}
+	next := ""
+	if end < len(result) {
+		next = fmt.Sprintf("%d", end)
+	}
+	data, err := json.MarshalIndent(map[string]any{"items": page, "nextCursor": next, "truncated": end < len(result), "hasMore": end < len(result), "total": len(result)}, "", "  ")
 	if err != nil {
 		return nil, err
 	}
 	return structuredResult(string(data)), nil
 }
 
+// fiveMResourceNodeForURI finds the nearest resource root by walking URI
+// parents. Resource roots and documents use the same URI representation, so
+// this preserves escaped path segments and avoids decoding slash characters
+// that belong to a URI component. Walking from the document upward also makes
+// a nested resource win over its parent in O(path depth) map lookups.
+func fiveMResourceNodeForURI(graph *lsp.FiveMResourceGraph, uri string) *lsp.FiveMResourceGraphNode {
+	if graph == nil {
+		return nil
+	}
+	for candidate := uri; candidate != ""; {
+		if node := graph.ByRoot[candidate]; node != nil && node.Resource != nil {
+			return node
+		}
+		slash := strings.LastIndexByte(candidate, '/')
+		if slash < 0 {
+			break
+		}
+		candidate = candidate[:slash]
+	}
+	return nil
+}
+
 func (s *server) fivemContracts(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	s.workspaceMu.RLock()
 	snapshot := s.workspace.MCPFiveMContracts()
+	s.workspaceMu.RUnlock()
 	result := fiveMContractOutput{
 		Symbols:   make([]fiveMContractSymbolOutput, len(snapshot.Symbols)),
 		Links:     make([]fiveMContractLinkOutput, len(snapshot.Links)),
@@ -936,6 +1030,7 @@ func (s *server) fivemExports(_ context.Context, req *mcp.CallToolRequest) (*mcp
 		return nil, err
 	}
 	result := make([]map[string]any, 0)
+	s.workspaceMu.RLock()
 	if graph := s.workspace.FiveMResourceGraph; graph != nil {
 		for name, node := range graph.ByName {
 			if args.Resource != "" && args.Resource != name || node == nil || node.Resource == nil {
@@ -944,6 +1039,7 @@ func (s *server) fivemExports(_ context.Context, req *mcp.CallToolRequest) (*mcp
 			result = append(result, map[string]any{"resource": name, "client": node.Resource.ClientExports, "server": node.Resource.ServerExports})
 		}
 	}
+	s.workspaceMu.RUnlock()
 	sort.Slice(result, func(i, j int) bool { return result[i]["resource"].(string) < result[j]["resource"].(string) })
 	data, err := marshalFivemList(result, args, func(item map[string]any) map[string]any {
 		return map[string]any{"resource": item["resource"]}
@@ -975,9 +1071,9 @@ func marshalFivemList(items []map[string]any, args fivemArgs, compact func(map[s
 	if start > len(items) {
 		start = len(items)
 	}
-	end := start + limit
-	if end > len(items) {
-		end = len(items)
+	end := len(items)
+	if limit < len(items)-start {
+		end = start + limit
 	}
 	page := make([]map[string]any, end-start)
 	copy(page, items[start:end])
@@ -1040,6 +1136,9 @@ func (s *server) captureFreshness() (workspaceFreshness, error) {
 
 func workspaceSourceHash(root string) (string, error) {
 	var entries []string
+	buffer := make([]byte, 256*1024)
+	fileHash := sha256.New()
+	var digest [sha256.Size]byte
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -1048,15 +1147,30 @@ func workspaceSourceHash(root string) (string, error) {
 			return nil
 		}
 		if strings.EqualFold(filepath.Ext(path), ".lua") {
-			data, readErr := os.ReadFile(path)
+			file, readErr := os.Open(path)
 			if readErr != nil {
 				return readErr
 			}
+			fileHash.Reset()
+			for {
+				n, readErr := file.Read(buffer)
+				if n > 0 {
+					_, _ = fileHash.Write(buffer[:n])
+				}
+				if readErr == io.EOF {
+					break
+				}
+				if readErr != nil {
+					_ = file.Close()
+					return readErr
+				}
+			}
+			_ = file.Close()
 			rel, relErr := filepath.Rel(root, path)
 			if relErr != nil {
 				return relErr
 			}
-			entries = append(entries, filepath.ToSlash(rel)+"\x00"+sourceHash(data))
+			entries = append(entries, filepath.ToSlash(rel)+"\x00"+hex.EncodeToString(fileHash.Sum(digest[:0])))
 		}
 		return nil
 	})

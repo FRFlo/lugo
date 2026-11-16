@@ -32,13 +32,13 @@ func TestSolReviewCandidateRebuildAfterEviction(t *testing.T) {
 		t.Fatal("missing initial candidate")
 	}
 	evictClosedDocumentCaches(s)
-	if doc.Source() != nil {
-		t.Fatal("closed document retained its source after eviction")
+	if doc.Source() == nil {
+		t.Fatal("closed-document cache eviction must preserve source for AST and resolver offsets")
 	}
 	s.invalidateMetatableIndexes()
 	candidates := s.newIndexWriteCandidates("answer")
 	if got := len(candidates); got != 1 {
-		t.Fatalf("rebuild after source eviction: got %d candidates, want 1", got)
+		t.Fatalf("rebuild after cache eviction: got %d candidates, want 1", got)
 	}
 	if got := string(candidates[0].doc.nodeSource(candidates[0].node)); got != "answer" {
 		t.Fatalf("rebuilt candidate name = %q, want answer", got)

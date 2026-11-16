@@ -210,7 +210,7 @@ local result = storage.answer
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		doc.TypeCache[member] = TypeSet{}
+		doc.TypeCache.Invalidate(member)
 		_ = doc.InferType(member)
 	}
 }

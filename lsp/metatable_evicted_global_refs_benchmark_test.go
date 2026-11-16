@@ -24,8 +24,8 @@ func TestEvictionRetainsGlobalReferenceHashes(t *testing.T) {
 	evictClosedDocumentCaches(s)
 	runtime.GC()
 	runtime.KeepAlive(s)
-	if doc.Source() != nil {
-		t.Fatal("source must be released after eviction")
+	if doc.Source() == nil {
+		t.Fatal("closed-document cache eviction must preserve source for AST and resolver offsets")
 	}
 	if got := len(doc.evictedGlobalRefs); got != names {
 		t.Fatalf("retained global reference hashes = %d, want %d", got, names)

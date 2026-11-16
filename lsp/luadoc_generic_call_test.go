@@ -190,7 +190,7 @@ local result = identity(42)
 	b.Run("cold", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
-			doc.TypeCache = nil
+			doc.TypeCache.Drop()
 			doc.Inferring = nil
 			_ = doc.InferType(result)
 		}

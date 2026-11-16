@@ -1,6 +1,7 @@
 package lsp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -213,20 +214,44 @@ func (s *Server) buildDebugExport(params DebugExportParams) (string, error) {
 	}
 
 	docs := s.sortedDebugExportDocuments()
-	payload := debugExportPayload{
-		Metadata: debugExportMetadata{
-			ServerVersion:    s.Version,
-			RootURI:          s.RootURI,
-			WorkspaceFolders: slices.Clone(s.WorkspaceFolders),
-			Categories:       categories,
-			DocumentCount:    len(docs),
-			IsIndexing:       s.IsIndexing,
-		},
-		Documents: make([]debugExportDocument, 0, len(docs)),
+	metadata := debugExportMetadata{
+		ServerVersion:    s.Version,
+		RootURI:          s.RootURI,
+		WorkspaceFolders: slices.Clone(s.WorkspaceFolders),
+		Categories:       categories,
+		DocumentCount:    len(docs),
+		IsIndexing:       s.IsIndexing,
+	}
+
+	// MarshalIndent on the complete payload retains every exported token, AST
+	// node, and global symbol until encoding finishes. Build the same JSON in
+	// order, retaining only the output and the current document. The writer
+	// refuses the first byte beyond MaxFileSize so oversized exports stop early.
+	var output bytes.Buffer
+	writer := debugExportLimitedWriter{buffer: &output, limit: s.MaxFileSize}
+	writeIndented := func(value any, prefix, indent string) error {
+		encoded, err := json.MarshalIndent(value, prefix, indent)
+		if err != nil {
+			return err
+		}
+		_, err = writer.Write(encoded)
+		return err
+	}
+	if _, err := writer.Write([]byte("{\n  \"metadata\": ")); err != nil {
+		return "", debugExportSizeError(s.MaxFileSize)
+	}
+	if err := writeIndented(metadata, "  ", "  "); err != nil {
+		if err == errDebugExportTooLarge {
+			return "", debugExportSizeError(s.MaxFileSize)
+		}
+		return "", err
+	}
+	if _, err := writer.Write([]byte(",\n  \"documents\": [")); err != nil {
+		return "", debugExportSizeError(s.MaxFileSize)
 	}
 
 	omittedSources := 0
-	for _, doc := range docs {
+	for i, doc := range docs {
 		source, omitted := debugExportDocumentSource(doc)
 		if omitted {
 			omittedSources++
@@ -234,25 +259,191 @@ func (s *Server) buildDebugExport(params DebugExportParams) (string, error) {
 		if s.MaxFileSize > 0 && int64(len(source)) > s.MaxFileSize {
 			return "", fmt.Errorf("document %s exceeds MaxFileSize (%d bytes)", doc.URI, s.MaxFileSize)
 		}
-		payload.Documents = append(payload.Documents, s.exportDebugDocument(doc, source, selected))
+		if i > 0 {
+			if _, err := writer.Write([]byte(",")); err != nil {
+				return "", debugExportSizeError(s.MaxFileSize)
+			}
+		}
+		if _, err := writer.Write([]byte("\n")); err != nil {
+			return "", debugExportSizeError(s.MaxFileSize)
+		}
+		if selected[debugExportCategoryAST] && doc.Tree != nil {
+			if debugExportDefinitelyExceedsLimit(s.MaxFileSize, output.Len(), int64(len(doc.Tree.Nodes)), 40) || debugExportASTLowerBound(doc.Tree, source, s.MaxFileSize, output.Len()) {
+				return "", debugExportSizeError(s.MaxFileSize)
+			}
+		}
+		if selected[debugExportCategoryTokens] || selected[debugExportCategoryIdentifiers] {
+			if _, tooLarge := debugExportTokenLowerBound(source, selected[debugExportCategoryTokens], s.MaxFileSize, output.Len()); tooLarge {
+				return "", debugExportSizeError(s.MaxFileSize)
+			}
+		}
+		docJSON, err := json.MarshalIndent(s.exportDebugDocument(doc, source, selected), "", "  ")
+		if err == nil {
+			docJSON = indentDebugExportJSON(docJSON, "    ")
+			_, err = writer.Write(docJSON)
+		}
+		if err != nil {
+			if err == errDebugExportTooLarge {
+				return "", debugExportSizeError(s.MaxFileSize)
+			}
+			return "", err
+		}
+	}
+	if len(docs) > 0 {
+		if _, err := writer.Write([]byte("\n  ")); err != nil {
+			return "", debugExportSizeError(s.MaxFileSize)
+		}
+	}
+	if _, err := writer.Write([]byte("]")); err != nil {
+		return "", debugExportSizeError(s.MaxFileSize)
 	}
 	if omittedSources > 0 {
 		RecordTelemetry(context.Background(), "lugo.debug_export.source_omitted", map[string]any{"count": omittedSources})
 	}
 
 	if selected[debugExportCategoryGlobalIndex] {
-		payload.GlobalIndex = s.exportDebugGlobalIndex()
+		globalSymbolCount, globalMinimumBytes := debugExportGlobalIndexMinimumBytes(s.GlobalIndex)
+		if debugExportDefinitelyExceedsLimit(s.MaxFileSize, output.Len()+len(",\n  \"globalIndex\": "), globalSymbolCount, 20) {
+			return "", debugExportSizeError(s.MaxFileSize)
+		}
+		if s.MaxFileSize > 0 && int64(output.Len()+len(",\n  \"globalIndex\": "))+globalMinimumBytes > s.MaxFileSize {
+			return "", debugExportSizeError(s.MaxFileSize)
+		}
+		if globalSymbolCount > 0 {
+			if _, err := writer.Write([]byte(",\n  \"globalIndex\": ")); err != nil {
+				return "", debugExportSizeError(s.MaxFileSize)
+			}
+			if err := writeIndented(s.exportDebugGlobalIndex(), "  ", "  "); err != nil {
+				if err == errDebugExportTooLarge {
+					return "", debugExportSizeError(s.MaxFileSize)
+				}
+				return "", err
+			}
+		}
 	}
+	if _, err := writer.Write([]byte("\n}")); err != nil {
+		return "", debugExportSizeError(s.MaxFileSize)
+	}
+	return output.String(), nil
+}
 
-	b, err := json.MarshalIndent(payload, "", "  ")
-	if err != nil {
-		return "", err
-	}
-	if s.MaxFileSize > 0 && int64(len(b)) > s.MaxFileSize {
-		return "", fmt.Errorf("debug export exceeds MaxFileSize (%d bytes)", s.MaxFileSize)
-	}
+func debugExportDefinitelyExceedsLimit(limit int64, currentBytes int, count, minimumBytesPerEntry int64) bool {
+	return limit > 0 && count > 0 && count > (limit-int64(currentBytes))/minimumBytesPerEntry
+}
 
-	return string(b), nil
+func debugExportTokenLowerBound(source []byte, includeAll bool, limit int64, currentBytes int) (int64, bool) {
+	if limit <= 0 {
+		return 0, false
+	}
+	lex := lexer.New(source)
+	var count, escapedExtra int64
+	for {
+		tok := lex.Next()
+		if tok.Kind == token.EOF {
+			break
+		}
+		if !includeAll && tok.Kind != token.Ident {
+			continue
+		}
+		count++
+		if includeAll {
+			for _, b := range tok.Text(source) {
+				if b == '<' || b == '>' || b == '&' {
+					escapedExtra += 5
+				}
+			}
+		}
+		// Mandatory JSON fields alone require at least 40 bytes per entry.
+		if debugExportDefinitelyExceedsLimit(limit, currentBytes, count, 40) || int64(currentBytes)+count*40+escapedExtra > limit {
+			return count, true
+		}
+	}
+	return count, false
+}
+
+func debugExportASTLowerBound(tree *ast.Tree, source []byte, limit int64, currentBytes int) bool {
+	if limit <= 0 {
+		return false
+	}
+	minimum := int64(currentBytes) + int64(len(tree.Nodes))*40
+	for _, node := range tree.Nodes {
+		if node.Kind == ast.KindIdent && node.Start <= node.End && node.End <= uint32(len(source)) {
+			// JSON string escaping never emits fewer bytes than valid UTF-8
+			// source bytes; this excludes quotes and field syntax, so is only
+			// a lower bound.
+			minimum += int64(node.End - node.Start)
+			if minimum > limit {
+				return true
+			}
+		}
+	}
+	return minimum > limit
+}
+
+func debugExportGlobalIndexMinimumBytes(index *GlobalIndex) (int64, int64) {
+	if index == nil {
+		return 0, 0
+	}
+	index.mu.RLock()
+	defer index.mu.RUnlock()
+	var count, minimumBytes int64
+	for resourceName, resource := range index.Resources {
+		if resource == nil {
+			continue
+		}
+		for _, table := range []SymbolTable{resource.Client, resource.Server, resource.Shared} {
+			for _, entry := range table {
+				if entry != nil {
+					count++
+					// The resource, name, and URI strings are mandatory in the
+					// exported object. Their raw UTF-8 byte lengths are a lower
+					// bound on the JSON representation; optional strings only
+					// increase it.
+					minimumBytes += 40 + int64(len(resourceName)) + int64(len(entry.Name)) + int64(len(entry.URI))
+				}
+			}
+		}
+	}
+	return count, minimumBytes
+}
+
+func debugExportGlobalSymbolCount(index *GlobalIndex) int64 {
+	count, _ := debugExportGlobalIndexMinimumBytes(index)
+	return count
+}
+
+func indentDebugExportJSON(data []byte, prefix string) []byte {
+	if len(data) == 0 || prefix == "" {
+		return data
+	}
+	var indented bytes.Buffer
+	indented.Grow(len(data) + len(prefix)*8)
+	indented.WriteString(prefix)
+	for _, b := range data {
+		indented.WriteByte(b)
+		if b == '\n' {
+			indented.WriteString(prefix)
+		}
+	}
+	return indented.Bytes()
+}
+
+var errDebugExportTooLarge = fmt.Errorf("debug export exceeds output limit")
+
+type debugExportLimitedWriter struct {
+	buffer *bytes.Buffer
+	limit  int64
+}
+
+func (w debugExportLimitedWriter) Write(p []byte) (int, error) {
+	if w.limit > 0 && int64(w.buffer.Len())+int64(len(p)) > w.limit {
+		return 0, errDebugExportTooLarge
+	}
+	return w.buffer.Write(p)
+}
+
+func debugExportSizeError(limit int64) error {
+	return fmt.Errorf("debug export exceeds MaxFileSize (%d bytes)", limit)
 }
 
 func normalizeDebugExportCategories(categories []string) []string {
@@ -390,7 +581,10 @@ func recordDebugExportFailure(stage string, err error) {
 
 func exportDebugTokens(source []byte, identifiersOnly bool) []debugExportToken {
 	lex := lexer.New(source)
-	tokens := make([]debugExportToken, 0, len(source)/4)
+	// Source bytes can greatly overestimate token count, especially for a
+	// large comment or whitespace-only document.
+	capacity := min(len(source)/64, 256)
+	tokens := make([]debugExportToken, 0, capacity)
 	for {
 		tok := lex.Next()
 		if tok.Kind == token.EOF {

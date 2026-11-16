@@ -279,14 +279,14 @@ setmetatable(object, { __index = base })
 func TestMetatableTypeInvalidationHandlesDependencyCycles(t *testing.T) {
 	server := NewServer("test")
 	for _, uri := range []string{"a", "b", "c"} {
-		server.Documents[uri] = &Document{TypeCache: []TypeSet{{Basics: TypeNumber}}, Inferring: []bool{true}}
+		server.Documents[uri] = &Document{TypeCache: typeCache{nodes: 1}, Inferring: []bool{true}}
 	}
 	server.trackMetatableTypeDependency("a", "b")
 	server.trackMetatableTypeDependency("b", "c")
 	server.trackMetatableTypeDependency("c", "a")
 	server.invalidateMetatableIndexes("a")
 	for _, uri := range []string{"a", "b", "c"} {
-		if got := server.Documents[uri].TypeCache[0].Basics; got != TypeUnknown {
+		if got := server.Documents[uri].TypeCache.Get(0).Basics; got != TypeUnknown {
 			t.Fatalf("cache for %s after cyclic invalidation = %#x, want unknown", uri, got)
 		}
 	}

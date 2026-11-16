@@ -28,8 +28,8 @@ func genericEvictionMemoryFixture(t testing.TB, functions, proseBytes int) (*Ser
 func TestGenericEvictionRetainsOnlyContractsAndReleasesOnUpdate(t *testing.T) {
 	s, doc := genericEvictionMemoryFixture(t, 1, 1<<20)
 	evictClosedDocumentCaches(s)
-	if doc.Source() != nil || doc.LuaDocCache != nil || doc.TypeCache != nil {
-		t.Fatal("source and dense document caches must be released")
+	if doc.Source() == nil || doc.LuaDocCache != nil || !doc.TypeCache.Empty() {
+		t.Fatal("eviction must preserve source and release dense document caches")
 	}
 	if len(doc.evictedGenericContracts) != 1 || len(doc.evictedNodeTextData) > 64 {
 		t.Fatalf("generic eviction retained excessive state: contracts=%d text=%d", len(doc.evictedGenericContracts), len(doc.evictedNodeTextData))

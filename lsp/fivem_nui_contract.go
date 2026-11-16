@@ -1,6 +1,7 @@
 package lsp
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -54,7 +55,14 @@ var (
 	nuiMessageRE     = regexp.MustCompile(`(?m)\bSendNUIMessage\s*\(\s*\{[^}]*?\b(action|type)\s*=\s*['"]([^'"]+)['"]`)
 	// These patterns cover the conventional fetch/$.post NUI callback forms.
 	nuiCallbackJSRE = regexp.MustCompile(`(?i)(?:GetParentResourceName\(\)|['"]https?://[^'"]+)/(?:[^/"'` + "`" + `]*?/)?([A-Za-z_][A-Za-z0-9_:-]*)['"` + "`" + `]`)
-	nuiMessageJSRE  = regexp.MustCompile(`(?i)\b(?:event|e)\.data\.(?:action|type)\s*={1,3}\s*['"]([^'"]+)['"]`)
+	// Keep the template spelling out of the general callback regexp. Almost all
+	// assets lack template interpolation, and this conditional scan avoids
+	// adding another branch to the regexp's hot path.
+	nuiCallbackJSTemplateRE = regexp.MustCompile(`(?i)\$\{\s*GetParentResourceName\(\)\s*\}/(?:[^/"'` + "`" + `]*?/)?([A-Za-z_][A-Za-z0-9_:-]*)['"` + "`" + `]`)
+	nuiCallbackJSCombinedRE = regexp.MustCompile(`(?i)(?:GetParentResourceName\(\)|\$\{\s*GetParentResourceName\(\)\s*\}|['"]https?://[^'"]+)/(?:[^/"'` + "`" + `]*?/)?([A-Za-z_][A-Za-z0-9_:-]*)['"` + "`" + `]`)
+	nuiMessageJSRE          = regexp.MustCompile(`(?i)\b(?:event|e)\.data\.(?:action|type)\s*={1,3}\s*['"]([^'"]+)['"]`)
+	nuiCallbackJSAnchoredRE = regexp.MustCompile(`^(?:` + nuiCallbackJSCombinedRE.String() + `)`)
+	nuiMessageJSAnchoredRE  = regexp.MustCompile(`^(?:` + nuiMessageJSRE.String() + `)`)
 )
 
 func (s *Server) nuiResourceFiles(doc *Document) []nuiContractFile {
@@ -141,11 +149,16 @@ func (s *Server) collectFiveMNUIResourceFacts() map[string]nuiResourceFacts {
 		if !ok {
 			continue
 		}
-		for _, m := range nuiCallbackLuaRE.FindAllSubmatchIndex(doc.Source(), -1) {
-			resource.callbacks[string(doc.Source()[m[2]:m[3]])] = true
+		src := doc.Source()
+		if bytes.Contains(src, []byte("RegisterNUICallback")) {
+			for _, m := range nuiCallbackLuaRE.FindAllSubmatchIndex(src, -1) {
+				resource.callbacks[string(src[m[2]:m[3]])] = true
+			}
 		}
-		for _, m := range nuiMessageRE.FindAllSubmatchIndex(doc.Source(), -1) {
-			resource.messages[string(doc.Source()[m[4]:m[5]])] = true
+		if bytes.Contains(src, []byte("SendNUIMessage")) {
+			for _, m := range nuiMessageRE.FindAllSubmatchIndex(src, -1) {
+				resource.messages[string(src[m[4]:m[5]])] = true
+			}
 		}
 		resources[root] = resource
 	}
@@ -153,15 +166,149 @@ func (s *Server) collectFiveMNUIResourceFacts() map[string]nuiResourceFacts {
 }
 
 func nuiJSNames(src []byte, html bool) []nuiContractName {
-	var out []nuiContractName
-	for _, m := range nuiCallbackJSRE.FindAllSubmatchIndex(src, -1) {
-		off := m[2]
-		out = append(out, nuiContractName{name: string(src[m[2]:m[3]]), offset: off})
+	resourceNamePresent := nuiContainsFolded(src, "getparentresourcename")
+	longSPresent := bytes.Contains(src, []byte("ſ"))
+	// The historical split/template selection is subtle when both expressions
+	// match. Retain it for actual template callback matches, while allowing
+	// unrelated interpolation syntax through the candidate scan.
+	if bytes.Contains(src, []byte("${")) && (resourceNamePresent || longSPresent) && nuiCallbackJSTemplateRE.Match(src) {
+		return nuiJSNamesRegex(src)
 	}
-	for _, m := range nuiMessageJSRE.FindAllSubmatchIndex(src, -1) {
-		out = append(out, nuiContractName{name: string(src[m[2]:m[3]]), offset: m[2]})
+	var out []nuiContractName
+	var budget int64 = int64(len(src)) * 64
+	for pos := 0; pos < len(src); {
+		next := bytes.IndexAny(src[pos:], "'\"Gg$")
+		if next < 0 {
+			break
+		}
+		pos += next
+		possible := false
+		if pos+1 < len(src) {
+			switch src[pos] {
+			case '\'', '"':
+				possible = nuiHasFoldedPrefix(src[pos+1:], "http")
+			case 'g', 'G':
+				// Stop before the s that may be Unicode long s in the regexp fold.
+				possible = nuiHasFoldedPrefix(src[pos:], "getparentre")
+			case '$':
+				possible = src[pos+1] == '{'
+			}
+		}
+		if possible {
+			end := len(src)
+			if quote := bytes.IndexAny(src[pos+1:], "'\""); quote >= 0 {
+				end = pos + 1 + quote + 1
+			}
+			cost := int64(end - pos)
+			if cost > budget {
+				return nuiJSNamesRegex(src)
+			}
+			budget -= cost
+			if match := nuiCallbackJSAnchoredRE.FindSubmatchIndex(src[pos:end]); match != nil {
+				out = append(out, nuiContractName{name: string(src[pos+match[2] : pos+match[3]]), offset: pos + match[2]})
+				pos += match[1]
+				continue
+			}
+		}
+		pos++
+	}
+	for pos := 0; pos < len(src); {
+		next := bytes.IndexAny(src[pos:], "eE")
+		if next < 0 {
+			break
+		}
+		pos += next
+		word := false
+		if pos > 0 {
+			c := src[pos-1]
+			word = c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_'
+		}
+		if !word && (nuiHasFoldedPrefix(src[pos:], "e.data.") || nuiHasFoldedPrefix(src[pos:], "event.data.")) {
+			cost := int64(len(src) - pos)
+			if cost > budget {
+				return nuiJSNamesRegex(src)
+			}
+			budget -= cost
+			if match := nuiMessageJSAnchoredRE.FindSubmatchIndex(src[pos:]); match != nil {
+				out = append(out, nuiContractName{name: string(src[pos+match[2] : pos+match[3]]), offset: pos + match[2]})
+				pos += match[1]
+				continue
+			}
+		}
+		pos++
 	}
 	return out
+}
+
+// nuiJSNamesRegex is the full-source fallback for the bounded candidate scan.
+func nuiJSNamesRegex(src []byte) []nuiContractName {
+	var out []nuiContractName
+	var callbacks []nuiContractName
+	resourceNamePresent := nuiContainsFolded(src, "getparentresourcename")
+	longSPresent := bytes.Contains(src, []byte("ſ"))
+	if resourceNamePresent || nuiContainsFolded(src, "http") || longSPresent {
+		for _, m := range nuiCallbackJSRE.FindAllSubmatchIndex(src, -1) {
+			callbacks = append(callbacks, nuiContractName{name: string(src[m[2]:m[3]]), offset: m[2]})
+		}
+	}
+	var templateCallbacks []nuiContractName
+	if bytes.Contains(src, []byte("${")) && (resourceNamePresent || longSPresent) {
+		for _, m := range nuiCallbackJSTemplateRE.FindAllSubmatchIndex(src, -1) {
+			templateCallbacks = append(templateCallbacks, nuiContractName{name: string(src[m[2]:m[3]]), offset: m[2]})
+		}
+	}
+	if len(callbacks) == 0 {
+		callbacks = templateCallbacks
+	} else if len(templateCallbacks) != 0 {
+		callbacks = callbacks[:0]
+		for _, m := range nuiCallbackJSCombinedRE.FindAllSubmatchIndex(src, -1) {
+			callbacks = append(callbacks, nuiContractName{name: string(src[m[2]:m[3]]), offset: m[2]})
+		}
+	}
+	out = append(out, callbacks...)
+	if nuiContainsFolded(src, "event.data.") || nuiContainsFolded(src, "e.data.") {
+		for _, m := range nuiMessageJSRE.FindAllSubmatchIndex(src, -1) {
+			out = append(out, nuiContractName{name: string(src[m[2]:m[3]]), offset: m[2]})
+		}
+	}
+	return out
+}
+
+func nuiHasFoldedPrefix(src []byte, prefix string) bool {
+	if len(src) < len(prefix) {
+		return false
+	}
+	for i := range len(prefix) {
+		c := src[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		if c != prefix[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func nuiContainsFolded(src []byte, needle string) bool {
+	if len(needle) == 0 || len(needle) > len(src) {
+		return false
+	}
+	for i := 0; i <= len(src)-len(needle); i++ {
+		for j := range len(needle) {
+			b := src[i+j]
+			if b >= 'A' && b <= 'Z' {
+				b += 'a' - 'A'
+			}
+			if b != needle[j] {
+				break
+			}
+			if j == len(needle)-1 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *Server) buildFiveMNUIContractDiagnostics(doc *Document) []Diagnostic {
@@ -183,11 +330,16 @@ func (s *Server) buildFiveMNUIContractDiagnostics(doc *Document) []Diagnostic {
 			if d == nil || s.getDocResourceRoot(d) != root {
 				continue
 			}
-			for _, m := range nuiCallbackLuaRE.FindAllSubmatchIndex(d.Source(), -1) {
-				callbacks[string(d.Source()[m[2]:m[3]])] = true
+			src := d.Source()
+			if bytes.Contains(src, []byte("RegisterNUICallback")) {
+				for _, m := range nuiCallbackLuaRE.FindAllSubmatchIndex(src, -1) {
+					callbacks[string(src[m[2]:m[3]])] = true
+				}
 			}
-			for _, m := range nuiMessageRE.FindAllSubmatchIndex(d.Source(), -1) {
-				messages[string(d.Source()[m[4]:m[5]])] = true
+			if bytes.Contains(src, []byte("SendNUIMessage")) {
+				for _, m := range nuiMessageRE.FindAllSubmatchIndex(src, -1) {
+					messages[string(src[m[4]:m[5]])] = true
+				}
 			}
 		}
 	}
@@ -197,16 +349,21 @@ func (s *Server) buildFiveMNUIContractDiagnostics(doc *Document) []Diagnostic {
 	var out []Diagnostic
 	// Diagnostics for the current Lua document are missing contracts.
 	if strings.EqualFold(filepath.Ext(doc.Path), ".lua") {
-		for _, m := range nuiCallbackLuaRE.FindAllSubmatchIndex(doc.Source(), -1) {
-			name := string(doc.Source()[m[2]:m[3]])
-			if !hasNUIName(files, name, false) {
-				out = append(out, nuiDiag(doc.Source(), m[2], m[3], "fivem-nui-missing-handler", fmt.Sprintf("NUI callback '%s' has no local JavaScript handler.", name)))
+		src := doc.Source()
+		if bytes.Contains(src, []byte("RegisterNUICallback")) {
+			for _, m := range nuiCallbackLuaRE.FindAllSubmatchIndex(src, -1) {
+				name := string(src[m[2]:m[3]])
+				if !hasNUIName(files, name, false) {
+					out = append(out, nuiDiag(src, m[2], m[3], "fivem-nui-missing-handler", fmt.Sprintf("NUI callback '%s' has no local JavaScript handler.", name)))
+				}
 			}
 		}
-		for _, m := range nuiMessageRE.FindAllSubmatchIndex(doc.Source(), -1) {
-			name := string(doc.Source()[m[4]:m[5]])
-			if !hasNUIName(files, name, true) {
-				out = append(out, nuiDiag(doc.Source(), m[4], m[5], "fivem-nui-missing-handler", fmt.Sprintf("NUI message '%s' has no local JavaScript handler.", name)))
+		if bytes.Contains(src, []byte("SendNUIMessage")) {
+			for _, m := range nuiMessageRE.FindAllSubmatchIndex(src, -1) {
+				name := string(src[m[4]:m[5]])
+				if !hasNUIName(files, name, true) {
+					out = append(out, nuiDiag(src, m[4], m[5], "fivem-nui-missing-handler", fmt.Sprintf("NUI message '%s' has no local JavaScript handler.", name)))
+				}
 			}
 		}
 	}

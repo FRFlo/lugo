@@ -42,8 +42,8 @@ func TestEvictClosedDocumentCachesTrimsASTAndResolver(t *testing.T) {
 
 	evictClosedDocumentCaches(s)
 
-	if tree.Source != nil {
-		t.Fatal("closed document source was retained")
+	if string(tree.Source) != "return 1" {
+		t.Fatal("closed document source must remain available to the retained AST")
 	}
 	if cap(tree.Nodes) > maxReusableASTCapacity {
 		t.Fatalf("AST node capacity = %d, still above limit", cap(tree.Nodes))

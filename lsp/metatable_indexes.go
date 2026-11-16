@@ -346,6 +346,13 @@ func (s *Server) invalidateMetatableIndexes(changedURI ...string) {
 		return
 	}
 	s.metatableIndexMu.Lock()
+	resetTypeCache := func(doc *Document) {
+		if doc.Tree == nil {
+			doc.TypeCache.Drop()
+			return
+		}
+		doc.TypeCache.Reset(len(doc.Tree.Nodes))
+	}
 	s.metatableIndexVersion++
 	s.newIndexWrites = nil
 	if len(changedURI) != 0 {
@@ -375,7 +382,7 @@ func (s *Server) invalidateMetatableIndexes(changedURI ...string) {
 						continue
 					}
 					visited[resourceURI] = struct{}{}
-					clear(resourceDoc.TypeCache)
+					resetTypeCache(resourceDoc)
 					clear(resourceDoc.Inferring)
 					queue = append(queue, resourceURI)
 				}
@@ -416,7 +423,7 @@ func (s *Server) invalidateMetatableIndexes(changedURI ...string) {
 					continue
 				}
 				visited[consumerURI] = struct{}{}
-				clear(consumer.TypeCache)
+				resetTypeCache(consumer)
 				clear(consumer.Inferring)
 				queue = append(queue, consumerURI)
 			}
@@ -431,7 +438,7 @@ func (s *Server) invalidateMetatableIndexes(changedURI ...string) {
 				}
 				visited[dependentURI] = struct{}{}
 				if dependent := s.Documents[dependentURI]; dependent != nil {
-					clear(dependent.TypeCache)
+					resetTypeCache(dependent)
 					clear(dependent.Inferring)
 					queue = append(queue, dependentURI)
 				}

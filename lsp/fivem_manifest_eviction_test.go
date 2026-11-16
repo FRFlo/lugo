@@ -21,8 +21,8 @@ func TestEvictedManifestLegacyFallbackAndReplacement(t *testing.T) {
 		t.Fatal("manifest cache must reuse the graph's semantic object")
 	}
 	evictClosedDocumentCaches(h.server)
-	if modern.Source() != nil || h.server.Documents[legacyURI].Source() != nil {
-		t.Fatal("both manifest source buffers must be released")
+	if modern.Source() == nil || h.server.Documents[legacyURI].Source() == nil {
+		t.Fatal("manifest sources must remain available to the retained AST and resolver")
 	}
 	if err := os.Remove(filepath.Join(h.root, "resource", "fxmanifest.lua")); err != nil {
 		t.Fatal(err)
@@ -30,7 +30,7 @@ func TestEvictedManifestLegacyFallbackAndReplacement(t *testing.T) {
 	h.reindex()
 	resource := h.server.FiveMResourceGraph.ResourceByRoot(rootURI)
 	if resource == nil || resource.ManifestURI != legacyURI || len(resource.ClientGlobs) != 1 || resource.ClientGlobs[0] != "legacy.lua" {
-		t.Fatalf("evicted legacy fallback lost metadata: %#v", resource)
+		t.Fatalf("legacy fallback lost metadata after cache eviction: %#v", resource)
 	}
 	if h.server.Documents[modernURI] != nil {
 		t.Fatal("removed modern manifest was retained")
@@ -45,7 +45,7 @@ func TestEvictedManifestLegacyFallbackAndReplacement(t *testing.T) {
 	h.server.workspaceReadDir = func(string) ([]os.DirEntry, error) { return nil, os.ErrPermission }
 	h.reindex()
 	if got := h.server.FiveMResourceGraph.ResourceByRoot(rootURI); got != replacement {
-		t.Fatal("incomplete scan lost the evicted manifest metadata")
+		t.Fatal("incomplete scan lost the cached manifest metadata")
 	}
 	// A direct update to an empty buffer must also replace the cached model.
 	h.server.updateDocument(legacyURI, []byte("\n"))

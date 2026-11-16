@@ -99,6 +99,25 @@ func TestExportBridgeLookup(t *testing.T) {
 	})
 }
 
+func TestExportBridgeFindsExportBesideOrdinaryCollision(t *testing.T) {
+	idx := NewGlobalIndex()
+	bridge := &ExportBridge{Index: idx}
+	idx.AddSymbol("file:///provider", GlobalIndexScopeClient, "ping", &SymbolEntry{Name: "ping", URI: "file:///provider/client.lua", NodeID: 1})
+	bridge.RegisterExport("file:///provider", GlobalIndexScopeClient, ExportData{Name: "ping", SourceURI: "file:///provider/client.lua", NodeID: 2})
+	connectExportBridgeResources(idx, "file:///consumer", "file:///provider")
+	got := bridge.LookupExport("ping", "file:///consumer", GlobalIndexScopeClient)
+	if got == nil || got.Export == nil || got.Export.SourceURI != "file:///provider/client.lua" {
+		t.Fatalf("export lookup = %+v, want retained export candidate", got)
+	}
+	if got := idx.WorkspaceSymbols("ping", -1); len(got) != 2 {
+		t.Fatalf("workspace view returned %d colliding ordinary/export entries, want 2", len(got))
+	}
+	(&Server{GlobalIndex: idx}).removeGlobalIndexDocumentSymbols("file:///provider/client.lua")
+	if got := idx.LookupCandidatesByScope("file:///provider", GlobalIndexScopeClient, "ping"); len(got) != 0 {
+		t.Fatalf("source removal left ordinary/export candidates: %+v", got)
+	}
+}
+
 func connectExportBridgeDependents(idx *GlobalIndex, provider ResourceURI, consumers ...ResourceURI) {
 	idx.EnsureResource(provider)
 	for _, consumer := range consumers {

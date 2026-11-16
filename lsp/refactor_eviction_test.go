@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestRenameGlobalAfterClosedSourceEviction(t *testing.T) {
+func TestRenameGlobalAfterClosedDocumentCacheEviction(t *testing.T) {
 	h := newFiveMFixtureHarness(t, "plain_lua")
 	const name = "GLOBAL_RENAME_AFTER_EVICTION"
 	h.writeWorkspaceFile("plain_lua/rename_target.lua", `--[[@rename_eviction_target]]`+name+` = 1`)
@@ -23,11 +23,11 @@ func TestRenameGlobalAfterClosedSourceEviction(t *testing.T) {
 	if definitionDoc == nil || referenceDoc == nil {
 		t.Fatal("rename fixture documents were not indexed")
 	}
-	if definitionDoc.Source() != nil || referenceDoc.Source() != nil {
-		t.Fatal("setup did not evict closed document sources")
+	if definitionDoc.Source() == nil || referenceDoc.Source() == nil {
+		t.Fatal("closed-document cache eviction must preserve sources for AST and resolver offsets")
 	}
 	if got := string(referenceDoc.nodeSource(referenceDoc.Resolver.GlobalRefs[0])); got != name {
-		t.Fatalf("evicted global reference text = %q, want %q", got, name)
+		t.Fatalf("closed global reference text = %q, want %q", got, name)
 	}
 
 	params, err := json.Marshal(RenameParams{
@@ -51,9 +51,9 @@ func TestRenameGlobalAfterClosedSourceEviction(t *testing.T) {
 		t.Fatal("rename omitted the open target definition")
 	}
 	if len(response.Result.Changes[referenceDoc.URI]) == 0 {
-		t.Fatal("rename omitted the evicted reference with retained token text")
+		t.Fatal("rename omitted the closed reference")
 	}
-	if edits := response.Result.Changes[definitionDoc.URI]; len(edits) != 0 {
-		t.Fatalf("rename emitted edits for an evicted definition with unavailable text: %+v", edits)
+	if edits := response.Result.Changes[definitionDoc.URI]; len(edits) == 0 {
+		t.Fatal("rename omitted the closed definition")
 	}
 }

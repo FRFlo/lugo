@@ -24,8 +24,8 @@ func TestEvictedMetatableNodeTextIsCompactAndRebuildable(t *testing.T) {
 	s.Documents[doc.URI] = doc
 
 	evictClosedDocumentCaches(s)
-	if doc.Source() != nil {
-		t.Fatal("source must be released after eviction")
+	if doc.Source() == nil {
+		t.Fatal("closed-document cache eviction must preserve source for AST and resolver offsets")
 	}
 	if got := len(doc.evictedNodeText); got < writes || got > writes+10 {
 		t.Fatalf("cached node text entries = %d, want about %d", got, writes)
@@ -58,13 +58,13 @@ func TestEvictedMetatableNodeTextIsCompactAndRebuildable(t *testing.T) {
 	s.invalidateMetatableIndexes()
 	candidates := s.newIndexWriteCandidates("field1")
 	if len(candidates) == 0 || string(candidates[0].doc.nodeSource(candidates[0].node)) != "field1" {
-		t.Fatal("metatable write index did not rebuild after source eviction")
+		t.Fatal("metatable write index did not rebuild after cache eviction")
 	}
 	if candidates[0].node == ast.InvalidNode {
 		t.Fatal("rebuilt candidate has invalid node id")
 	}
 	stringCandidates := s.newIndexWriteCandidates("bracket-key")
 	if len(stringCandidates) != 1 {
-		t.Fatalf("string-key candidate index did not rebuild after source eviction: %#v", stringCandidates)
+		t.Fatalf("string-key candidate index did not rebuild after cache eviction: %#v", stringCandidates)
 	}
 }

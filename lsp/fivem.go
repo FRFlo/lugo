@@ -866,35 +866,32 @@ func newFiveMResourceGraphNode(res *FiveMResource) *FiveMResourceGraphNode {
 	return node
 }
 
-func (node *FiveMResourceGraphNode) allowedIncludes(env FileEnv) []FiveMResourceGraphExpansion {
-	if node == nil {
-		return nil
+func (node *FiveMResourceGraphNode) allowedIncludes(env FileEnv, visit func(FiveMResourceGraphExpansion) bool) bool {
+	if node == nil || visit == nil {
+		return false
 	}
-
-	entries := make([]FiveMResourceGraphExpansion, 0, len(node.SharedEntries)+len(node.ClientEntries)+len(node.ServerEntries))
 
 	for _, entry := range node.SharedEntries {
-		if entry.Kind == FiveMResourceGraphExpansionInclude {
-			entries = append(entries, entry)
+		if entry.Kind == FiveMResourceGraphExpansionInclude && !visit(entry) {
+			return true
 		}
 	}
 
+	var scopedEntries []FiveMResourceGraphExpansion
 	switch env {
 	case EnvClient:
-		for _, entry := range node.ClientEntries {
-			if entry.Kind == FiveMResourceGraphExpansionInclude {
-				entries = append(entries, entry)
-			}
-		}
+		scopedEntries = node.ClientEntries
 	case EnvServer:
-		for _, entry := range node.ServerEntries {
-			if entry.Kind == FiveMResourceGraphExpansionInclude {
-				entries = append(entries, entry)
-			}
+		scopedEntries = node.ServerEntries
+	}
+
+	for _, entry := range scopedEntries {
+		if entry.Kind == FiveMResourceGraphExpansionInclude && !visit(entry) {
+			return true
 		}
 	}
 
-	return entries
+	return false
 }
 
 func compareFiveMResourceGraphNodes(a, b *FiveMResourceGraphNode) int {
@@ -1918,22 +1915,25 @@ func (s *Server) canSeeFiveMCrossResourceInclude(srcProfile FiveMExecutionProfil
 		return false
 	}
 
-	for _, include := range srcNode.allowedIncludes(srcProfile.Env()) {
+	matched := false
+	srcNode.allowedIncludes(srcProfile.Env(), func(include FiveMResourceGraphExpansion) bool {
 		if include.IncludeResource == "" || include.IncludePath == "" {
-			continue
+			return true
+		}
+		if include.IncludePath != relPath && !matchGlob(include.IncludePath, relPath) {
+			return true
 		}
 
 		resolved := s.resolveFiveMResource(include.IncludeResource)
 		if resolved == nil || resolved.RootURI != tgtRoot {
-			continue
-		}
-
-		if include.IncludePath == relPath || matchGlob(include.IncludePath, relPath) {
 			return true
 		}
-	}
 
-	return false
+		matched = true
+		return false
+	})
+
+	return matched
 }
 
 func (s *Server) classifyDocumentEnv(res *FiveMResource, doc *Document) FileEnv {
@@ -2047,6 +2047,7 @@ func removeFiveMResource(server *Server, uri URI) {
 	if targetRes == nil {
 		return
 	}
+	oldBindings := server.snapshotFiveMBindingsUnder(targetRoot)
 
 	// Remove from graph
 	if targetRoot != "" {
@@ -2059,15 +2060,24 @@ func removeFiveMResource(server *Server, uri URI) {
 	if targetRes.Name != "" {
 		delete(server.FiveMResourceGraph.ByName, targetRes.Name)
 	}
-	// Invalidate affected documents
-	rootPrefix := targetRes.RootURI
-	for dURI, d := range server.Documents {
-		if d == nil {
+	// A legacy manifest may still define this resource after fxmanifest.lua is
+	// removed. Restore that topology before migrating the scripts.
+	var fallback *Document
+	for dURI, doc := range server.Documents {
+		if doc == nil || dURI == string(uri) || !doc.IsFiveMManifest || doc.Dir == "" {
 			continue
 		}
-		if strings.HasPrefix(dURI, rootPrefix+"/") || dURI == rootPrefix {
-			d.FiveMProfile = FiveMExecutionProfile{}
-			d.FiveMProfileCached = false
+		if doc.Dir != server.uriToPath(targetRoot) {
+			continue
+		}
+		if fallback == nil || strings.HasSuffix(dURI, "/fxmanifest.lua") {
+			fallback = doc
 		}
 	}
+	if fallback != nil {
+		server.registerFiveMManifestResource(server.parseFiveMManifest(fallback))
+	} else if server.GlobalIndex != nil {
+		server.GlobalIndex.UnregisterFiveMResource(ResourceURI(targetRoot))
+	}
+	server.reconcileFiveMBindings(targetRoot, oldBindings)
 }

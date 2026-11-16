@@ -111,9 +111,12 @@ func NewTree(source []byte) *Tree {
 	// even empty and tiny trees allocate several sizeable backing arrays (the
 	// server creates an empty tree for its shared parser).
 	capLines := sourceLen/30 + 1
+	// Large parsed workspaces use about one node per 7 bytes, one extra child
+	// per 18 bytes, and one comment per 500 bytes. Keep the node reservation
+	// conservative for dense files and trim excess extra/comment capacity.
 	capNodes := sourceLen/4 + 1
-	capExtra := sourceLen/8 + 1
-	capComments := sourceLen/50 + 1
+	capExtra := sourceLen/10 + 1
+	capComments := sourceLen/75 + 1
 
 	lines := make([]uint32, 1, capLines)
 

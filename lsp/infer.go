@@ -221,28 +221,21 @@ func (doc *Document) InferType(id ast.NodeID) TypeSet {
 		return TypeSet{}
 	}
 
-	if int(id) >= len(doc.TypeCache) {
-		if int(id) < cap(doc.TypeCache) {
-			doc.TypeCache = doc.TypeCache[:len(doc.Tree.Nodes)]
-			doc.Inferring = doc.Inferring[:len(doc.Tree.Nodes)]
-		} else {
-			newTypeCache := make([]TypeSet, len(doc.Tree.Nodes))
-
-			copy(newTypeCache, doc.TypeCache)
-
-			doc.TypeCache = newTypeCache
-
-			newInferring := make([]bool, len(doc.Tree.Nodes))
-
-			copy(newInferring, doc.Inferring)
-
-			doc.Inferring = newInferring
-		}
+	if doc.TypeCache.nodes != len(doc.Tree.Nodes) {
+		doc.TypeCache.Reset(len(doc.Tree.Nodes))
+	}
+	t := doc.TypeCache.Get(id)
+	if reusableType(t) {
+		return t
 	}
 
-	t := doc.TypeCache[id]
-	if t.Basics != TypeUnknown || t.CustomName != "" || t.DeclNode != ast.InvalidNode {
-		return t
+	if len(doc.Inferring) != len(doc.Tree.Nodes) {
+		if cap(doc.Inferring) >= len(doc.Tree.Nodes) {
+			doc.Inferring = doc.Inferring[:len(doc.Tree.Nodes)]
+			clear(doc.Inferring)
+		} else {
+			doc.Inferring = make([]bool, len(doc.Tree.Nodes))
+		}
 	}
 
 	if doc.Inferring[id] {
@@ -427,7 +420,7 @@ func (doc *Document) InferType(id ast.NodeID) TypeSet {
 		typeSet = doc.inferCallExpr(node)
 	}
 
-	doc.TypeCache[id] = typeSet
+	doc.TypeCache.Put(id, typeSet)
 
 	return typeSet
 }

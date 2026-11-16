@@ -72,6 +72,7 @@ func (s *Server) MCPFiveMContracts() FiveMContractSnapshot {
 	eventSources, eventTargets := []FiveMContractSymbol{}, []FiveMContractSymbol{}
 	convarSources, convarTargets := []FiveMContractSymbol{}, []FiveMContractSymbol{}
 	nuiRoots := make(map[string]bool)
+	nuiScans := newFiveMNUIContractScanCache()
 	for _, uri := range uris {
 		doc := s.Documents[uri]
 		if doc == nil {
@@ -106,7 +107,7 @@ func (s *Server) MCPFiveMContracts() FiveMContractSnapshot {
 		}
 		if root := s.getDocResourceRoot(doc); root != "" && !nuiRoots[root] {
 			nuiRoots[root] = true
-			snapshot.Links = append(snapshot.Links, s.fiveMNUIContractLinks(doc)...)
+			snapshot.Links = append(snapshot.Links, s.fiveMNUIContractLinksWithCache(doc, nuiScans)...)
 		}
 	}
 	snapshot.Links = append(snapshot.Links, linkFiveMContractSymbols(eventSources, eventTargets, FiveMContractConfidenceHigh)...)

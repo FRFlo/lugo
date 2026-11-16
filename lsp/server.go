@@ -50,6 +50,7 @@ type Server struct {
 	workDoneProgressSupport bool
 	canceledRequests        map[string]struct{}
 	canceledRequestsMu      sync.Mutex
+	shutdownReceived        bool
 	mcpMu                   sync.Mutex
 	trace                   TraceContext
 
@@ -198,8 +199,8 @@ func (s *Server) trimSharedBuffers() {
 //   - Preserve library document source/caches so std/runtime hover and signature metadata
 //     remain available after unrelated workspace files are closed/reopened.
 //   - For each non-library document not currently open (OpenFiles[uri] is false/absent):
-//   - clear TypeCache, Inferring, LuaDocCache, ActualReads, MutatedLocals
-//   - nil the Tree.Source pointer (Tree owns Source now)
+//   - clear TypeCache, Inferring, LuaDocCache; retain ActualReads and MutatedLocals
+//   - preserve Tree.Source because the retained AST and Resolver still depend on it
 func evictClosedDocumentCaches(s *Server) {
 	if s == nil {
 		return
@@ -219,16 +220,13 @@ func evictClosedDocumentCaches(s *Server) {
 		}
 
 		// Evict large caches. Preserve AST (doc.Tree) and Resolver for cross-doc features.
-		doc.TypeCache = nil
+		doc.TypeCache.Drop()
 		doc.Inferring = nil
 		doc.LuaDocCache = nil
-		doc.ActualReads = nil
-		doc.MutatedLocals = nil
 		doc.invalidateMetatableAttachmentIndex()
-		// Tree owns Source; free the underlying source buffer
+		// Keep Tree.Source because the retained AST and Resolver depend on source offsets.
 		if doc.Tree != nil {
 			doc.cacheEvictedMetatableNodeText()
-			doc.Tree.Source = nil
 			doc.Tree.TrimOversized(maxReusableASTCapacity)
 		}
 		if doc.Resolver != nil {
@@ -627,6 +625,19 @@ func (s *Server) handleMessageContext(parent context.Context, req Request) {
 	}()
 
 	s.Log.Debugf("Received method: %s\n", req.Method)
+	if s.shutdownReceived && req.Method != "exit" {
+		if req.ID != nil {
+			_ = writeProtocolResponse(ctx, s.Writer, "shutdown", Response{
+				RPC: "2.0",
+				ID:  req.ID,
+				Error: ResponseError{
+					Code:    -32600,
+					Message: "invalid request",
+				},
+			})
+		}
+		return
+	}
 
 	switch req.Method {
 	// Lifecycle
@@ -1090,34 +1101,45 @@ func (s *Server) computeRequirePathUpdates(renames []FileRename) WorkspaceEdit {
 
 	for uri, doc := range s.Documents {
 		if doc.IsFiveMManifest {
-			if res := s.parseFiveMManifest(doc); res != nil && res.Manifest != nil {
+			if doc.Tree != nil {
 				manifestDir := filepath.Dir(s.uriToPath(uri))
-				for _, entry := range res.Manifest.Entries {
-					if entry.Value == "" || strings.HasPrefix(entry.Value, "@") || strings.ContainsAny(entry.Value, "*?") || !isFiveMManifestPathDirective(entry.EmittedName) {
+				for i := 1; i < len(doc.Tree.Nodes); i++ {
+					node := doc.Tree.Nodes[i]
+					if (node.Kind != ast.KindCallExpr && node.Kind != ast.KindMethodCall) || (node.Parent != ast.InvalidNode && int(node.Parent) < len(doc.Tree.Nodes) && (doc.Tree.Nodes[node.Parent].Kind == ast.KindCallExpr || doc.Tree.Nodes[node.Parent].Kind == ast.KindMethodCall) && doc.Tree.Nodes[node.Parent].Left == ast.NodeID(i)) {
 						continue
 					}
-					resolved := filepath.Clean(filepath.Join(manifestDir, filepath.FromSlash(entry.Value)))
-					for _, pm := range pathMappings {
-						if filepath.Clean(pm.oldPath) != resolved {
+
+					_, _, _, entries, ok := s.fiveMManifestEntriesForCall(doc, ast.NodeID(i))
+					if !ok {
+						continue
+					}
+					for _, entry := range entries {
+						if entry.Value == "" || strings.HasPrefix(entry.Value, "@") || strings.ContainsAny(entry.Value, "*?") || !isFiveMManifestPathDirective(entry.EmittedName) {
 							continue
 						}
-						rel, err := filepath.Rel(manifestDir, pm.newPath)
-						if err != nil {
-							continue
+						resolved := filepath.Clean(filepath.Join(manifestDir, filepath.FromSlash(entry.Value)))
+						for _, pm := range pathMappings {
+							if filepath.Clean(pm.oldPath) != resolved {
+								continue
+							}
+							rel, err := filepath.Rel(manifestDir, pm.newPath)
+							if err != nil {
+								continue
+							}
+							newValue := filepath.ToSlash(rel)
+							start := doc.Tree.Offset(entry.ValueRange.Start.Line, entry.ValueRange.Start.Character)
+							end := doc.Tree.Offset(entry.ValueRange.End.Line, entry.ValueRange.End.Character)
+							if end <= start || end > uint32(len(doc.Source())) {
+								continue
+							}
+							raw := doc.Source()[start:end]
+							quote := "\""
+							if len(raw) > 0 && raw[0] == '\'' {
+								quote = "'"
+							}
+							changes[uri] = append(changes[uri], TextEdit{Range: entry.ValueRange, NewText: quote + newValue + quote})
+							break
 						}
-						newValue := filepath.ToSlash(rel)
-						start := doc.Tree.Offset(entry.ValueRange.Start.Line, entry.ValueRange.Start.Character)
-						end := doc.Tree.Offset(entry.ValueRange.End.Line, entry.ValueRange.End.Character)
-						if end <= start || end > uint32(len(doc.Source())) {
-							continue
-						}
-						raw := doc.Source()[start:end]
-						quote := "\""
-						if len(raw) > 0 && raw[0] == '\'' {
-							quote = "'"
-						}
-						changes[uri] = append(changes[uri], TextEdit{Range: entry.ValueRange, NewText: quote + newValue + quote})
-						break
 					}
 				}
 			}
@@ -1146,7 +1168,7 @@ func (s *Server) computeRequirePathUpdates(renames []FileRename) WorkspaceEdit {
 				continue
 			}
 
-			if node.Extra == 0 || int(node.Extra) >= len(doc.Tree.ExtraList) {
+			if node.Count == 0 || int(node.Extra) >= len(doc.Tree.ExtraList) {
 				continue
 			}
 
@@ -1209,7 +1231,7 @@ func (s *Server) computeRequirePathUpdates(renames []FileRename) WorkspaceEdit {
 		}
 
 		if len(edits) > 0 {
-			changes[uri] = edits
+			changes[uri] = append(changes[uri], edits...)
 		}
 	}
 
@@ -1225,6 +1247,7 @@ func (s *Server) sendShowMessage(msgType int, message string) {
 }
 
 func (s *Server) handleShutdown(req Request) {
+	s.shutdownReceived = true
 	err := WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: nil})
 	if err != nil {
 		s.Log.Errorf("WriteMessage error (shutdown): %v\n", err)
@@ -1237,7 +1260,10 @@ func (s *Server) handleExit() {
 	// os.Exit bypasses deferred shutdown; sync the bounded local journal first.
 	FlushTelemetry()
 
-	os.Exit(0)
+	if s.shutdownReceived {
+		os.Exit(0)
+	}
+	os.Exit(1)
 }
 
 func (s *Server) getRequireModName(doc *Document, callID ast.NodeID) string {

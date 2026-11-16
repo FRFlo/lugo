@@ -174,3 +174,34 @@ func TestRefreshWorkspaceKeepsManifestOnIncompleteScan(t *testing.T) {
 		t.Fatal("manifest was not retained after an incomplete workspace scan")
 	}
 }
+
+func TestRefreshWorkspacePreservesManifestTopologyOnIncompleteScan(t *testing.T) {
+	h := newFiveMFixtureHarnessWithoutIndex(t)
+	h.writeWorkspaceFile("resource/fxmanifest.lua", "fx_version 'cerulean'\ngame 'gta5'\ndependency 'base'\nclient_script 'client.lua'\n")
+	h.writeWorkspaceFile("resource/client.lua", "return true\n")
+	h.writeWorkspaceFile("base/fxmanifest.lua", "fx_version 'cerulean'\ngame 'gta5'\n")
+	h.reindex()
+
+	resourceURI := h.server.pathToURI(filepath.Join(h.root, "resource"))
+	baseURI := h.server.pathToURI(filepath.Join(h.root, "base"))
+	if got := h.server.FiveMResourceGraph.ResourceByRoot(resourceURI); got == nil {
+		t.Fatal("expected resource before incomplete scan")
+	}
+	if got := h.server.FiveMResourceGraph.ResourceByRoot(baseURI); got == nil {
+		t.Fatal("expected dependency resource before incomplete scan")
+	}
+
+	h.server.workspaceReadDir = func(string) ([]os.DirEntry, error) { return nil, os.ErrPermission }
+	h.reindex()
+
+	resource := h.server.FiveMResourceGraph.ResourceByRoot(resourceURI)
+	if resource == nil {
+		t.Fatal("resource topology was lost after incomplete scan")
+	}
+	if got := h.server.FiveMResourceGraph.ResourceByRoot(baseURI); got == nil {
+		t.Fatal("dependency topology was lost after incomplete scan")
+	}
+	if len(resource.Dependencies) != 1 || resource.Dependencies[0] != "base" {
+		t.Fatalf("dependencies = %v, want [base]", resource.Dependencies)
+	}
+}
