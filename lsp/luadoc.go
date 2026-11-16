@@ -22,6 +22,7 @@ var (
 	tagNoDiscard  = []byte("@nodiscard")
 	tagAsync      = []byte("@async")
 	tagPackage    = []byte("@package")
+	tagOperator   = []byte("@operator")
 
 	kwPublic    = []byte("public ")
 	kwPrivate   = []byte("private ")
@@ -50,9 +51,11 @@ type LuaDocField struct {
 }
 
 type LuaDocClass struct {
-	Name   string
-	Parent string
-	Desc   string
+	Name          string
+	Parent        string
+	Parents       []string
+	GenericParams []LuaDocGeneric
+	Desc          string
 }
 
 type LuaDocType struct {
@@ -81,6 +84,14 @@ type LuaDocGeneric struct {
 	Parent string
 }
 
+// LuaDocOperator describes the operand (when present) and result types for a
+// Lua metamethod operator annotation.
+type LuaDocOperator struct {
+	Operation  string
+	InputType  string
+	ResultType string
+}
+
 type LuaDoc struct {
 	Description   string
 	DeprecatedMsg string
@@ -95,11 +106,67 @@ type LuaDoc struct {
 	Returns       []LuaDocReturn
 	Fields        []LuaDocField
 	Overloads     []string
+	Operators     []LuaDocOperator
 	See           []string
 	IsDeprecated  bool
 	IsNoDiscard   bool
 	IsAsync       bool
 	IsPackage     bool
+}
+
+var luaDocOperators = map[string]struct{}{
+	"add": {}, "sub": {}, "mul": {}, "div": {}, "mod": {}, "pow": {}, "unm": {},
+	"concat": {}, "len": {}, "eq": {}, "lt": {}, "le": {}, "band": {}, "bor": {},
+	"bxor": {}, "bnot": {}, "shl": {}, "shr": {}, "idiv": {}, "call": {}, "index": {},
+}
+
+func parseLuaDocOperator(data []byte) (LuaDocOperator, bool) {
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 {
+		return LuaDocOperator{}, false
+	}
+
+	opEnd := 0
+	for opEnd < len(data) && data[opEnd] != '(' && data[opEnd] != ':' && data[opEnd] != ' ' && data[opEnd] != '\t' {
+		opEnd++
+	}
+	operation := string(data[:opEnd])
+	if _, ok := luaDocOperators[operation]; !ok {
+		return LuaDocOperator{}, false
+	}
+	data = bytes.TrimSpace(data[opEnd:])
+	var input []byte
+	if len(data) > 0 && data[0] == '(' {
+		depth, end := 0, -1
+		for i, c := range data {
+			if c == '(' {
+				depth++
+			}
+			if c == ')' {
+				depth--
+				if depth == 0 {
+					end = i
+					break
+				}
+			}
+		}
+		if end < 0 {
+			return LuaDocOperator{}, false
+		}
+		input = bytes.TrimSpace(data[1:end])
+		if len(input) == 0 {
+			return LuaDocOperator{}, false
+		}
+		data = bytes.TrimSpace(data[end+1:])
+	}
+	if len(data) == 0 || data[0] != ':' {
+		return LuaDocOperator{}, false
+	}
+	result := bytes.TrimSpace(data[1:])
+	if len(result) == 0 {
+		return LuaDocOperator{}, false
+	}
+	return LuaDocOperator{Operation: operation, InputType: string(input), ResultType: string(result)}, true
 }
 
 // findTypeEnd safely scans past complex types with spaces like 'fun(a: string): number'
@@ -445,6 +512,97 @@ func extractNameParent(data []byte) (name, parent, descBytes []byte) {
 	return name, parent, descBytes
 }
 
+func extractNameParents(data []byte) (name []byte, parents [][]byte, descBytes []byte) {
+	data = bytes.TrimSpace(data)
+
+	nameEnd := luaDocClassHeaderEnd(data)
+	if nameEnd == 0 {
+		return nil, nil, data
+	}
+	name = data[:nameEnd]
+	// LuaCATS declares generic classes as `Class<T>`, while references to the
+	// class itself are indexed by its base name (`Class`).
+	if genericStart := bytes.IndexByte(name, '<'); genericStart > 0 && bytes.HasSuffix(name, []byte(">")) {
+		name = name[:genericStart]
+	}
+	data = bytes.TrimSpace(data[nameEnd:])
+	if !bytes.HasPrefix(data, []byte(":")) {
+		return name, nil, data
+	}
+	data = bytes.TrimSpace(data[1:])
+	for len(data) > 0 {
+		end := 0
+		angleDepth := 0
+		parenDepth := 0
+		for end < len(data) {
+			switch data[end] {
+			case '<':
+				angleDepth++
+			case '>':
+				if angleDepth > 0 {
+					angleDepth--
+				}
+			case '(':
+				parenDepth++
+			case ')':
+				if parenDepth > 0 {
+					parenDepth--
+				}
+			case ',', ' ', '\t':
+				if angleDepth == 0 && parenDepth == 0 {
+					goto parentEnd
+				}
+			}
+			end++
+		}
+	parentEnd:
+		if end == 0 {
+			break
+		}
+		parents = append(parents, data[:end])
+		data = bytes.TrimSpace(data[end:])
+		if !bytes.HasPrefix(data, []byte(",")) {
+			break
+		}
+		data = bytes.TrimSpace(data[1:])
+	}
+	return name, parents, bytes.TrimSpace(data)
+}
+
+func luaDocClassHeaderEnd(data []byte) int {
+	angleDepth := 0
+	for i, char := range data {
+		switch char {
+		case '<':
+			angleDepth++
+		case '>':
+			if angleDepth > 0 {
+				angleDepth--
+			}
+		case ':':
+			if angleDepth == 0 {
+				return i
+			}
+		case ' ', '\t':
+			if angleDepth == 0 {
+				return i
+			}
+		}
+	}
+	return len(data)
+}
+
+// cutLuaDocTag matches a tag only when its name ends at whitespace or the end
+// of the line. Without the boundary, tags such as @parameter are parsed as
+// @param.
+func cutLuaDocTag(line, tag []byte) ([]byte, bool) {
+	after, ok := bytes.CutPrefix(line, tag)
+	if !ok || len(after) > 0 && after[0] != ' ' && after[0] != '\t' {
+		return nil, false
+	}
+	return after, true
+}
+
 func parseLuaDoc(comments []byte, enableAlerts bool) LuaDoc {
 	var (
 		doc       LuaDoc
@@ -466,7 +624,7 @@ func parseLuaDoc(comments []byte, enableAlerts bool) LuaDoc {
 
 		line = bytes.TrimSpace(line)
 
-		if after, ok := bytes.CutPrefix(line, tagParam); ok {
+		if after, ok := cutLuaDocTag(line, tagParam); ok {
 			activeTag = "param"
 
 			rest := bytes.TrimSpace(after)
@@ -497,7 +655,7 @@ func parseLuaDoc(comments []byte, enableAlerts bool) LuaDoc {
 
 				doc.Params = append(doc.Params, LuaDocParam{Name: nameStr})
 			}
-		} else if after, ok := bytes.CutPrefix(line, tagReturn); ok {
+		} else if after, ok := cutLuaDocTag(line, tagReturn); ok {
 			activeTag = "return"
 
 			typeBytes, descBytes := extractTypeDesc(bytes.TrimSpace(after))
@@ -506,7 +664,7 @@ func parseLuaDoc(comments []byte, enableAlerts bool) LuaDoc {
 			descBytes = bytes.TrimPrefix(descBytes, hashPrefix)
 
 			doc.Returns = append(doc.Returns, LuaDocReturn{Type: string(typeBytes), Desc: string(descBytes)})
-		} else if after, ok := bytes.CutPrefix(line, tagField); ok {
+		} else if after, ok := cutLuaDocTag(line, tagField); ok {
 			activeTag = "field"
 
 			rest := bytes.TrimSpace(after)
@@ -545,48 +703,59 @@ func parseLuaDoc(comments []byte, enableAlerts bool) LuaDoc {
 
 				doc.Fields = append(doc.Fields, LuaDocField{Name: nameStr})
 			}
-		} else if after, ok := bytes.CutPrefix(line, tagDeprecated); ok {
+		} else if after, ok := cutLuaDocTag(line, tagDeprecated); ok {
 			activeTag = ""
 
 			doc.IsDeprecated = true
 			doc.DeprecatedMsg = string(bytes.TrimSpace(after))
-		} else if after, ok := bytes.CutPrefix(line, tagClass); ok {
+		} else if after, ok := cutLuaDocTag(line, tagClass); ok {
 			activeTag = ""
 
-			name, parent, desc := extractNameParent(after)
+			classHeader := bytes.TrimSpace(after)
+			headerEnd := luaDocClassHeaderEnd(classHeader)
+			genericParams := parseLuaDocGenericParams(classHeader[:headerEnd])
+			name, parentNames, desc := extractNameParents(after)
 			if len(name) > 0 {
-				doc.Class = &LuaDocClass{Name: string(name), Parent: string(parent), Desc: string(desc)}
+				parents := make([]string, 0, len(parentNames))
+				for _, parent := range parentNames {
+					parents = append(parents, string(parent))
+				}
+				var parent string
+				if len(parents) > 0 {
+					parent = parents[0]
+				}
+				doc.Class = &LuaDocClass{Name: string(name), Parent: parent, Parents: parents, GenericParams: genericParams, Desc: string(desc)}
 			}
-		} else if after, ok := bytes.CutPrefix(line, tagEnum); ok {
+		} else if after, ok := cutLuaDocTag(line, tagEnum); ok {
 			activeTag = ""
 
 			name, desc := extractNameDesc(after)
 			if len(name) > 0 {
 				doc.Enum = &LuaDocEnum{Name: string(name), Desc: string(desc)}
 			}
-		} else if after, ok := bytes.CutPrefix(line, tagModule); ok {
+		} else if after, ok := cutLuaDocTag(line, tagModule); ok {
 			activeTag = ""
 
 			name, desc := extractNameDesc(after)
 			if len(name) > 0 {
 				doc.Module = &LuaDocModule{Name: string(name), Desc: string(desc)}
 			}
-		} else if bytes.HasPrefix(line, tagNoDiscard) {
+		} else if _, ok := cutLuaDocTag(line, tagNoDiscard); ok {
 			activeTag = ""
 			doc.IsNoDiscard = true
-		} else if bytes.HasPrefix(line, tagAsync) {
+		} else if _, ok := cutLuaDocTag(line, tagAsync); ok {
 			activeTag = ""
 			doc.IsAsync = true
-		} else if bytes.HasPrefix(line, tagPackage) {
+		} else if _, ok := cutLuaDocTag(line, tagPackage); ok {
 			activeTag = ""
 			doc.IsPackage = true
-		} else if after, ok := bytes.CutPrefix(line, tagType); ok {
+		} else if after, ok := cutLuaDocTag(line, tagType); ok {
 			activeTag = ""
 
 			typeBytes, descBytes := extractTypeDesc(bytes.TrimSpace(after))
 
 			doc.Type = &LuaDocType{Type: string(typeBytes), Desc: string(descBytes)}
-		} else if after, ok := bytes.CutPrefix(line, tagAlias); ok {
+		} else if after, ok := cutLuaDocTag(line, tagAlias); ok {
 			activeTag = ""
 
 			rest := bytes.TrimSpace(after)
@@ -602,7 +771,7 @@ func parseLuaDoc(comments []byte, enableAlerts bool) LuaDoc {
 			} else {
 				doc.Alias = &LuaDocAlias{Name: string(rest)}
 			}
-		} else if after, ok := bytes.CutPrefix(line, tagGeneric); ok {
+		} else if after, ok := cutLuaDocTag(line, tagGeneric); ok {
 			activeTag = ""
 
 			rest := bytes.TrimSpace(after)
@@ -613,15 +782,21 @@ func parseLuaDoc(comments []byte, enableAlerts bool) LuaDoc {
 					doc.Generics = append(doc.Generics, LuaDocGeneric{Name: string(name), Parent: string(parent)})
 				}
 			}
-		} else if after, ok := bytes.CutPrefix(line, tagOverload); ok {
+		} else if after, ok := cutLuaDocTag(line, tagOverload); ok {
 			activeTag = ""
 
 			doc.Overloads = append(doc.Overloads, string(bytes.TrimSpace(after)))
-		} else if after, ok := bytes.CutPrefix(line, tagSee); ok {
+		} else if after, ok := cutLuaDocTag(line, tagOperator); ok {
+			activeTag = ""
+
+			if operator, ok := parseLuaDocOperator(after); ok {
+				doc.Operators = append(doc.Operators, operator)
+			}
+		} else if after, ok := cutLuaDocTag(line, tagSee); ok {
 			activeTag = ""
 
 			doc.See = append(doc.See, string(bytes.TrimSpace(after)))
-		} else if after, ok := bytes.CutPrefix(line, tagExport); ok {
+		} else if after, ok := cutLuaDocTag(line, tagExport); ok {
 			activeTag = ""
 
 			doc.Export = string(bytes.TrimSpace(after))

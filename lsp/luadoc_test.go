@@ -1,6 +1,7 @@
 package lsp
 
 import (
+	"slices"
 	"testing"
 )
 
@@ -104,5 +105,44 @@ func TestParseLuaDoc_AdvancedTags(t *testing.T) {
 
 	if doc.Type == nil || doc.Type.Type != "number" {
 		t.Fatalf("Type parsed incorrectly: %+v", doc.Type)
+	}
+}
+
+func TestParseLuaDoc_GenericClassParents(t *testing.T) {
+	doc := parseLuaDoc([]byte("@class Child<T>: Base<string, number>, Mixin Description"), false)
+	if doc.Class == nil {
+		t.Fatal("class annotation was not parsed")
+	}
+	if doc.Class.Name != "Child" {
+		t.Errorf("class name = %q, want generic declaration name Child", doc.Class.Name)
+	}
+	want := []string{"Base<string, number>", "Mixin"}
+	if !slices.Equal(doc.Class.Parents, want) {
+		t.Errorf("class parents = %#v, want %#v", doc.Class.Parents, want)
+	}
+	if doc.Class.Parent != want[0] {
+		t.Errorf("primary parent = %q, want %q", doc.Class.Parent, want[0])
+	}
+	if doc.Class.Desc != "Description" {
+		t.Errorf("class description = %q, want Description", doc.Class.Desc)
+	}
+}
+
+func TestParseLuaDoc_GenericParentWithoutSpaces(t *testing.T) {
+	doc := parseLuaDoc([]byte("@class Child: Base<string,number>,Mixin"), false)
+	if doc.Class == nil {
+		t.Fatal("class annotation was not parsed")
+	}
+	want := []string{"Base<string,number>", "Mixin"}
+	if !slices.Equal(doc.Class.Parents, want) {
+		t.Errorf("class parents = %#v, want %#v", doc.Class.Parents, want)
+	}
+}
+
+func BenchmarkParseLuaDocGenericParents(b *testing.B) {
+	comments := []byte("@class Child<T>: Base<string, number>, Mixin Description")
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = parseLuaDoc(comments, false)
 	}
 }

@@ -37,14 +37,28 @@ type SymbolEntry struct {
 	Export *ExportData
 
 	// Source Location
-	URI    string
-	NodeID ast.NodeID
-	Parent string
+	URI     string
+	NodeID  ast.NodeID
+	Parent  string
+	Parents []string
 
 	// Booleans
 	IsRoot        bool
 	IsDeprecated  bool
 	DeprecatedMsg string
+}
+
+func symbolParents(entry *SymbolEntry) []string {
+	if entry == nil {
+		return nil
+	}
+	if len(entry.Parents) > 0 {
+		return entry.Parents
+	}
+	if entry.Parent != "" {
+		return []string{entry.Parent}
+	}
+	return nil
 }
 
 type ResourceScope struct {
@@ -234,6 +248,38 @@ func (idx *GlobalIndex) AllSymbols() iter.Seq2[ResourceURI, *SymbolEntry] {
 	}
 }
 
+// FieldKeysForReceivers returns indexed field keys for the requested receivers.
+// The returned slice is detached from the index and ordered deterministically.
+func (idx *GlobalIndex) FieldKeysForReceivers(receivers map[uint64]bool) []GlobalKey {
+	if idx == nil || len(receivers) == 0 {
+		return nil
+	}
+	idx.mu.RLock()
+	var keys []GlobalKey
+	for key := range idx.HashIndex {
+		if key.PropHash != 0 && receivers[key.ReceiverHash] {
+			keys = append(keys, key)
+		}
+	}
+	idx.mu.RUnlock()
+	slices.SortFunc(keys, func(a, b GlobalKey) int {
+		if a.ReceiverHash < b.ReceiverHash {
+			return -1
+		}
+		if a.ReceiverHash > b.ReceiverHash {
+			return 1
+		}
+		if a.PropHash < b.PropHash {
+			return -1
+		}
+		if a.PropHash > b.PropHash {
+			return 1
+		}
+		return 0
+	})
+	return keys
+}
+
 func (idx *GlobalIndex) SymbolsByHash(key GlobalKey) []*SymbolEntry {
 	if idx == nil {
 		return nil
@@ -406,6 +452,389 @@ func (idx *GlobalIndex) LookupByScope(resource ResourceURI, scope GlobalIndexSco
 	idx.touchLocked(res)
 
 	return res.tableForScope(scope)[name]
+}
+
+// LookupLuaDocClassField finds a field declared on a LuaDoc class or one of
+// its parents. A field declared on the requested class takes precedence over
+// inherited fields. Parent walks are bounded by a visited-name set so invalid
+// cyclic @class declarations cannot loop forever.
+func (idx *GlobalIndex) LookupLuaDocClassField(resource ResourceURI, scope GlobalIndexScope, className, fieldName string) *SymbolEntry {
+	if idx == nil || className == "" || fieldName == "" {
+		return nil
+	}
+	idx.mu.RLock()
+	res := idx.Resources[resource]
+	if res != nil {
+		// Most class lookups stay within one resource. Keep this common path
+		// allocation-free; cross-resource and unusually deep walks use the
+		// context-aware path below.
+		var queue [64]string
+		var visited [64]string
+		head, tail, visitedCount := 0, 1, 0
+		queue[0] = className
+		fallback := false
+		for head < tail {
+			current := queue[head]
+			head++
+			alreadyVisited := false
+			for i := 0; i < visitedCount; i++ {
+				if visited[i] == current {
+					alreadyVisited = true
+					break
+				}
+			}
+			if alreadyVisited {
+				continue
+			}
+			if visitedCount == len(visited) {
+				fallback = true
+				break
+			}
+			visited[visitedCount] = current
+			visitedCount++
+
+			class := res.tableForScopeRead(scope)[SymbolName(current)]
+			if class == nil {
+				class = res.Shared[SymbolName(current)]
+			}
+			if class == nil {
+				fallback = true
+				break
+			}
+			if len(current)+1+len(fieldName) > 256 {
+				fallback = true
+				break
+			}
+			if field := lookupLocalLuaDocClassField(res, scope, current, fieldName); field != nil {
+				idx.mu.RUnlock()
+				return field
+			}
+
+			parents := class.Parents
+			if len(parents) == 0 && class.Parent != "" {
+				if tail == len(queue) {
+					fallback = true
+					break
+				}
+				queue[tail] = class.Parent
+				tail++
+				continue
+			}
+			for _, parent := range parents {
+				if tail == len(queue) {
+					fallback = true
+					break
+				}
+				queue[tail] = parent
+				tail++
+			}
+			if fallback {
+				break
+			}
+		}
+		if !fallback {
+			idx.mu.RUnlock()
+			return nil
+		}
+	}
+	idx.mu.RUnlock()
+	entry, _ := idx.LookupLuaDocClassFieldWithPath(resource, scope, className, fieldName)
+	return entry
+}
+
+func lookupLocalLuaDocClassField(res *ResourceScope, scope GlobalIndexScope, className, fieldName string) *SymbolEntry {
+	if res == nil {
+		return nil
+	}
+	var keyBytes [256]byte
+	keyLen := len(className) + 1 + len(fieldName)
+	if keyLen > len(keyBytes) {
+		return nil
+	}
+	classLen := copy(keyBytes[:], className)
+	keyBytes[classLen] = '.'
+	copy(keyBytes[classLen+1:keyLen], fieldName)
+	key := SymbolName(string(keyBytes[:keyLen]))
+	if field := res.tableForScopeRead(scope)[key]; field != nil {
+		return field
+	}
+	if field := res.Shared[key]; field != nil {
+		return field
+	}
+	keyBytes[classLen] = ':'
+	key = SymbolName(string(keyBytes[:keyLen]))
+	if field := res.tableForScopeRead(scope)[key]; field != nil {
+		return field
+	}
+	return res.Shared[key]
+}
+
+// LuaDocClassHierarchyEntry identifies a class and the resource that owns it.
+// Resource context matters because a class may inherit from a type visible to
+// its declaring resource, even when that type is not directly visible to the
+// original consumer.
+type LuaDocClassHierarchyEntry struct {
+	Name          string
+	Entry         *SymbolEntry
+	Resource      ResourceURI
+	Depth         int
+	ParentIndex   int
+	FirstParent   int
+	ParentIndices []int
+}
+
+type LuaDocClassFieldLookup struct {
+	Entry      *SymbolEntry
+	Path       []LuaDocClassHierarchyEntry
+	Hierarchy  []LuaDocClassHierarchyEntry
+	ClassIndex int
+}
+
+// LookupLuaDocClassHierarchy follows parents using the visibility context of
+// each class declaration. It only crosses the current resource's direct
+// dependencies and keeps the requested execution scope throughout the walk.
+func (idx *GlobalIndex) LookupLuaDocClassHierarchy(resource ResourceURI, scope GlobalIndexScope, className string) []LuaDocClassHierarchyEntry {
+	if idx == nil || className == "" {
+		return nil
+	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+
+	type pendingClass struct {
+		name        string
+		resource    ResourceURI
+		depth       int
+		parentIndex int
+	}
+	lookup := func(from ResourceURI, name SymbolName) (*SymbolEntry, ResourceURI) {
+		res := idx.Resources[from]
+		if res == nil {
+			return nil, ""
+		}
+		if entry := res.tableForScopeRead(scope)[name]; entry != nil {
+			return entry, from
+		}
+		if entry := res.Shared[name]; entry != nil {
+			return entry, from
+		}
+		for _, dependency := range res.Dependencies {
+			dep := idx.Resources[dependency]
+			if dep == nil {
+				continue
+			}
+			if entry := dep.tableForScopeRead(scope)[name]; entry != nil {
+				return entry, dependency
+			}
+			if entry := dep.Shared[name]; entry != nil {
+				return entry, dependency
+			}
+		}
+		// Non-FiveM workspace files are indexed under their own document URI
+		// and do not have resource dependency edges. Let their class graph find
+		// declarations anywhere in the workspace; LSP callers validate every
+		// cross-document edge against canSeeSymbol before exposing a member.
+		for _, candidate := range sortedResourceKeys(idx.Resources) {
+			if candidate == from {
+				continue
+			}
+			dep := idx.Resources[candidate]
+			if dep == nil {
+				continue
+			}
+			if entry := dep.tableForScopeRead(scope)[name]; entry != nil {
+				return entry, candidate
+			}
+			if entry := dep.Shared[name]; entry != nil {
+				return entry, candidate
+			}
+		}
+		return nil, ""
+	}
+
+	queue := []pendingClass{{name: className, resource: resource, parentIndex: -1}}
+	type hierarchyKey struct {
+		name     string
+		resource ResourceURI
+	}
+	visited := make(map[hierarchyKey]int)
+	out := make([]LuaDocClassHierarchyEntry, 0, 4)
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		entry, owner := lookup(current.resource, SymbolName(current.name))
+		if entry == nil {
+			continue
+		}
+		key := hierarchyKey{name: current.name, resource: owner}
+		if existingIndex, seen := visited[key]; seen {
+			if current.parentIndex >= 0 {
+				addLuaDocClassParent(&out[current.parentIndex], existingIndex)
+			}
+			continue
+		}
+		classIndex := len(out)
+		out = append(out, LuaDocClassHierarchyEntry{Name: current.name, Entry: entry, Resource: owner, Depth: current.depth, ParentIndex: current.parentIndex, FirstParent: -1})
+		visited[key] = classIndex
+		if current.parentIndex >= 0 {
+			addLuaDocClassParent(&out[current.parentIndex], classIndex)
+		}
+		if len(entry.Parents) > 0 {
+			for _, parent := range entry.Parents {
+				queue = append(queue, pendingClass{name: parent, resource: owner, depth: current.depth + 1, parentIndex: classIndex})
+			}
+		} else if entry.Parent != "" {
+			queue = append(queue, pendingClass{name: entry.Parent, resource: owner, depth: current.depth + 1, parentIndex: classIndex})
+		}
+	}
+	return out
+}
+
+func addLuaDocClassParent(class *LuaDocClassHierarchyEntry, parentIndex int) {
+	if class == nil || parentIndex < 0 {
+		return
+	}
+	if class.FirstParent < 0 {
+		class.FirstParent = parentIndex
+		return
+	}
+	if class.FirstParent == parentIndex || slices.Contains(class.ParentIndices, parentIndex) {
+		return
+	}
+	class.ParentIndices = append(class.ParentIndices, parentIndex)
+}
+
+func luaDocClassPath(hierarchy []LuaDocClassHierarchyEntry, index int) []LuaDocClassHierarchyEntry {
+	if index < 0 || index >= len(hierarchy) {
+		return nil
+	}
+	path := make([]LuaDocClassHierarchyEntry, 0, hierarchy[index].Depth+1)
+	for index >= 0 && index < len(hierarchy) {
+		class := hierarchy[index]
+		path = append(path, class)
+		index = class.ParentIndex
+	}
+	for left, right := 0, len(path)-1; left < right; left, right = left+1, right-1 {
+		path[left], path[right] = path[right], path[left]
+	}
+	return path
+}
+
+// LookupLuaDocClassFieldWithPath returns the first field in the inherited
+// class hierarchy, along with the class declarations traversed to reach it.
+// The path lets LSP callers validate each cross-resource inheritance edge
+// without making the parent's other symbols visible to the original resource.
+func (idx *GlobalIndex) LookupLuaDocClassFieldWithPath(resource ResourceURI, scope GlobalIndexScope, className, fieldName string) (*SymbolEntry, []LuaDocClassHierarchyEntry) {
+	candidates := idx.LookupLuaDocClassFieldCandidatesWithPath(resource, scope, className, fieldName)
+	if len(candidates) == 0 {
+		return nil, idx.LookupLuaDocClassHierarchy(resource, scope, className)
+	}
+	return candidates[0].Entry, luaDocClassPath(candidates[0].Hierarchy, candidates[0].ClassIndex)
+}
+
+// LookupLuaDocClassFieldCandidatesWithPath returns every declaration path for
+// the requested field. The same parent class may be reached through distinct
+// parents, and callers must validate each path independently.
+func (idx *GlobalIndex) LookupLuaDocClassFieldCandidatesWithPath(resource ResourceURI, scope GlobalIndexScope, className, fieldName string) []LuaDocClassFieldLookup {
+	if idx == nil || className == "" || fieldName == "" {
+		return nil
+	}
+	path := idx.LookupLuaDocClassHierarchy(resource, scope, className)
+	return idx.LookupLuaDocClassFieldCandidatesInHierarchy(scope, fieldName, path)
+}
+
+func (idx *GlobalIndex) LookupLuaDocClassFieldCandidatesInHierarchy(scope GlobalIndexScope, fieldName string, path []LuaDocClassHierarchyEntry) []LuaDocClassFieldLookup {
+	if idx == nil || fieldName == "" || len(path) == 0 {
+		return nil
+	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	var candidates []LuaDocClassFieldLookup
+	for i, class := range path {
+		if field := lookupLuaDocClassMember(idx, class.Resource, scope, class.Name, fieldName); field != nil {
+			candidates = append(candidates, LuaDocClassFieldLookup{Entry: field, Hierarchy: path, ClassIndex: i})
+		}
+	}
+	return candidates
+}
+
+func lookupLuaDocClassMember(idx *GlobalIndex, resource ResourceURI, scope GlobalIndexScope, className, fieldName string) *SymbolEntry {
+	if entry, _ := idx.lookupLuaDocSymbol(resource, scope, SymbolName(className+"."+fieldName)); entry != nil {
+		return entry
+	}
+	entry, _ := idx.lookupLuaDocSymbol(resource, scope, SymbolName(className+":"+fieldName))
+	return entry
+}
+
+// LookupLuaDocClassFieldsWithPath returns indexed fields declared along the
+// visible parent chain, with the declarations needed to validate each path.
+func (idx *GlobalIndex) LookupLuaDocClassFieldsWithPath(resource ResourceURI, scope GlobalIndexScope, className string) []LuaDocClassFieldLookup {
+	path := idx.LookupLuaDocClassHierarchy(resource, scope, className)
+	return idx.LookupLuaDocClassFieldsInHierarchy(scope, path)
+}
+
+func (idx *GlobalIndex) LookupLuaDocClassFieldsInHierarchy(scope GlobalIndexScope, path []LuaDocClassHierarchyEntry) []LuaDocClassFieldLookup {
+	if idx == nil || len(path) == 0 {
+		return nil
+	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+
+	result := make([]LuaDocClassFieldLookup, 0)
+	for i, class := range path {
+		dotPrefix := class.Name + "."
+		methodPrefix := class.Name + ":"
+		appendFields := func(res *ResourceScope) {
+			if res == nil {
+				return
+			}
+			appendTable := func(table SymbolTable) {
+				for name, entry := range table {
+					nameString := string(name)
+					if (!strings.HasPrefix(nameString, dotPrefix) && !strings.HasPrefix(nameString, methodPrefix)) || entry == nil {
+						continue
+					}
+					result = append(result, LuaDocClassFieldLookup{Entry: entry, Hierarchy: path, ClassIndex: i})
+				}
+			}
+			appendTable(res.tableForScopeRead(scope))
+			appendTable(res.Shared)
+		}
+		res := idx.Resources[class.Resource]
+		appendFields(res)
+		if res != nil {
+			for _, dependency := range res.Dependencies {
+				appendFields(idx.Resources[dependency])
+			}
+		}
+	}
+	return result
+}
+
+func (idx *GlobalIndex) lookupLuaDocSymbol(resource ResourceURI, scope GlobalIndexScope, name SymbolName) (*SymbolEntry, ResourceURI) {
+	// Caller must hold idx.mu.RLock or idx.mu.Lock.
+	res := idx.Resources[resource]
+	if res == nil {
+		return nil, ""
+	}
+	if entry := res.tableForScopeRead(scope)[name]; entry != nil {
+		return entry, resource
+	}
+	if entry := res.Shared[name]; entry != nil {
+		return entry, resource
+	}
+	for _, dependency := range res.Dependencies {
+		dep := idx.Resources[dependency]
+		if dep == nil {
+			continue
+		}
+		if entry := dep.tableForScopeRead(scope)[name]; entry != nil {
+			return entry, dependency
+		}
+		if entry := dep.Shared[name]; entry != nil {
+			return entry, dependency
+		}
+	}
+	return nil, ""
 }
 
 func (idx *GlobalIndex) RegisterFiveMResource(res *FiveMResource) *ResourceScope {

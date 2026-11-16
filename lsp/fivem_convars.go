@@ -33,22 +33,29 @@ type fiveMConvarFacts struct {
 }
 
 func convarLiteral(doc *Document, id ast.NodeID) (string, string, bool) {
-	if id == ast.InvalidNode || int(id) >= len(doc.Tree.Nodes) {
+	if doc == nil || doc.Tree == nil || id == ast.InvalidNode || int(id) >= len(doc.Tree.Nodes) {
 		return "", "", false
 	}
 	n := doc.Tree.Nodes[id]
+	src := doc.Source()
+	if src == nil || n.Start > n.End || uint64(n.End) > uint64(len(src)) {
+		return "", "", false
+	}
 	switch n.Kind {
 	case ast.KindString, ast.KindHashedString:
-		return unquoteLuaString(string(doc.Source()[n.Start:n.End])), "string", true
+		return unquoteLuaString(string(src[n.Start:n.End])), "string", true
 	case ast.KindNumber:
-		return string(doc.Source()[n.Start:n.End]), "number", true
+		return string(src[n.Start:n.End]), "number", true
 	case ast.KindTrue, ast.KindFalse:
-		return string(doc.Source()[n.Start:n.End]), "boolean", true
+		return string(src[n.Start:n.End]), "boolean", true
 	}
 	return "", "", false
 }
 
 func convarCall(doc *Document, id ast.NodeID) (string, ast.Node, bool) {
+	if doc == nil || doc.Tree == nil || id == ast.InvalidNode || int(id) >= len(doc.Tree.Nodes) {
+		return "", ast.Node{}, false
+	}
 	n := doc.Tree.Nodes[id]
 	if n.Kind != ast.KindCallExpr || n.Left == ast.InvalidNode || int(n.Left) >= len(doc.Tree.Nodes) {
 		return "", n, false
@@ -57,7 +64,11 @@ func convarCall(doc *Document, id ast.NodeID) (string, ast.Node, bool) {
 	if left.Kind != ast.KindIdent {
 		return "", n, false
 	}
-	return string(doc.Source()[left.Start:left.End]), n, true
+	src := doc.Source()
+	if src == nil || left.Start > left.End || uint64(left.End) > uint64(len(src)) {
+		return "", n, false
+	}
+	return string(src[left.Start:left.End]), n, true
 }
 
 func (s *Server) collectFiveMConvars() fiveMConvarFacts {

@@ -299,7 +299,7 @@ func (s *Server) handleHover(req Request) {
 					code = "function " + ctx.DisplayName + genericStr + "(" + paramsStr + ")" + returnStr
 				}
 			} else {
-				if ctx.IsProp && ctx.TargetDefID != ctx.IdentNodeID {
+				if ctx.IsProp && (ctx.TargetURI != uri || ctx.TargetDefID != ctx.IdentNodeID) {
 					for i := range luadoc.Fields {
 						if luadoc.Fields[i].Name == ctx.IdentName {
 							matchedField = &luadoc.Fields[i]
@@ -309,7 +309,18 @@ func (s *Server) handleHover(req Request) {
 				}
 
 				if matchedField != nil {
-					code = ctx.DisplayName + ": " + matchedField.Type + valStr
+					fieldType := matchedField.Type
+					parentID := doc.Tree.Nodes[ctx.IdentNodeID].Parent
+					if parentID != ast.InvalidNode && int(parentID) < len(doc.Tree.Nodes) {
+						parent := doc.Tree.Nodes[parentID]
+						if parent.Kind == ast.KindMemberExpr || parent.Kind == ast.KindIndexExpr {
+							inferred := doc.InferType(parentID)
+							if inferred.Basics != TypeUnknown || inferred.CustomName != "" {
+								fieldType = inferred.Format()
+							}
+						}
+					}
+					code = ctx.DisplayName + ": " + fieldType + valStr
 
 					luadoc.Description = matchedField.Desc
 					luadoc.Params = nil
@@ -317,8 +328,12 @@ func (s *Server) handleHover(req Request) {
 				} else if luadoc.Class != nil {
 					code = "class " + luadoc.Class.Name
 
-					if luadoc.Class.Parent != "" {
-						code += " : " + luadoc.Class.Parent
+					parents := luadoc.Class.Parents
+					if len(parents) == 0 && luadoc.Class.Parent != "" {
+						parents = []string{luadoc.Class.Parent}
+					}
+					if len(parents) > 0 {
+						code += " : " + strings.Join(parents, ", ")
 					}
 
 					if luadoc.Class.Desc != "" {
@@ -1190,6 +1205,9 @@ func (s *Server) handleCompletion(req Request) {
 		}
 
 		validRecs := make(map[uint64]bool)
+		classFieldPriority := make(map[uint64]int)
+		classFieldOrder := make(map[uint64]int)
+		nextClassFieldOrder := 0
 
 		currRec := recHash
 
@@ -1204,6 +1222,9 @@ func (s *Server) handleCompletion(req Request) {
 		}
 
 		var recType TypeSet
+		var scopedClassFields []LuaDocClassFieldLookup
+		var scopedClassVisibility []bool
+		var scopedClassAliases map[uint64]uint64
 
 		if recNodeID != ast.InvalidNode {
 			recType = doc.InferType(recNodeID)
@@ -1214,14 +1235,49 @@ func (s *Server) handleCompletion(req Request) {
 		}
 
 		if recType.CustomName != "" {
-			currClassName := recType.CustomName
-
-			for range 10 {
-				if currClassName == "" {
-					break
+			className := luaDocGenericClassName(recType.CustomName)
+			type classAtDepth struct {
+				name  string
+				depth int
+			}
+			queue := []classAtDepth{{name: className}}
+			if s.GlobalIndex != nil {
+				resource, scope := s.globalIndexContext(doc)
+				hierarchy := s.GlobalIndex.LookupLuaDocClassHierarchy(resource, scope, className)
+				scopedClassFields = s.luaDocClassFields(resource, scope, className, hierarchy)
+				scopedClassVisibility = s.luaDocClassFieldReachability(doc, hierarchy)
+				for _, class := range hierarchy {
+					classHash := ast.HashBytes([]byte(class.Name))
+					if tableHash, _ := s.luaDocClassTableAlias(class.Entry); tableHash != 0 {
+						if scopedClassAliases == nil {
+							scopedClassAliases = make(map[uint64]uint64)
+						}
+						scopedClassAliases[classHash] = tableHash
+					}
+					if class.Name != className {
+						queue = append(queue, classAtDepth{name: class.Name, depth: class.Depth})
+					}
 				}
+			}
+			visitedClasses := make(map[string]struct{})
 
-				classHash := ast.HashBytes([]byte(currClassName))
+			for len(queue) > 0 {
+				current := queue[0]
+				queue = queue[1:]
+				if current.name == "" {
+					continue
+				}
+				if _, seen := visitedClasses[current.name]; seen {
+					continue
+				}
+				visitedClasses[current.name] = struct{}{}
+
+				classHash := ast.HashBytes([]byte(current.name))
+				if _, exists := classFieldOrder[classHash]; !exists {
+					classFieldOrder[classHash] = nextClassFieldOrder
+					nextClassFieldOrder++
+				}
+				classFieldPriority[classHash] = current.depth
 
 				validRecs[classHash] = true
 
@@ -1229,36 +1285,24 @@ func (s *Server) handleCompletion(req Request) {
 				// to a table path (e.g. @type Account → Core.Account), add the
 				// table path's hash so colon methods indexed under that path are
 				// included in completion results.
-				if s.TableAliases != nil {
-					if tableHash, ok := s.TableAliases[classHash]; ok {
-						validRecs[tableHash] = true
+				if tableHash := scopedClassAliases[classHash]; tableHash != 0 {
+					validRecs[tableHash] = true
+					if _, exists := classFieldOrder[tableHash]; !exists {
+						classFieldOrder[tableHash] = classFieldOrder[classHash]
 					}
+					classFieldPriority[tableHash] = current.depth
 				}
 
-				classKey := GlobalKey{ReceiverHash: 0, PropHash: classHash}
 				if s.GlobalIndex != nil {
-					var classSym *GlobalSymbol
-					for _, entry := range s.GlobalIndex.AllSymbols() {
-						if entry == nil || entry.Key != classKey {
-							continue
-						}
-
-						if tgtDoc, ok := s.Documents[entry.URI]; ok && s.canSeeSymbol(doc, tgtDoc) {
-							sym := globalSymbolFromEntry(entry)
-							classSym = &sym
-
-							break
-						}
-					}
-
-					if classSym != nil {
-						currClassName = classSym.Parent
-
-						continue
-					}
+					continue
 				}
-
-				break
+				classEntry := s.inferFirstGlobalSymbolEntry(doc, 0, classHash)
+				if classEntry == nil {
+					continue
+				}
+				for _, parent := range symbolParents(classEntry) {
+					queue = append(queue, classAtDepth{name: parent, depth: current.depth + 1})
+				}
 			}
 		}
 
@@ -1270,6 +1314,10 @@ func (s *Server) handleCompletion(req Request) {
 			tableNode := tDoc.Tree.Nodes[tableID]
 			if tableNode.Kind != ast.KindTableExpr {
 				return
+			}
+			fieldOffset := ^uint32(0)
+			if tDoc == doc {
+				fieldOffset = offset
 			}
 
 			// 1. Fields inside the table literal
@@ -1284,29 +1332,36 @@ func (s *Server) handleCompletion(req Request) {
 				}
 
 				field := tDoc.Tree.Nodes[fieldID]
-				if field.Kind == ast.KindRecordField {
-					key := tDoc.Tree.Nodes[field.Left]
-					if key.Kind == ast.KindIdent {
-						label := ast.String(tDoc.nodeSource(field.Left))
-						if label == "" {
-							continue
-						}
-
-						kind := FieldCompletion
-						insertText := label
-						insertFormat := PlainTextTextFormat
-
-						valID := field.Right
-						if valID != ast.InvalidNode && int(valID) < len(tDoc.Tree.Nodes) && tDoc.Tree.Nodes[valID].Kind == ast.KindFunctionExpr {
-							kind = FunctionCompletion
-							insertText, insertFormat = buildFuncSnippet(label, tDoc, valID, isColon)
-						}
-
-						isDep, _ := tDoc.HasDeprecatedTag(field.Left)
-
-						addCompletion(label, kind, detail, isDep, "1", insertText, insertFormat)
+				if field.Left == ast.InvalidNode || int(field.Left) >= len(tDoc.Tree.Nodes) {
+					continue
+				}
+				var label string
+				switch field.Kind {
+				case ast.KindRecordField:
+					if tDoc.Tree.Nodes[field.Left].Kind == ast.KindIdent {
+						label = ast.String(tDoc.nodeSource(field.Left))
+					}
+				case ast.KindIndexField:
+					if key, ok := tDoc.evalNode(field.Left, 0); ok && key.kind == ast.KindString && s.isValidIdentifier(key.str) {
+						label = key.str
 					}
 				}
+				if label == "" {
+					continue
+				}
+				kind := FieldCompletion
+				insertText := label
+				insertFormat := PlainTextTextFormat
+				valID := tDoc.metatableFieldValueAt(tableID, label, fieldOffset)
+				if valID == ast.InvalidNode || int(valID) >= len(tDoc.Tree.Nodes) || tDoc.Tree.Nodes[valID].Kind == ast.KindNil {
+					continue
+				}
+				if tDoc.Tree.Nodes[valID].Kind == ast.KindFunctionExpr {
+					kind = FunctionCompletion
+					insertText, insertFormat = buildFuncSnippet(label, tDoc, valID, isColon)
+				}
+				isDep, _ := tDoc.HasDeprecatedTag(field.Left)
+				addCompletion(label, kind, detail, isDep, "1", insertText, insertFormat)
 			}
 
 			// 2. Fields assigned to this table later (via its local definition)
@@ -1330,8 +1385,11 @@ func (s *Server) handleCompletion(req Request) {
 						insertText := label
 						insertFormat := PlainTextTextFormat
 
-						valID := tDoc.getAssignedValue(fd.NodeID)
-						if valID != ast.InvalidNode && tDoc.Tree.Nodes[valID].Kind == ast.KindFunctionExpr {
+						valID := tDoc.metatableFieldValueAt(tableID, label, fieldOffset)
+						if valID == ast.InvalidNode || int(valID) >= len(tDoc.Tree.Nodes) || tDoc.Tree.Nodes[valID].Kind == ast.KindNil {
+							continue
+						}
+						if tDoc.Tree.Nodes[valID].Kind == ast.KindFunctionExpr {
 							kind = FunctionCompletion
 							insertText, insertFormat = buildFuncSnippet(label, tDoc, valID, isColon)
 						}
@@ -1341,6 +1399,22 @@ func (s *Server) handleCompletion(req Request) {
 						addCompletion(label, kind, detail, isDep, "1", insertText, insertFormat)
 					}
 				}
+				for label := range tDoc.metatableFieldWrites().fieldWrites[recDef] {
+					if !s.isValidIdentifier(label) {
+						continue
+					}
+					valueID := tDoc.metatableFieldValueAt(tableID, label, fieldOffset)
+					if valueID == ast.InvalidNode || int(valueID) >= len(tDoc.Tree.Nodes) || tDoc.Tree.Nodes[valueID].Kind == ast.KindNil {
+						continue
+					}
+					kind, insertText, format := FieldCompletion, label, PlainTextTextFormat
+					if tDoc.Tree.Nodes[valueID].Kind == ast.KindFunctionExpr {
+						kind = FunctionCompletion
+						insertText, format = buildFuncSnippet(label, tDoc, valueID, isColon)
+					}
+					addCompletion(label, kind, detail, false, "1", insertText, format)
+				}
+
 			}
 		}
 
@@ -1361,10 +1435,31 @@ func (s *Server) handleCompletion(req Request) {
 				metaDoc = s.Documents[recType.MetaURI]
 			}
 
-			if metaDoc != nil {
-				indexDoc, indexTableID := metaDoc.getIndexTable(recType.MetaNode)
-				if indexDoc != nil && indexTableID != ast.InvalidNode {
-					addFieldsFromTable(indexDoc, indexTableID, "metatable field")
+			visited := make(map[metatableVisit]struct{})
+			metaID := recType.MetaNode
+			for metaDoc != nil && metaID != ast.InvalidNode {
+				key := metatableVisit{uri: metaDoc.URI, node: metaID}
+				if _, ok := visited[key]; ok {
+					break
+				}
+				visited[key] = struct{}{}
+				lookupOffset := ^uint32(0)
+				if metaDoc == doc {
+					lookupOffset = offset
+				}
+				indexType := metaDoc.completionIndexTypeAt(metaID, lookupOffset)
+				if indexType.DeclNode != ast.InvalidNode {
+					indexDoc := metaDoc
+					if indexType.DeclURI != "" && indexType.DeclURI != metaDoc.URI {
+						indexDoc = s.Documents[indexType.DeclURI]
+					}
+					if indexDoc != nil {
+						addFieldsFromTable(indexDoc, indexType.DeclNode, "metatable field")
+					}
+				}
+				metaID = indexType.MetaNode
+				if indexType.MetaURI != "" && indexType.MetaURI != metaDoc.URI {
+					metaDoc = s.Documents[indexType.MetaURI]
 				}
 			}
 		}
@@ -1374,7 +1469,13 @@ func (s *Server) handleCompletion(req Request) {
 				kind := FieldCompletion
 				label := ast.String(symDoc.nodeSource(sym.NodeID))
 				if label == "" {
-					return false
+					label = sym.Name
+					if separator := strings.LastIndexByte(label, '.'); separator >= 0 {
+						label = label[separator+1:]
+					}
+					if label == "" {
+						return false
+					}
 				}
 				insertText := label
 				insertFormat := PlainTextTextFormat
@@ -1401,28 +1502,55 @@ func (s *Server) handleCompletion(req Request) {
 			return false
 		}
 
-		fieldKeys := make([]GlobalKey, 0)
-		seenFieldKeys := make(map[GlobalKey]bool)
-		addFieldKey := func(key GlobalKey) {
-			if !validRecs[key.ReceiverHash] || key.PropHash == 0 || seenFieldKeys[key] {
-				return
-			}
-
-			seenFieldKeys[key] = true
-			fieldKeys = append(fieldKeys, key)
-		}
-
+		var fieldKeys []GlobalKey
 		if s.GlobalIndex != nil {
-			for _, entry := range s.GlobalIndex.AllSymbols() {
-				if entry != nil {
-					addFieldKey(entry.Key)
-				}
-			}
+			fieldKeys = s.GlobalIndex.FieldKeysForReceivers(validRecs)
 		}
+
+		// addCompletion keeps the first item for a label, so visit nearer class
+		// declarations before inherited ones to preserve field shadowing.
+		slices.SortStableFunc(fieldKeys, func(a, b GlobalKey) int {
+			aPriority, aOK := classFieldPriority[a.ReceiverHash]
+			bPriority, bOK := classFieldPriority[b.ReceiverHash]
+			if aOK && bOK {
+				if aPriority != bPriority {
+					return aPriority - bPriority
+				}
+				aOrder, aHasOrder := classFieldOrder[a.ReceiverHash]
+				bOrder, bHasOrder := classFieldOrder[b.ReceiverHash]
+				if aHasOrder && bHasOrder {
+					return aOrder - bOrder
+				}
+				return 0
+			}
+			if aOK {
+				return -1
+			}
+			if bOK {
+				return 1
+			}
+			return 0
+		})
 
 		for _, key := range fieldKeys {
 			if s.GlobalIndex != nil {
+				if _, scoped := classFieldOrder[key.ReceiverHash]; scoped {
+					continue
+				}
 				_ = slices.ContainsFunc(s.visibleGlobalSymbolsFromEntries(doc, s.GlobalIndex.SymbolsByHash(key), 1), addGlobalFieldCompletion)
+			}
+		}
+
+		if s.GlobalIndex != nil && len(scopedClassFields) > 0 {
+			for _, field := range scopedClassFields {
+				if field.Entry == nil {
+					continue
+				}
+				fieldDoc := s.Documents[field.Entry.URI]
+				if fieldDoc == nil || !s.canSeeLuaDocClassFieldLookup(fieldDoc, field, scopedClassVisibility) {
+					continue
+				}
+				addGlobalFieldCompletion(GlobalSymbol{URI: field.Entry.URI, Name: string(field.Entry.Name), NodeID: field.Entry.NodeID})
 			}
 		}
 	} else {
@@ -1713,7 +1841,14 @@ func (s *Server) handleSignatureHelp(req Request) {
 		exportRes = s.getFiveMExportResource(doc, callNode.Left)
 	}
 
-	ctx := s.resolveSymbolAt(uri, doc.Tree.Nodes[funcIdentID].Start)
+	resolveID := funcIdentID
+	if callNode.Kind == ast.KindCallExpr {
+		callee := doc.Tree.Nodes[funcIdentID]
+		if callee.Kind == ast.KindMemberExpr && callee.Right != ast.InvalidNode && int(callee.Right) < len(doc.Tree.Nodes) {
+			resolveID = callee.Right
+		}
+	}
+	ctx := s.resolveSymbolAt(uri, doc.Tree.Nodes[resolveID].Start)
 	if ctx == nil && exportRes == "" {
 		WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: nil})
 
@@ -1738,6 +1873,29 @@ func (s *Server) handleSignatureHelp(req Request) {
 
 	if len(defs) == 0 && exportRes != "" {
 		defs = s.lookupFiveMExportDefs(doc, exportRes, funcName)
+	}
+
+	isCallMetamethod := false
+	if callNode.Kind == ast.KindCallExpr {
+		callable := doc.InferType(callNode.Left)
+		metaDoc := doc
+		if callable.MetaURI != "" && callable.MetaURI != doc.URI {
+			metaDoc = s.Documents[callable.MetaURI]
+		}
+		if metaDoc != nil && callable.MetaNode != ast.InvalidNode {
+			lookupOffset := metatableOffsetForDocument(doc, metaDoc, offset)
+			value := metaDoc.metatableFieldValueAt(callable.MetaNode, "__call", lookupOffset)
+			if value != ast.InvalidNode {
+				functionDoc, functionID := metaDoc.resolveMetatableIndexValue(value)
+				if functionDoc != nil && functionID != ast.InvalidNode && int(functionID) < len(functionDoc.Tree.Nodes) && functionDoc.Tree.Nodes[functionID].Kind == ast.KindFunctionExpr {
+					definition := functionDoc.getDefForValue(functionID)
+					if definition != ast.InvalidNode {
+						defs = []GlobalSymbol{{URI: functionDoc.URI, NodeID: definition}}
+						isCallMetamethod = true
+					}
+				}
+			}
+		}
 	}
 
 	var activeParam int
@@ -1775,6 +1933,25 @@ func (s *Server) handleSignatureHelp(req Request) {
 			continue
 		}
 
+		if int(def.NodeID) < len(tDoc.Tree.Nodes) {
+			declaration := tDoc.Tree.Nodes[def.NodeID]
+			if declaration.Start == declaration.End {
+				var callable TypeSet
+				if callNode.Kind == ast.KindMethodCall {
+					callable = doc.inferMemberExpr(callNode)
+					if len(callable.CallParams) > 0 && callable.CallParams[0].Name == "self" {
+						callable.CallParams = callable.CallParams[1:]
+						callable.CallSig = buildCallableSignature(callable.CallParams, callable.CallRet)
+					}
+				} else {
+					callable = doc.InferType(callNode.Left)
+				}
+				if callable.CallSig != "" {
+					signatures = append(signatures, buildSignatureInformationFromType(ctx.DisplayName, callable))
+					continue
+				}
+			}
+		}
 		valID := tDoc.getAssignedValue(def.NodeID)
 		if valID == ast.InvalidNode || int(valID) >= len(tDoc.Tree.Nodes) || tDoc.Tree.Nodes[valID].Kind != ast.KindFunctionExpr {
 			continue
@@ -1782,6 +1959,24 @@ func (s *Server) handleSignatureHelp(req Request) {
 
 		luadoc := *tDoc.GetLuaDoc(def.NodeID)
 		funcNode := tDoc.Tree.Nodes[valID]
+
+		hasMethodOverloads := len(luadoc.Overloads) > 0 && (callNode.Kind == ast.KindMethodCall || callNode.Kind == ast.KindCallExpr && getImplicitSelfOffset(ctx, callNode, tDoc, def.NodeID) < 0)
+		if hasMethodOverloads {
+			receiver := TypeSet{}
+			if callNode.Kind == ast.KindMethodCall {
+				receiver = doc.InferType(callNode.Left)
+			} else if callee := doc.Tree.Nodes[callNode.Left]; callee.Kind == ast.KindMemberExpr && callee.Left != ast.InvalidNode {
+				receiver = doc.InferType(callee.Left)
+			}
+			overloads, selected, score := signatureHelpFromMethodOverloads(s, doc, callNode, ctx.DisplayName, luadoc.Overloads, luadoc.Generics, receiver, callNode.Kind == ast.KindMethodCall)
+			base := len(signatures)
+			signatures = append(signatures, overloads...)
+			if len(overloads) > 0 && score > bestMatchScore {
+				bestSigIndex = base + selected
+				bestMatchScore = score
+			}
+			continue
+		}
 
 		var (
 			paramsInfo []ParameterInformation
@@ -1795,6 +1990,9 @@ func (s *Server) handleSignatureHelp(req Request) {
 		}
 
 		paramOffset := getImplicitSelfOffset(ctx, callNode, tDoc, def.NodeID)
+		if isCallMetamethod {
+			paramOffset = 1
+		}
 
 		if funcNode.Count > 0 {
 			for i := uint32(0); i < funcNode.Count; i++ {
@@ -1814,7 +2012,7 @@ func (s *Server) handleSignatureHelp(req Request) {
 
 				pName := ast.String(tDoc.Source()[pNode.Start:pNode.End])
 
-				if i == 0 && paramOffset == 1 && pName == "self" {
+				if i == 0 && paramOffset == 1 && (isCallMetamethod || pName == "self") {
 					continue
 				}
 
@@ -1841,7 +2039,7 @@ func (s *Server) handleSignatureHelp(req Request) {
 			}
 		} else {
 			for i, p := range luadoc.Params {
-				if i == 0 && paramOffset == 1 && p.Name == "self" {
+				if i == 0 && paramOffset == 1 && (isCallMetamethod || p.Name == "self") {
 					continue
 				}
 
@@ -1901,6 +2099,108 @@ func (s *Server) handleSignatureHelp(req Request) {
 			bestMatchScore = score
 			bestSigIndex = len(signatures) - 1
 		}
+
+		// Function declarations can have overloads as well as methods. Keep
+		// their declared signature and score the overloads against the written
+		// arguments without synthesizing a method receiver.
+		if len(luadoc.Overloads) > 0 && callNode.Kind == ast.KindCallExpr {
+			overloads, selected, overloadScore := signatureHelpFromMethodOverloads(s, doc, callNode, ctx.DisplayName, luadoc.Overloads, luadoc.Generics, TypeSet{}, false)
+			base := len(signatures)
+			signatures = append(signatures, overloads...)
+			if len(overloads) > 0 && overloadScore > bestMatchScore {
+				bestSigIndex = base + selected
+				bestMatchScore = overloadScore
+			}
+		}
+	}
+
+	if len(signatures) == 0 && callNode.Kind == ast.KindCallExpr {
+		callable := doc.InferType(callNode.Left)
+		seen := make(map[string]struct{})
+		bestOverloadScore := -1
+		queue := []string{callable.CustomName}
+		for len(queue) > 0 {
+			name := queue[0]
+			queue = queue[1:]
+			if name == "" {
+				continue
+			}
+			if _, exists := seen[name]; exists {
+				continue
+			}
+			seen[name] = struct{}{}
+			entry := s.inferFirstGlobalSymbolEntry(doc, 0, ast.HashBytes([]byte(name)))
+			if entry == nil {
+				continue
+			}
+			if entry.LuaDoc != nil {
+				for _, overload := range entry.LuaDoc.Overloads {
+					parsed := ParseTypeString(overload)
+					if parsed.IsCallable() {
+						signatures = append(signatures, buildSignatureInformationFromType(ctx.DisplayName, parsed))
+						score := -1
+						paramCount := len(parsed.CallParams)
+						variadic := paramCount > 0 && strings.TrimSpace(parsed.CallParams[paramCount-1].Name) == "..."
+						fixedParamCount := paramCount
+						if variadic {
+							fixedParamCount--
+						}
+						argumentCount := int(callNode.Count)
+						if variadic || argumentCount <= paramCount {
+							omittedStart := min(argumentCount, fixedParamCount)
+							score = 0
+							if !variadic && argumentCount == paramCount {
+								score = 2
+							} else if !variadic {
+								score = 1
+							}
+							for _, param := range parsed.CallParams[omittedStart:fixedParamCount] {
+								if !strings.HasSuffix(strings.TrimSpace(param.Type), "?") {
+									score = -1
+									break
+								}
+							}
+						}
+						if score >= 0 {
+							for i := 0; i < int(callNode.Count); i++ {
+								if callNode.Extra+uint32(i) >= uint32(len(doc.Tree.ExtraList)) {
+									score = -1
+									break
+								}
+								argType := doc.InferType(doc.Tree.ExtraList[callNode.Extra+uint32(i)])
+								paramIndex := i
+								if variadic && paramIndex >= fixedParamCount {
+									paramIndex = paramCount - 1
+								}
+								expected := ParseTypeString(parsed.CallParams[paramIndex].Type)
+								if expected.Basics&TypeAny != 0 || argType.Basics == TypeUnknown && argType.CustomName == "" {
+									continue
+								}
+								if expected.Basics&argType.Basics != 0 {
+									score++
+									continue
+								}
+								if expected.CustomName != "" {
+									if !s.luaDocClassAssignable(doc, argType.CustomName, expected.CustomName) {
+										score = -1
+										break
+									}
+								} else if expected.Basics&argType.Basics == 0 {
+									score = -1
+									break
+								}
+								score++
+							}
+						}
+						if score > bestOverloadScore {
+							bestOverloadScore = score
+							bestSigIndex = len(signatures) - 1
+						}
+					}
+				}
+			}
+			queue = append(queue, symbolParents(entry)...)
+		}
 	}
 
 	if len(signatures) == 0 {
@@ -1927,6 +2227,99 @@ func (s *Server) handleSignatureHelp(req Request) {
 			ActiveParameter: activeParam,
 		},
 	})
+}
+
+func signatureHelpFromMethodOverloads(server *Server, doc *Document, call ast.Node, name string, overloadTypes []string, generics []LuaDocGeneric, receiver TypeSet, colonCall bool) ([]SignatureInformation, int, int) {
+	signatures := make([]SignatureInformation, 0, len(overloadTypes))
+	selected, bestScore := 0, -1
+	genericBounds := make(map[string]string, len(generics))
+	for _, generic := range generics {
+		genericBounds[generic.Name] = generic.Parent
+	}
+	for _, overload := range overloadTypes {
+		parsed := ParseTypeString(overload)
+		if !parsed.IsCallable() {
+			continue
+		}
+		params := slices.Clone(parsed.CallParams)
+		if colonCall && len(params) > 0 && strings.TrimSpace(params[0].Name) == "self" {
+			params = params[1:]
+		} else if !colonCall && receiver.CustomName != "" && (len(params) == 0 || strings.TrimSpace(params[0].Name) != "self") {
+			params = append([]LuaDocParam{{Name: "self", Type: receiver.CustomName}}, params...)
+		}
+		parsed.CallParams = params
+		parsed.CallSig = buildCallableSignature(params, parsed.CallRet)
+		signatures = append(signatures, buildSignatureInformationFromType(name, parsed))
+
+		paramCount := len(params)
+		variadic := paramCount > 0 && strings.TrimSpace(params[paramCount-1].Name) == "..."
+		fixedParamCount := paramCount
+		if variadic {
+			fixedParamCount--
+		}
+		argumentCount := int(call.Count)
+		score := -1
+		if variadic || argumentCount <= paramCount {
+			omittedStart := min(argumentCount, fixedParamCount)
+			score = 0
+			if !variadic && argumentCount == paramCount {
+				score = 2
+			} else if !variadic {
+				score = 1
+			}
+			for _, param := range params[omittedStart:fixedParamCount] {
+				if !strings.HasSuffix(strings.TrimSpace(param.Type), "?") {
+					score = -1
+					break
+				}
+			}
+		}
+		if score >= 0 {
+			for i := 0; i < argumentCount; i++ {
+				if call.Extra+uint32(i) >= uint32(len(doc.Tree.ExtraList)) {
+					score = -1
+					break
+				}
+				argType := doc.InferType(doc.Tree.ExtraList[call.Extra+uint32(i)])
+				paramIndex := i
+				if variadic && paramIndex >= fixedParamCount {
+					paramIndex = paramCount - 1
+				}
+				expected := ParseTypeString(params[paramIndex].Type)
+				if expected.Basics&TypeAny != 0 || argType.Basics == TypeUnknown && argType.CustomName == "" {
+					continue
+				}
+				if bound, generic := genericBounds[expected.CustomName]; generic && expected.CustomName != "" {
+					// A generic parameter accepts a concrete argument here. Keep it
+					// neutral so a matching concrete overload can still rank higher.
+					if bound != "" && (server == nil || !server.luaDocClassAssignable(doc, argType.CustomName, bound)) {
+						score = -1
+						break
+					}
+					continue
+				}
+				if expected.Basics&argType.Basics != 0 {
+					score++
+					continue
+				}
+				if expected.CustomName != "" {
+					if server == nil || !server.luaDocClassAssignable(doc, argType.CustomName, expected.CustomName) {
+						score = -1
+						break
+					}
+				} else if expected.Basics&argType.Basics == 0 {
+					score = -1
+					break
+				}
+				score++
+			}
+		}
+		if score > bestScore {
+			bestScore = score
+			selected = len(signatures) - 1
+		}
+	}
+	return signatures, selected, bestScore
 }
 
 func buildCallableHoverText(name string, inferred TypeSet) string {
