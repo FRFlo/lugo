@@ -1001,7 +1001,8 @@ type ImplementationParams struct {
 
 // DidChangeWorkspaceFoldersParams represents parameters for the workspace/didChangeWorkspaceFolders notification.
 type DidChangeWorkspaceFoldersParams struct {
-	Event WorkspaceFoldersChangeEvent `json:"event"`
+	Event        WorkspaceFoldersChangeEvent `json:"event"`
+	LibraryPaths *[]string                   `json:"libraryPaths,omitempty"`
 }
 
 // WorkspaceFoldersChangeEvent represents a workspace folders change event.

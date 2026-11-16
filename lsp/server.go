@@ -61,6 +61,8 @@ type Server struct {
 	Documents          map[string]*Document
 	OpenFiles          map[string]bool
 	documentVersions   map[string]int
+	ignoredOpenSources map[string][]byte
+	oversizedOpenFiles map[string]bool
 	activeURIs         map[string]bool
 	visitedDirs        map[string]bool
 	FiveMResourceGraph *FiveMResourceGraph
@@ -362,7 +364,7 @@ func (s *Server) applyInitializationOptions(opts InitializationOptions) (needsRe
 	}
 	knownGlobals := append(slices.Clone(opts.KnownGlobals), adapterGlobals...)
 	if s.setKnownGlobals(knownGlobals) {
-		needsReindex = true
+		needsRepublish = true
 	}
 	if !frameworkAdaptersEqual(s.FrameworkAdapters, selectedAdapters) {
 		s.FrameworkAdapters = selectedAdapters
@@ -445,12 +447,22 @@ func (s *Server) applyInitializationOptions(opts InitializationOptions) (needsRe
 }
 
 func (s *Server) setIgnoreGlobs(globs []string) bool {
-	if slices.Equal(s.IgnoreGlobs, globs) {
+	oldPatterns := make(map[IgnorePattern]struct{}, len(s.compiledIgnores))
+	for _, pattern := range s.compiledIgnores {
+		oldPatterns[pattern] = struct{}{}
+	}
+	next := Server{IgnoreGlobs: globs}
+	next.compileIgnorePatterns()
+	newPatterns := make(map[IgnorePattern]struct{}, len(next.compiledIgnores))
+	for _, pattern := range next.compiledIgnores {
+		newPatterns[pattern] = struct{}{}
+	}
+	s.IgnoreGlobs = slices.Clone(globs)
+	if maps.Equal(oldPatterns, newPatterns) {
 		return false
 	}
 
-	s.IgnoreGlobs = slices.Clone(globs)
-	s.compileIgnorePatterns()
+	s.compiledIgnores = next.compiledIgnores
 
 	return true
 }
@@ -478,6 +490,8 @@ func (s *Server) setKnownGlobals(globals []string) bool {
 				newKnownGlobals[g] = true
 			}
 		}
+		slices.Sort(newKnownGlobalGlobs)
+		newKnownGlobalGlobs = slices.Compact(newKnownGlobalGlobs)
 	}
 
 	if maps.Equal(s.KnownGlobals, newKnownGlobals) && slices.Equal(s.KnownGlobalGlobs, newKnownGlobalGlobs) {
@@ -491,20 +505,26 @@ func (s *Server) setKnownGlobals(globals []string) bool {
 }
 
 func (s *Server) setLibraryPaths(paths []string) bool {
-	if slices.Equal(s.LibraryPaths, paths) {
+	resolved := make([]string, 0, len(paths))
+	seen := make(map[string]struct{}, len(paths))
+	for _, lib := range paths {
+		if realPath, err := filepath.EvalSymlinks(lib); err == nil {
+			lib = realPath
+		}
+		if _, ok := seen[lib]; ok {
+			continue
+		}
+		seen[lib] = struct{}{}
+		resolved = append(resolved, lib)
+	}
+	if slices.Equal(s.LibraryPaths, resolved) {
 		return false
 	}
 
-	s.LibraryPaths = slices.Clone(paths)
+	s.LibraryPaths = resolved
 	s.lowerLibraryPaths = s.lowerLibraryPaths[:0]
 
-	for i, lib := range s.LibraryPaths {
-		if realPath, err := filepath.EvalSymlinks(lib); err == nil {
-			s.LibraryPaths[i] = realPath
-
-			lib = realPath
-		}
-
+	for _, lib := range s.LibraryPaths {
 		s.lowerLibraryPaths = append(s.lowerLibraryPaths, strings.ToLower(filepath.Clean(filepath.FromSlash(lib))))
 	}
 
@@ -939,6 +959,7 @@ func (s *Server) handleDidChangeWorkspaceFolders(req Request) {
 
 		return
 	}
+	previousFolders := slices.Clone(s.WorkspaceFolders)
 
 	if len(params.Event.Removed) > 0 {
 		removed := make(map[string]bool, len(params.Event.Removed))
@@ -983,7 +1004,13 @@ func (s *Server) handleDidChangeWorkspaceFolders(req Request) {
 		s.lowerRootPath = ""
 	}
 
-	s.refreshWorkspace()
+	librariesChanged := false
+	if params.LibraryPaths != nil {
+		librariesChanged = s.setLibraryPaths(s.buildConfiguredLibraryPaths(*params.LibraryPaths))
+	}
+	if librariesChanged || !slices.Equal(previousFolders, s.WorkspaceFolders) {
+		s.refreshWorkspace()
+	}
 }
 
 func (s *Server) handleWillRenameFiles(req Request) {
