@@ -1002,7 +1002,16 @@ func (doc *Document) getLuaDocParamType(defID ast.NodeID, paramIndex int, funcDo
 }
 
 func (doc *Document) inferMemberExpr(node ast.Node) TypeSet {
-	leftType := doc.InferType(node.Left)
+	return doc.inferMemberExprWithContext(node, nil, nil, false)
+}
+
+func (doc *Document) inferMemberExprWithContext(node ast.Node, symbolCtx *SymbolContext, receiver *symbolReceiverInfo, symbolContextResolved bool) TypeSet {
+	var leftType TypeSet
+	if receiver != nil && receiver.Known {
+		leftType = receiver.Type
+	} else {
+		leftType = doc.InferType(node.Left)
+	}
 
 	var t TypeSet
 
@@ -1112,7 +1121,10 @@ func (doc *Document) inferMemberExpr(node ast.Node) TypeSet {
 	}
 
 	if doc.Server != nil {
-		ctx := doc.Server.resolveSymbolNode(doc.URI, doc, node.Right)
+		ctx := symbolCtx
+		if !symbolContextResolved {
+			ctx = doc.Server.resolveSymbolNode(doc.URI, doc, node.Right)
+		}
 		if ctx != nil && ctx.FiveMExportRes != "" && ctx.TargetDoc != nil && ctx.TargetDefID != ast.InvalidNode {
 			if callProxy := ctx.TargetDoc.makeCallableProxyType(ctx.TargetDefID); callProxy.CallSig != "" || callProxy.CallNode != ast.InvalidNode {
 				return callProxy
@@ -1341,13 +1353,27 @@ func (doc *Document) inferCallExpr(node ast.Node) TypeSet {
 	if funcIdentID == ast.InvalidNode {
 		return TypeSet{}
 	}
+	var (
+		callSymbolCtx       *SymbolContext
+		callSymbolCtxLoaded bool
+		callReceiver        *symbolReceiverInfo
+	)
+	var receiverID ast.NodeID
+	if node.Kind == ast.KindMethodCall {
+		receiverID = node.Left
+	}
+	if receiverID != ast.InvalidNode && doc.Server != nil && doc.referenceAt(funcIdentID) == ast.InvalidNode {
+		callReceiver = &symbolReceiverInfo{NodeID: receiverID}
+		callSymbolCtx = doc.Server.resolveSymbolNodeWithReceiverType(doc.URI, doc, funcIdentID, callReceiver)
+		callSymbolCtxLoaded = true
+	}
 	if node.Kind == ast.KindCallExpr || node.Kind == ast.KindMethodCall {
-		if inferred, ok := doc.inferLuaDocGenericCall(node); ok {
+		if inferred, ok := doc.inferLuaDocGenericCall(node, callSymbolCtx, callSymbolCtxLoaded); ok {
 			return inferred
 		}
 	}
 	if node.Kind == ast.KindMethodCall {
-		callable := doc.inferMemberExpr(node)
+		callable := doc.inferMemberExprWithContext(node, callSymbolCtx, callReceiver, callSymbolCtxLoaded)
 		if callable.CallSig != "" && len(callable.CallRet) > 0 {
 			return ParseTypeString(callable.CallRet[0].Type)
 		}
@@ -1483,7 +1509,10 @@ func (doc *Document) inferCallExpr(node ast.Node) TypeSet {
 		if doc.Server == nil {
 			return TypeSet{}
 		}
-		ctx := doc.Server.resolveSymbolNode(doc.URI, doc, funcIdentID)
+		ctx := callSymbolCtx
+		if !callSymbolCtxLoaded {
+			ctx = doc.Server.resolveSymbolNode(doc.URI, doc, funcIdentID)
+		}
 		if ctx != nil && ctx.TargetDefID != ast.InvalidNode && ctx.TargetDoc != nil {
 			if inferredCallable := ctx.TargetDoc.InferType(ctx.TargetDefID); inferredCallable.CallSig != "" && len(inferredCallable.CallRet) > 0 {
 				return ParseTypeString(inferredCallable.CallRet[0].Type)

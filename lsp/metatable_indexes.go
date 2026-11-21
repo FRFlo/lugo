@@ -345,6 +345,48 @@ func (s *Server) invalidateMetatableIndexes(changedURI ...string) {
 	if s == nil {
 		return
 	}
+	if s.metatableInvalidationBatch != nil {
+		for _, uri := range changedURI {
+			if uri != "" {
+				s.metatableInvalidationBatch[uri] = struct{}{}
+			}
+		}
+		return
+	}
+	s.invalidateMetatableIndexesNow(changedURI...)
+}
+
+func (s *Server) flushMetatableInvalidationBatch() {
+	if s == nil || s.metatableInvalidationBatch == nil {
+		return
+	}
+	batch := s.metatableInvalidationBatch
+	s.metatableInvalidationBatch = nil
+	if len(batch) == 0 {
+		return
+	}
+	changedURIs := make([]string, 0, len(batch))
+	for uri := range batch {
+		changedURIs = append(changedURIs, uri)
+	}
+	sort.Strings(changedURIs)
+	for _, uri := range changedURIs {
+		if doc := s.Documents[uri]; doc != nil {
+			if doc.Tree == nil {
+				doc.TypeCache.Drop()
+			} else {
+				doc.TypeCache.Reset(len(doc.Tree.Nodes))
+			}
+			clear(doc.Inferring)
+		}
+	}
+	s.invalidateMetatableIndexesNow(changedURIs...)
+}
+
+func (s *Server) invalidateMetatableIndexesNow(changedURIs ...string) {
+	if s == nil {
+		return
+	}
 	s.metatableIndexMu.Lock()
 	resetTypeCache := func(doc *Document) {
 		if doc.Tree == nil {
@@ -355,36 +397,43 @@ func (s *Server) invalidateMetatableIndexes(changedURI ...string) {
 	}
 	s.metatableIndexVersion++
 	s.newIndexWrites = nil
-	if len(changedURI) != 0 {
-		changed := s.Documents[changedURI[0]]
+	if len(changedURIs) != 0 {
 		newGlobalNames := make(map[uint64]struct{})
-		if changed != nil && changed.Resolver != nil {
-			for _, definition := range changed.Resolver.GlobalDefs {
-				if hash := ast.HashBytes(changed.nodeSource(definition)); hash != 0 {
-					newGlobalNames[hash] = struct{}{}
+		changedSet := make(map[string]struct{}, len(changedURIs))
+		queue := make([]string, 0, len(changedURIs))
+		visited := make(map[string]struct{})
+		for _, uri := range changedURIs {
+			if uri == "" {
+				continue
+			}
+			changedSet[uri] = struct{}{}
+			queue = append(queue, uri)
+			changed := s.Documents[uri]
+			if changed != nil && changed.Resolver != nil {
+				for _, definition := range changed.Resolver.GlobalDefs {
+					if hash := ast.HashBytes(changed.nodeSource(definition)); hash != 0 {
+						newGlobalNames[hash] = struct{}{}
+					}
+				}
+				for name := range changed.metatableAttachmentCalls().byGlobalName {
+					newGlobalNames[name] = struct{}{}
 				}
 			}
-			for name := range changed.metatableAttachmentCalls().byGlobalName {
-				newGlobalNames[name] = struct{}{}
-			}
-		}
-
-		queue := append([]string(nil), changedURI[0])
-		visited := make(map[string]struct{})
-		// A manifest edit changes visibility rules without changing any script
-		// definitions. Invalidate the resource's documents as dependency roots
-		// so cached resolutions based on the old profile are recomputed.
-		if changed != nil && changed.IsFiveMManifest {
-			root := s.getDocResourceRoot(changed)
-			if root != "" {
-				for resourceURI, resourceDoc := range s.Documents {
-					if resourceDoc == nil || resourceDoc == changed || s.getDocResourceRoot(resourceDoc) != root {
-						continue
+			// A manifest edit changes visibility rules without changing any script
+			// definitions. Invalidate the resource's documents as dependency roots
+			// so cached resolutions based on the old profile are recomputed.
+			if changed != nil && changed.IsFiveMManifest {
+				root := s.getDocResourceRoot(changed)
+				if root != "" {
+					for resourceURI, resourceDoc := range s.Documents {
+						if resourceDoc == nil || resourceDoc == changed || s.getDocResourceRoot(resourceDoc) != root {
+							continue
+						}
+						visited[resourceURI] = struct{}{}
+						resetTypeCache(resourceDoc)
+						clear(resourceDoc.Inferring)
+						queue = append(queue, resourceURI)
 					}
-					visited[resourceURI] = struct{}{}
-					resetTypeCache(resourceDoc)
-					clear(resourceDoc.Inferring)
-					queue = append(queue, resourceURI)
 				}
 			}
 		}
@@ -392,7 +441,10 @@ func (s *Server) invalidateMetatableIndexes(changedURI ...string) {
 		// document. Such consumers could not have registered a source edge yet,
 		// so discover them by matching unresolved resolver references.
 		for consumerURI, consumer := range s.Documents {
-			if consumer == nil || consumer == changed || len(newGlobalNames) == 0 {
+			if consumer == nil || len(newGlobalNames) == 0 {
+				continue
+			}
+			if _, changed := changedSet[consumerURI]; changed {
 				continue
 			}
 			matched := false

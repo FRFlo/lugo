@@ -1,7 +1,9 @@
 package lsp
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"strings"
@@ -71,7 +73,8 @@ func TestTraceJournalBounded(t *testing.T) {
 }
 
 func TestTraceJournalFailure(t *testing.T) {
-	f, err := os.CreateTemp(t.TempDir(), "journal")
+	path := t.TempDir() + "/journal"
+	f, err := os.Create(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,6 +83,26 @@ func TestTraceJournalFailure(t *testing.T) {
 	j.append(map[string]string{"event": "failure"})
 	if j.err == nil {
 		t.Fatal("write failure was not recorded")
+	}
+	firstErr := j.err
+	// A later append retries persistence through the rewrite path and restores
+	// the retained in-memory entries, while keeping the original error visible.
+	j.file, err = os.OpenFile(path, os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.append(map[string]string{"event": "recovered"})
+	if got, want := func() []byte { data, _ := os.ReadFile(path); return data }(), func() []byte {
+		var data []byte
+		for _, entry := range j.entries {
+			data = append(data, entry.Data...)
+		}
+		return data
+	}(); !bytes.Equal(got, want) {
+		t.Fatalf("retry did not restore journal: got %q, want %q", got, want)
+	}
+	if j.err != firstErr {
+		t.Fatalf("retry replaced first journal error: got %v, want %v", j.err, firstErr)
 	}
 	if err := j.close(); err == nil {
 		t.Fatal("close should report journal failure")
@@ -106,6 +129,215 @@ func TestTraceJournalPersistentFileRemainsBounded(t *testing.T) {
 	if info.Size() > int64(j.max) {
 		t.Fatalf("persistent journal is %d bytes, limit %d", info.Size(), j.max)
 	}
+}
+
+func TestTraceJournalAppendReloadAndEvictionStayInSync(t *testing.T) {
+	path := t.TempDir() + "/trace.ndjson"
+	open := func() *os.File {
+		t.Helper()
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+	joined := func(entries []journalEntry) []byte {
+		var data []byte
+		for _, entry := range entries {
+			data = append(data, entry.Data...)
+		}
+		return data
+	}
+	readJournal := func() []byte {
+		t.Helper()
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+
+	j := &traceJournal{file: open(), path: path, max: 128}
+	j.append(map[string]string{"event": "first"})
+	if got, want := readJournal(), joined(j.entries); !bytes.Equal(got, want) {
+		t.Fatalf("journal is not immediately readable after append: got %q, want %q", got, want)
+	}
+	j.append(map[string]string{"event": "second"})
+	if err := j.close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Loading an existing journal keeps its exact retained bytes and allows
+	// subsequent appends to remain readable without a separate flush step.
+	j = &traceJournal{file: open(), path: path, max: 128}
+	if err := loadTraceJournal(j); err != nil {
+		t.Fatal(err)
+	}
+	j.append(map[string]string{"event": "third"})
+	for i := 0; i < 10; i++ {
+		j.append(map[string]string{"event": strings.Repeat("x", 24)})
+	}
+	if got, want := readJournal(), joined(j.entries); !bytes.Equal(got, want) {
+		t.Fatalf("journal differs from retained entries after eviction: got %q, want %q", got, want)
+	}
+	if len(j.entries) == 0 || j.bytes > j.max {
+		t.Fatalf("invalid retention state: entries=%d bytes=%d limit=%d", len(j.entries), j.bytes, j.max)
+	}
+	if err := j.close(); err != nil {
+		t.Fatal(err)
+	}
+	if j.writer != nil {
+		t.Fatal("close retained the journal writer buffer")
+	}
+	if info, err := os.Stat(path); err != nil || info.Size() > int64(j.max) {
+		t.Fatalf("persistent journal exceeds limit: info=%v err=%v", info, err)
+	}
+}
+
+func TestTraceJournalOversizedEntryRemainsBounded(t *testing.T) {
+	path := t.TempDir() + "/trace.ndjson"
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j := &traceJournal{file: f, path: path, max: 32}
+	j.append(map[string]string{"event": strings.Repeat("x", 128)})
+	if j.bytes != j.max {
+		t.Fatalf("oversized event retained %d bytes, want %d", j.bytes, j.max)
+	}
+	if got, err := os.ReadFile(path); err != nil || len(got) != j.max {
+		t.Fatalf("oversized persistent event has %d bytes, err=%v; want %d", len(got), err, j.max)
+	}
+	if err := j.close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTraceJournalSequentialHandlesKeepEachRewriteBounded(t *testing.T) {
+	path := t.TempDir() + "/trace.ndjson"
+	openJournal := func() *traceJournal {
+		t.Helper()
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		j := &traceJournal{file: f, path: path, max: 128}
+		if err := loadTraceJournal(j); err != nil {
+			t.Fatal(err)
+		}
+		return j
+	}
+	assertMatchesEntries := func(j *traceJournal) {
+		t.Helper()
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var want []byte
+		for _, entry := range j.entries {
+			want = append(want, entry.Data...)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("persistent journal differs from writer's retained entries: got %q, want %q", got, want)
+		}
+		if len(got) > j.max {
+			t.Fatalf("persistent journal is %d bytes, limit %d", len(got), j.max)
+		}
+	}
+
+	first, second := openJournal(), openJournal()
+	first.append(map[string]string{"event": "first"})
+	assertMatchesEntries(first)
+	second.append(map[string]string{"event": "second"})
+	assertMatchesEntries(second)
+	first.append(map[string]string{"event": "first-again"})
+	assertMatchesEntries(first)
+	if err := first.close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func BenchmarkTraceJournalAppend(b *testing.B) {
+	for _, full := range []bool{false, true} {
+		state := "empty"
+		if full {
+			state = "full"
+		}
+		for _, legacy := range []bool{false, true} {
+			implementation := "buffered"
+			if legacy {
+				implementation = "baseline"
+			}
+			b.Run(state+"/"+implementation, func(b *testing.B) {
+				f, err := os.CreateTemp(b.TempDir(), "journal")
+				if err != nil {
+					b.Fatal(err)
+				}
+				j := &traceJournal{file: f, max: defaultJournalBytes}
+				if full {
+					seed := []byte("{\"event\":\"seed\"}\n")
+					for j.bytes+len(seed) <= j.max {
+						j.entries = append(j.entries, journalEntry{Data: append([]byte(nil), seed...)})
+						j.bytes += len(seed)
+					}
+					if err := rewriteJournalLegacy(j); err != nil {
+						b.Fatal(err)
+					}
+				}
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					if legacy {
+						appendJournalLegacy(j, map[string]string{"event": "benchmark"})
+					} else {
+						j.append(map[string]string{"event": "benchmark"})
+					}
+				}
+				b.StopTimer()
+				if err := j.close(); err != nil {
+					b.Fatal(err)
+				}
+			})
+		}
+	}
+}
+
+func appendJournalLegacy(j *traceJournal, value any) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return
+	}
+	data = append(data, '\n')
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if len(data) > j.max {
+		data = data[len(data)-j.max:]
+	}
+	for j.bytes+len(data) > j.max && len(j.entries) > 0 {
+		j.bytes -= len(j.entries[0].Data)
+		j.entries = j.entries[1:]
+	}
+	j.entries = append(j.entries, journalEntry{Data: append([]byte(nil), data...)})
+	j.bytes += len(data)
+	_ = rewriteJournalLegacy(j)
+}
+
+func rewriteJournalLegacy(j *traceJournal) error {
+	if _, err := j.file.Seek(0, 0); err != nil {
+		return err
+	}
+	if err := j.file.Truncate(0); err != nil {
+		return err
+	}
+	for _, entry := range j.entries {
+		if _, err := j.file.Write(entry.Data); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func TestTelemetryCloseAndFlushAreSafe(t *testing.T) {
@@ -175,7 +407,7 @@ func TestTelemetryOptOutPurgesJournal(t *testing.T) {
 	defer func() { globalTelemetry = old }()
 	tel.Record(context.Background(), "test.event", map[string]any{"value": "present"})
 	SetTelemetryEnabled(false)
-	if tel.Enabled || !tel.optedOut || len(j.entries) != 0 {
+	if tel.Enabled || !tel.optedOut || len(j.entries) != 0 || j.writer != nil {
 		t.Fatalf("opt-out did not purge telemetry: %#v", tel)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {

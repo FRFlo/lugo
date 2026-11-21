@@ -51,5 +51,47 @@ class SafeOutputTests(unittest.TestCase):
         )
 
 
+class MeasurementTests(unittest.TestCase):
+    def test_successful_measurement_records_result_without_errors(self):
+        def request(method, params):
+            return {"items": [{"label": "RageUI"}, {"label": "RageUI2"}]}, 3.25
+
+        result, measurement = benchmark.collect_measurement(
+            request,
+            lambda: (128, 0.25),
+            "textDocument/completion",
+            {},
+            1,
+        )
+
+        self.assertEqual(len(result["items"]), 2)
+        self.assertEqual(measurement["result_count"], 2)
+        self.assertEqual(measurement["response_bytes"], 128)
+        self.assertNotIn("errors", measurement)
+
+    def test_error_measurement_records_sanitized_error(self):
+        def request(method, params):
+            raise benchmark.RequestError(
+                method,
+                {"code": -32603, "message": "private workspace failure"},
+                7.5,
+            )
+
+        result, measurement = benchmark.collect_measurement(
+            request,
+            lambda: (64, 0.5),
+            "textDocument/hover",
+            {},
+            1,
+        )
+
+        self.assertIsNone(result)
+        self.assertEqual(measurement["result_count"], 0)
+        self.assertEqual(
+            measurement["errors"],
+            [{"code": -32603, "message": "LSP request failed"}],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
