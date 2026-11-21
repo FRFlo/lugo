@@ -578,6 +578,11 @@ func (s *Server) refreshWorkspace() {
 	}()
 
 	s.IsIndexing = true
+	// Workspace refresh finalizes many documents serially. Their metatable and
+	// type-cache invalidations can be coalesced because no document readers run
+	// until refreshWorkspace publishes diagnostics below.
+	s.metatableInvalidationBatch = make(map[string]struct{})
+	defer func() { s.metatableInvalidationBatch = nil }()
 
 	if s.workDoneProgressSupport {
 		// Request client to create a work done progress token.
@@ -952,6 +957,7 @@ func (s *Server) refreshWorkspace() {
 		}
 	}
 
+	s.flushMetatableInvalidationBatch()
 	s.activeURIs = nil
 	s.IsIndexing = false
 
@@ -2153,6 +2159,13 @@ func (s *Server) clearDocument(uri string) {
 
 	delete(s.Documents, uri)
 	s.invalidateMetatableIndexes(uri)
+	if batch := s.metatableInvalidationBatch; batch != nil {
+		// Invalidate consumers before forgetting the removed provider's edges.
+		// Keep batching subsequent refresh work after this prune boundary.
+		s.flushMetatableInvalidationBatch()
+		clear(batch)
+		s.metatableInvalidationBatch = batch
+	}
 	s.forgetMetatableTypeDependenciesFrom(uri)
 	s.dropURICache(uri)
 

@@ -1,6 +1,7 @@
 package lsp
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -37,6 +38,7 @@ type journalEntry struct{ Data []byte }
 type traceJournal struct {
 	mu         sync.Mutex
 	file       *os.File
+	writer     *bufio.Writer
 	path       string
 	max, bytes int
 	entries    []journalEntry
@@ -77,12 +79,17 @@ func (j *traceJournal) rewriteLocked() error {
 	if err := j.file.Truncate(0); err != nil {
 		return err
 	}
+	if j.writer == nil {
+		j.writer = bufio.NewWriterSize(j.file, 32*1024)
+	} else {
+		j.writer.Reset(j.file)
+	}
 	for _, entry := range j.entries {
-		if _, err := j.file.Write(entry.Data); err != nil {
+		if _, err := j.writer.Write(entry.Data); err != nil {
 			return err
 		}
 	}
-	return nil
+	return j.writer.Flush()
 }
 
 // purge removes the in-memory and on-disk local trace history. It cannot retract
@@ -100,6 +107,7 @@ func (j *traceJournal) purge() error {
 		err = j.file.Close()
 		j.file = nil
 	}
+	j.writer = nil
 	if j.path != "" {
 		if removeErr := os.Remove(j.path); removeErr != nil && !os.IsNotExist(removeErr) && err == nil {
 			err = removeErr
@@ -116,10 +124,12 @@ func (j *traceJournal) close() error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if j.file == nil {
+		j.writer = nil
 		return j.err
 	}
 	err := j.file.Close()
 	j.file = nil
+	j.writer = nil
 	if j.err != nil {
 		return j.err
 	}

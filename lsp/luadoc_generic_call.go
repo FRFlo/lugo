@@ -102,7 +102,7 @@ func (doc *Document) luaDocGenericCallAnnotations(definition ast.NodeID) luaDocG
 
 // inferLuaDocGenericCall substitutes call argument types into generic LuaDoc
 // parameters when a return annotation names one of those generic parameters.
-func (doc *Document) inferLuaDocGenericCall(call ast.Node) (TypeSet, bool) {
+func (doc *Document) inferLuaDocGenericCall(call ast.Node, symbolCtx *SymbolContext, symbolContextResolved bool) (TypeSet, bool) {
 	if doc == nil || doc.Tree == nil || (call.Kind != ast.KindCallExpr && call.Kind != ast.KindMethodCall) || call.Left == ast.InvalidNode {
 		return TypeSet{}, false
 	}
@@ -118,7 +118,11 @@ func (doc *Document) inferLuaDocGenericCall(call ast.Node) (TypeSet, bool) {
 	}
 	calleeDoc, definition := doc, doc.referenceAt(calleeID)
 	if definition == ast.InvalidNode && doc.Server != nil {
-		if ctx := doc.Server.resolveSymbolNode(doc.URI, doc, calleeID); ctx != nil && ctx.TargetDoc != nil && ctx.TargetDefID != ast.InvalidNode {
+		ctx := symbolCtx
+		if !symbolContextResolved {
+			ctx = doc.Server.resolveSymbolNode(doc.URI, doc, calleeID)
+		}
+		if ctx != nil && ctx.TargetDoc != nil && ctx.TargetDefID != ast.InvalidNode {
 			calleeDoc, definition = ctx.TargetDoc, ctx.TargetDefID
 		}
 	}

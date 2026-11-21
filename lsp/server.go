@@ -60,22 +60,23 @@ type Server struct {
 	Log    *plain.Plain
 
 	// Workspace State
-	Documents               map[string]*Document
-	metatableIndexMu        sync.Mutex
-	metatableIndexVersion   uint64
-	newIndexWrites          *newIndexWriteIndex
-	metatableTypeDependents map[string]map[string]struct{}
-	OpenFiles               map[string]bool
-	documentVersions        map[string]int
-	ignoredOpenSources      map[string][]byte
-	oversizedOpenFiles      map[string]bool
-	activeURIs              map[string]bool
-	visitedDirs             map[string]bool
-	workspaceReadDir        func(string) ([]os.DirEntry, error)
-	workspaceStat           func(string) (fs.FileInfo, error)
-	FiveMResourceGraph      *FiveMResourceGraph
-	uriCache                map[string]string
-	symlinkCache            map[string]string
+	Documents                  map[string]*Document
+	metatableIndexMu           sync.Mutex
+	metatableIndexVersion      uint64
+	newIndexWrites             *newIndexWriteIndex
+	metatableTypeDependents    map[string]map[string]struct{}
+	metatableInvalidationBatch map[string]struct{}
+	OpenFiles                  map[string]bool
+	documentVersions           map[string]int
+	ignoredOpenSources         map[string][]byte
+	oversizedOpenFiles         map[string]bool
+	activeURIs                 map[string]bool
+	visitedDirs                map[string]bool
+	workspaceReadDir           func(string) ([]os.DirEntry, error)
+	workspaceStat              func(string) (fs.FileInfo, error)
+	FiveMResourceGraph         *FiveMResourceGraph
+	uriCache                   map[string]string
+	symlinkCache               map[string]string
 
 	// Global Index
 	GlobalIndex       *GlobalIndex
