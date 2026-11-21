@@ -75,6 +75,13 @@ type SymbolContext struct {
 	FiveMExportRes string
 }
 
+type symbolReceiverInfo struct {
+	Type                   TypeSet
+	Known                  bool
+	NodeID                 ast.NodeID
+	CanReuseDefinitionType bool
+}
+
 func (s *Server) handleDefinition(req Request) {
 	var params TextDocumentPositionParams
 
@@ -1273,6 +1280,10 @@ func appendUniqueHash(hashes []uint64, hash uint64) []uint64 {
 }
 
 func (s *Server) resolveSymbolNode(uri string, doc *Document, nodeID ast.NodeID) *SymbolContext {
+	return s.resolveSymbolNodeWithReceiverType(uri, doc, nodeID, nil)
+}
+
+func (s *Server) resolveSymbolNodeWithReceiverType(uri string, doc *Document, nodeID ast.NodeID, receiver *symbolReceiverInfo) *SymbolContext {
 	if nodeID == ast.InvalidNode || int(nodeID) >= len(doc.Tree.Nodes) {
 		return nil
 	}
@@ -1417,7 +1428,6 @@ func (s *Server) resolveSymbolNode(uri string, doc *Document, nodeID ast.NodeID)
 		RecDefID:       recDef,
 		FiveMExportRes: exportRes,
 	}
-
 	if defID != ast.InvalidNode {
 		ctx.TargetDefID = defID
 
@@ -1502,7 +1512,19 @@ func (s *Server) resolveSymbolNode(uri string, doc *Document, nodeID ast.NodeID)
 
 		if !resolved {
 			if isProp && parentID != ast.InvalidNode && int(parentID) < len(doc.Tree.Nodes) {
-				receiverType := doc.InferType(doc.Tree.Nodes[parentID].Left)
+				receiverType := TypeSet{}
+				if receiver != nil && receiver.Known {
+					receiverType = receiver.Type
+				} else {
+					receiverType = doc.InferType(doc.Tree.Nodes[parentID].Left)
+					if receiver != nil {
+						receiver.Type = receiverType
+						receiver.Known = true
+					}
+				}
+				if receiver != nil && receiver.NodeID != ast.InvalidNode && int(receiver.NodeID) < len(doc.Tree.Nodes) && doc.Tree.Nodes[receiver.NodeID].Kind == ast.KindIdent && recDef != ast.InvalidNode && doc.referenceAt(receiver.NodeID) == recDef && !bytes.Equal(doc.nodeSource(receiver.NodeID), []byte("self")) {
+					receiver.CanReuseDefinitionType = true
+				}
 				if receiverType.DeclNode != ast.InvalidNode {
 					declDoc := doc
 					if receiverType.DeclURI != "" && receiverType.DeclURI != doc.URI {
@@ -1568,7 +1590,9 @@ func (s *Server) resolveSymbolNode(uri string, doc *Document, nodeID ast.NodeID)
 
 			if isProp && parentID != ast.InvalidNode && int(parentID) < len(doc.Tree.Nodes) {
 				var recType TypeSet
-				if recDef != ast.InvalidNode {
+				if receiver != nil && receiver.Known && receiver.CanReuseDefinitionType {
+					recType = receiver.Type
+				} else if recDef != ast.InvalidNode {
 					recType = doc.InferType(recDef)
 				} else {
 					recID := doc.Tree.Nodes[parentID].Left
@@ -2519,12 +2543,15 @@ func (s *Server) removeGlobalIndexDocumentSymbols(uri string) {
 		if res == nil {
 			continue
 		}
-
 		for scope, names := range res.Candidates {
 			for name, candidates := range names {
-				for _, entry := range append([]*SymbolEntry(nil), candidates...) {
+				for i := 0; i < len(candidates); {
+					entry := candidates[i]
 					if entry != nil && (entry.URI == uri || (entry.Export != nil && string(entry.Export.SourceURI) == uri)) {
 						s.GlobalIndex.removeCandidateLocked(res, scope, name, entry)
+						candidates = names[name]
+					} else {
+						i++
 					}
 				}
 			}

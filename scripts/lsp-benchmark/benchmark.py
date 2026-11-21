@@ -40,6 +40,41 @@ def safe_notification_method(method):
     return method if isinstance(method, str) and method in KNOWN_NOTIFICATIONS else "other"
 
 
+def collect_measurement(request, response_stats, method, params, iterations):
+    samples = []
+    sizes = []
+    decode_times = []
+    result = None
+    errors = []
+    for _ in range(iterations):
+        try:
+            result, ms = request(method, params)
+        except RequestError as exc:
+            result, ms = None, exc.elapsed_ms
+            errors.append(safe_error(exc.error))
+        size, decode_ms = response_stats()
+        samples.append(ms)
+        sizes.append(size)
+        decode_times.append(decode_ms)
+    if isinstance(result, dict) and method.startswith("textDocument/semanticTokens/"):
+        count = len(result.get("data", [])) // 5
+    elif isinstance(result, dict) and method == "textDocument/completion":
+        count = len(result.get("items", []))
+    else:
+        count = len(result) if isinstance(result, list) else (0 if result is None else 1)
+    measurement = {
+        "median_ms": round(statistics.median(samples), 3),
+        "max_ms": round(max(samples), 3),
+        "samples_ms": [round(x, 3) for x in samples],
+        "median_decode_ms": round(statistics.median(decode_times), 3),
+        "response_bytes": sizes[-1],
+        "result_count": count,
+    }
+    if errors:
+        measurement["errors"] = errors
+    return result, measurement
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--server", required=True, help="Lugo binary")
@@ -159,29 +194,7 @@ def main():
 
     results = {}
     def measure(name, method, params):
-        samples = []
-        sizes = []
-        decode_times = []
-        result = None
-        errors = []
-        for _ in range(args.iterations):
-            try:
-                result, ms = request(method, params)
-            except RequestError as exc:
-                result, ms = None, exc.elapsed_ms
-            errors.append(safe_error(exc.error))
-            samples.append(ms)
-            sizes.append(response_stats[0])
-            decode_times.append(response_stats[1])
-        if isinstance(result, dict) and method.startswith("textDocument/semanticTokens/"):
-            count = len(result.get("data", [])) // 5
-        elif isinstance(result, dict) and method == "textDocument/completion":
-            count = len(result.get("items", []))
-        else:
-            count = len(result) if isinstance(result, list) else (0 if result is None else 1)
-        results[name] = {"median_ms": round(statistics.median(samples), 3), "max_ms": round(max(samples), 3), "samples_ms": [round(x, 3) for x in samples], "median_decode_ms": round(statistics.median(decode_times), 3), "response_bytes": sizes[-1], "result_count": count}
-        if errors:
-            results[name]["errors"] = errors
+        result, results[name] = collect_measurement(request, lambda: response_stats, method, params, args.iterations)
         return result
 
     try:

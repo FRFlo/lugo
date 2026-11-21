@@ -579,6 +579,11 @@ func (s *Server) refreshWorkspace() {
 	}()
 
 	s.IsIndexing = true
+	// Workspace refresh finalizes many documents serially. Their metatable and
+	// type-cache invalidations can be coalesced because no document readers run
+	// until refreshWorkspace publishes diagnostics below.
+	s.metatableInvalidationBatch = make(map[string]struct{})
+	defer func() { s.metatableInvalidationBatch = nil }()
 
 	if s.workDoneProgressSupport {
 		// Request client to create a work done progress token.
@@ -592,7 +597,7 @@ func (s *Server) refreshWorkspace() {
 		// Notify client that indexing has started.
 		s.sendProgressNotification("indexing", WorkDoneProgressBegin{
 			Kind:        "begin",
-			Title:       "Lugo: Indexing workspace",
+			Title:       "Lugo: Preparing workspace",
 			Cancellable: false,
 		})
 	}
@@ -984,21 +989,28 @@ func (s *Server) refreshWorkspace() {
 		}
 	}
 
+	s.flushMetatableInvalidationBatch()
 	s.activeURIs = nil
 	s.IsIndexing = false
 
 	took := time.Since(start)
 
-	s.sendProgressNotification("indexing", WorkDoneProgressEnd{
-		Kind:    "end",
-		Message: fmt.Sprintf("Indexed %d files in %s", indexed, took.Round(time.Millisecond)),
+	s.sendProgressNotification("indexing", WorkDoneProgressReport{
+		Kind: "report", Message: "Analyzing workspace diagnostics...",
 	})
 
 	s.Log.Printf("Re-indexed workspace in %s (indexed=%d, unchanged=%d, failed=%d)\n", took, indexed, unchanged, failed)
 
-	s.publishWorkspaceDiagnostics()
+	s.publishWorkspaceDiagnostics(func(done, total int) {
+		s.sendProgressNotification("indexing", WorkDoneProgressReport{
+			Kind: "report", Message: fmt.Sprintf("Analyzing diagnostics: %d/%d files", done, total),
+		})
+	})
 
 	took = time.Since(start)
+	s.sendProgressNotification("indexing", WorkDoneProgressEnd{
+		Kind: "end", Message: fmt.Sprintf("Workspace ready in %s", took.Round(time.Millisecond)),
+	})
 
 	s.Log.Printf("Total time taken for %d bytes: %s\n", total, took)
 }
@@ -2185,6 +2197,13 @@ func (s *Server) clearDocument(uri string) {
 
 	delete(s.Documents, uri)
 	s.invalidateMetatableIndexes(uri)
+	if batch := s.metatableInvalidationBatch; batch != nil {
+		// Invalidate consumers before forgetting the removed provider's edges.
+		// Keep batching subsequent refresh work after this prune boundary.
+		s.flushMetatableInvalidationBatch()
+		clear(batch)
+		s.metatableInvalidationBatch = batch
+	}
 	s.forgetMetatableTypeDependenciesFrom(uri)
 	s.dropURICache(uri)
 
