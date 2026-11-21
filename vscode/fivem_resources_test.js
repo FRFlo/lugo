@@ -36,6 +36,24 @@ test("renders a stable tree/status detail line", () => {
 	assert.equal(renderResource({ name: "jobs", profile: "server", dependencies: [], diagnostics: 2 }), "jobs · server · deps: none · diagnostics: 2");
 });
 
+test("shows workspace loading in the resource view and status bar until diagnostics finish", () => {
+	const source = fs.readFileSync(path.join(__dirname, "extension.js"), "utf8");
+	const body = source.match(/updateWorkspaceStatus = progress => \{([\s\S]*?)\n\t\};/)?.[1];
+	assert.ok(body);
+	const resourceView = {};
+	const workspaceStatus = { show() { this.visible = true; }, hide() { this.visible = false; } };
+	const update = vm.runInNewContext(`progress => {${body}\n}`, { resourceView, workspaceStatus });
+	update({ kind: "begin" });
+	assert.equal(workspaceStatus.visible, true);
+	assert.match(resourceView.description, /Loading/);
+	update({ kind: "report", message: "Analyzing diagnostics: 25/100 files" });
+	assert.match(workspaceStatus.text, /25\/100/);
+	assert.match(resourceView.description, /25\/100/);
+	update({ kind: "end" });
+	assert.equal(workspaceStatus.visible, false);
+	assert.equal(resourceView.description, undefined);
+});
+
 test("falls back to the manifest directory name", () => {
 	assert.equal(parseManifest("server_script 'server.lua'", "/workspace/resources/chat/__resource.lua").name, "chat");
 });
