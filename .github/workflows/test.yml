@@ -21,7 +21,9 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
-        go-version-file: 'go.mod'
+        # Go 1.26.1's race detector can crash during GC (golang/go#78059).
+        # Keep the module's minimum version while testing with the fixed runtime.
+        go-version: '1.26.2'
 
     - name: Install C compiler for race detector
       run: |

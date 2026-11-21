@@ -43,6 +43,7 @@ type IndexResult struct {
 	Source    []byte
 	Tree      *ast.Tree
 	Errors    []parser.ParseError
+	Resolver  *semantic.Resolver
 	Err       error
 	Unchanged bool
 }
@@ -670,6 +671,24 @@ func (s *Server) refreshWorkspace() {
 		Message: fmt.Sprintf("Found %d files to process...", len(pendingJobs)),
 	})
 
+	caches := s.openWorkspaceCaches()
+	jobCaches, nestedCaches := nestedRepositoryCaches(caches, pendingJobs)
+	defer func() {
+		closed := make(map[*parseCache]bool, len(caches)+len(nestedCaches))
+		for _, root := range caches {
+			if !closed[root.cache] {
+				root.cache.close()
+				closed[root.cache] = true
+			}
+		}
+		for _, cache := range nestedCaches {
+			if !closed[cache] {
+				cache.close()
+				closed[cache] = true
+			}
+		}
+	}()
+
 	jobs := make(chan *IndexJob, 2048)
 	results := make(chan *IndexResult, 2048)
 
@@ -709,30 +728,43 @@ func (s *Server) refreshWorkspace() {
 					continue
 				}
 
-				tree := job.ExistingTree
-				if tree == nil {
-					tree = ast.NewTree(b)
-				} else {
-					tree.Reset(b)
+				cache := jobCaches[job]
+				cacheKey := parseCacheKey(b, s.MaxParseErrors)
+				var tree *ast.Tree
+				var errs []parser.ParseError
+				var cached bool
+				if job.ExistingTree == nil {
+					tree, errs, cached = cache.load(cacheKey, b, s.positionEncoding)
 				}
-				tree.SetPositionEncoding(s.positionEncoding)
-
-				p.MaxErrors = s.MaxParseErrors
-
-				p.Reset(b, tree)
-
-				p.Parse()
-
-				errs := make([]parser.ParseError, len(p.Errors))
-
-				copy(errs, p.Errors)
+				if !cached {
+					tree = job.ExistingTree
+					if tree == nil {
+						tree = ast.NewTree(b)
+					} else {
+						tree.Reset(b)
+					}
+					tree.SetPositionEncoding(s.positionEncoding)
+					p.MaxErrors = s.MaxParseErrors
+					p.Reset(b, tree)
+					p.Parse()
+					errs = append([]parser.ParseError(nil), p.Errors...)
+					cache.save(cacheKey, tree, errs)
+				}
+				resolver := cache.loadSemantic(cacheKey, tree)
+				if resolver == nil {
+					resolver = semantic.New(tree)
+					resolver.Resolve(tree.Root)
+					resolver.Cleanup()
+					cache.saveSemantic(cacheKey, resolver)
+				}
 
 				results <- &IndexResult{
-					Job:    job,
-					Uri:    job.Uri,
-					Source: b,
-					Tree:   tree,
-					Errors: errs,
+					Job:      job,
+					Uri:      job.Uri,
+					Source:   b,
+					Tree:     tree,
+					Errors:   errs,
+					Resolver: resolver,
 				}
 			}
 		})
@@ -807,7 +839,7 @@ func (s *Server) refreshWorkspace() {
 		for _, res := range items {
 			total += len(res.Source)
 			indexed++
-			s.finalizeDocumentUpdate(res.Uri, res.Source, res.Tree, res.Errors, res.Job.Doc)
+			s.finalizeDocumentUpdate(res.Uri, res.Source, res.Tree, res.Errors, res.Job.Doc, res.Resolver)
 			if indexed%50 == 0 {
 				s.sendProgressNotification("indexing", WorkDoneProgressReport{
 					Kind:       "report",
@@ -1257,7 +1289,7 @@ func (s *Server) updateDocument(uri string, source []byte) bool {
 	return s.finalizeDocumentUpdate(uri, source, tree, errs, doc)
 }
 
-func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tree, parseErrors []parser.ParseError, doc *Document) bool {
+func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tree, parseErrors []parser.ParseError, doc *Document, resolved ...*semantic.Resolver) bool {
 	var needsWorkspaceRepublish bool
 	var oldPublicFacts uint64
 	hadDocument := doc != nil
@@ -1278,10 +1310,12 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 		doc.Tree = tree
 	} else {
 		doc = &Document{
-			Server:   s,
-			URI:      uri,
-			Tree:     tree,
-			Resolver: semantic.New(tree),
+			Server: s,
+			URI:    uri,
+			Tree:   tree,
+		}
+		if len(resolved) == 0 || resolved[0] == nil {
+			doc.Resolver = semantic.New(tree)
 		}
 
 		doc.Path = s.uriToPath(uri)
@@ -1328,11 +1362,15 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 	}
 
 	res := doc.Resolver
-	res.Tree = tree
-
-	res.Reset()
-	res.Resolve(rootID)
-	res.Cleanup()
+	if len(resolved) > 0 && resolved[0] != nil {
+		res = resolved[0]
+		doc.Resolver = res
+	} else {
+		res.Tree = tree
+		res.Reset()
+		res.Resolve(rootID)
+		res.Cleanup()
+	}
 	doc.invalidateMetatableAttachmentIndex()
 
 	doc.parseDiagnosticPragmas()
