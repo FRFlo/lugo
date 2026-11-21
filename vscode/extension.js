@@ -231,6 +231,7 @@ const posthogClient = new PostHog("phc_AtCceYjFoZzdnFgfKNMGArJGbLMyFzzqvjBx7SQCo
 
 let telemetry;
 let client, restarting, indexing, debounce;
+let updateWorkspaceStatus = () => {};
 const COMMAND_CANCELLED = Symbol("command_cancelled");
 
 async function runCommand(command, handler) {
@@ -552,6 +553,19 @@ async function activate(context) {
 	const resourceProvider = new FiveMResourceProvider();
 	const resourceView = vscode.window.createTreeView("lugo.fivemResources", { treeDataProvider: resourceProvider, showCollapseAll: false });
 	const resourceStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+	const workspaceStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 99);
+	updateWorkspaceStatus = progress => {
+		if (progress.kind === "end") {
+			resourceView.description = undefined;
+			workspaceStatus.hide();
+			return;
+		}
+		const message = progress.message || "Preparing workspace...";
+		resourceView.description = `Loading · ${message}`;
+		workspaceStatus.text = `$(sync~spin) Lugo: ${message}`;
+		workspaceStatus.tooltip = "Lugo is indexing the workspace and analyzing diagnostics. Editor features may be delayed.";
+		workspaceStatus.show();
+	};
 	resourceStatus.command = "lugo.fivem.refresh";
 	resourceStatus.tooltip = "Refresh FiveM resources";
 	let resourceDiscoveries = 0;
@@ -594,7 +608,7 @@ async function activate(context) {
 		clearTimeout(resourceDiagnosticsDebounce);
 		resourceDiagnosticsDebounce = setTimeout(() => resourceProvider.updateDiagnostics(), 250);
 	};
-	context.subscriptions.push(resourceProvider, resourceView, resourceStatus, { dispose: () => { resourceDisposed = true; clearTimeout(resourceRefreshDebounce); clearTimeout(resourceDiagnosticsDebounce); } });
+	context.subscriptions.push(resourceProvider, resourceView, resourceStatus, workspaceStatus, { dispose: () => { resourceDisposed = true; updateWorkspaceStatus = () => {}; clearTimeout(resourceRefreshDebounce); clearTimeout(resourceDiagnosticsDebounce); } });
 	context.subscriptions.push(vscode.commands.registerCommand("lugo.fivem.refresh", () => runCommand("lugo.fivem.refresh", refreshResources)));
 	context.subscriptions.push(vscode.languages.onDidChangeDiagnostics(scheduleResourceDiagnostics));
 	let resourceWorkspaceFolders = (vscode.workspace.workspaceFolders || []).map(folder => folder.uri.toString());
@@ -774,6 +788,12 @@ async function startClient(context) {
 	let restartCount = 0;
 
 	const clientOptions = {
+		middleware: {
+			handleWorkDoneProgress: (token, progress, next) => {
+				if (token === "indexing") updateWorkspaceStatus(progress);
+				return next();
+			},
+		},
 		documentSelector: [
 			{ scheme: "file", language: "lua" },
 			{ scheme: "untitled", language: "lua" },
@@ -856,6 +876,7 @@ async function startClient(context) {
 	client = new LugoLanguageClient("lugo", "Lugo LSP", serverOptions, clientOptions);
 	const startedClient = client;
 	context.subscriptions.push(startedClient.onDidChangeState(event => {
+		if (event.newState === State.Stopped) updateWorkspaceStatus({ kind: "end" });
 		if (event.newState !== State.Running) return;
 		const initializedPaths = initialLibraryPaths;
 		// Running is emitted before the initialized notification. start() returns
