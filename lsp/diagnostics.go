@@ -325,7 +325,7 @@ func (s *Server) exportImplementations(res *FiveMResource, name string) []FiveML
 	return out
 }
 
-func (s *Server) publishWorkspaceDiagnostics() {
+func (s *Server) publishWorkspaceDiagnostics(progress ...func(int, int)) {
 	start := time.Now()
 	telemetryCtx := WithTraceContext(context.Background(), s.trace)
 	RecordTelemetry(telemetryCtx, "lugo.diagnostics_workspace.start", map[string]any{})
@@ -333,6 +333,14 @@ func (s *Server) publishWorkspaceDiagnostics() {
 	defer s.endWorkspaceDiagnosticFacts(facts)
 
 	var diagCount int
+	total := 0
+	if len(progress) > 0 {
+		for uri, doc := range s.Documents {
+			if doc != nil && !isNUIAssetURI(uri) && (doc.IsWorkspace || s.OpenFiles[uri]) {
+				total++
+			}
+		}
+	}
 
 	for uri, doc := range s.Documents {
 		if doc != nil && isNUIAssetURI(uri) {
@@ -342,6 +350,9 @@ func (s *Server) publishWorkspaceDiagnostics() {
 			s.publishDiagnostics(uri)
 
 			diagCount++
+			if len(progress) > 0 && (diagCount%25 == 0 || diagCount == total) {
+				progress[0](diagCount, total)
+			}
 		}
 	}
 
@@ -1588,7 +1599,9 @@ func (s *Server) publishDiagnostics(uri string) {
 				}
 			}
 
-			if s.DiagRedundantParameter {
+			// Calls without arguments cannot have redundant arguments. Avoid resolving
+			// their callee, which can recursively infer long member-call chains.
+			if s.DiagRedundantParameter && node.Count > 0 {
 				var funcIdentID ast.NodeID
 
 				if node.Kind == ast.KindMethodCall {

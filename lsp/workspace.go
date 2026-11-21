@@ -591,7 +591,7 @@ func (s *Server) refreshWorkspace() {
 		// Notify client that indexing has started.
 		s.sendProgressNotification("indexing", WorkDoneProgressBegin{
 			Kind:        "begin",
-			Title:       "Lugo: Indexing workspace",
+			Title:       "Lugo: Preparing workspace",
 			Cancellable: false,
 		})
 	}
@@ -957,16 +957,22 @@ func (s *Server) refreshWorkspace() {
 
 	took := time.Since(start)
 
-	s.sendProgressNotification("indexing", WorkDoneProgressEnd{
-		Kind:    "end",
-		Message: fmt.Sprintf("Indexed %d files in %s", indexed, took.Round(time.Millisecond)),
+	s.sendProgressNotification("indexing", WorkDoneProgressReport{
+		Kind: "report", Message: "Analyzing workspace diagnostics...",
 	})
 
 	s.Log.Printf("Re-indexed workspace in %s (indexed=%d, unchanged=%d, failed=%d)\n", took, indexed, unchanged, failed)
 
-	s.publishWorkspaceDiagnostics()
+	s.publishWorkspaceDiagnostics(func(done, total int) {
+		s.sendProgressNotification("indexing", WorkDoneProgressReport{
+			Kind: "report", Message: fmt.Sprintf("Analyzing diagnostics: %d/%d files", done, total),
+		})
+	})
 
 	took = time.Since(start)
+	s.sendProgressNotification("indexing", WorkDoneProgressEnd{
+		Kind: "end", Message: fmt.Sprintf("Workspace ready in %s", took.Round(time.Millisecond)),
+	})
 
 	s.Log.Printf("Total time taken for %d bytes: %s\n", total, took)
 }
