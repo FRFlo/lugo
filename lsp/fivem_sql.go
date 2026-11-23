@@ -59,7 +59,7 @@ func (s *Server) buildFiveMSQLDiagnostics(doc *Document) []Diagnostic {
 			} else if doc.FiveMProfile.Kind == FiveMProfileServer {
 				code += "-server"
 			}
-			out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, id), Severity: SeverityWarning, Code: code, Message: "Synchronous SQL-like call may block the FiveM thread; prefer the asynchronous adapter API."})
+			out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, id), Severity: SeverityWarning, Code: code, Message: performanceSQLAdvice(name)})
 		}
 		query := callArgument(doc, n, 0)
 		if query == ast.InvalidNode || doc.Tree.Nodes[query].Kind != ast.KindString {

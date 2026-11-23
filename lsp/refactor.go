@@ -212,6 +212,27 @@ func (s *Server) handleCodeAction(req Request) {
 		if fix, ok := s.fiveMQuickFix(doc, uri, diag); ok {
 			actions = append(actions, fix)
 		}
+		if fix, ok := luaDiagnosticQuickFix(doc, uri, diag); ok {
+			actions = append(actions, fix)
+		}
+		if fix, ok := s.fiveMAssetCaseFix(doc, uri, diag); ok {
+			actions = append(actions, fix)
+		}
+		if fix, ok := s.oalVectorQuickFix(doc, uri, diag); ok {
+			actions = append(actions, fix)
+		}
+		if fix, ok := s.stateBagKeyQuickFix(doc, uri, diag); ok {
+			actions = append(actions, fix)
+		}
+		if fix, ok := s.manifestDirectiveQuickFix(doc, uri, diag); ok {
+			actions = append(actions, fix)
+		}
+		if fix, ok := s.manifestCleanupQuickFix(doc, uri, diag); ok {
+			actions = append(actions, fix)
+		}
+		actions = append(actions, s.fiveMCommandQuickFixes(doc, uri, diag)...)
+		actions = append(actions, s.fiveMConvarQuickFix(doc, uri, diag)...)
+		actions = append(actions, fiveMPerformanceQuickFixes(doc, uri, diag)...)
 	}
 
 	allFixes := s.getSafeFixesForDocument(doc)
@@ -1672,93 +1693,15 @@ func (s *Server) fiveMQuickFix(doc *Document, uri string, diag Diagnostic) (Code
 	}
 
 	if diag.Code == "fivem-unknown-event" {
-		name := strings.Trim(diag.Message, "")
-		if i := strings.Index(name, "'"); i >= 0 {
-			name = name[i+1:]
-			if j := strings.Index(name, "'"); j >= 0 {
-				name = name[:j]
-			}
-		}
-		var match string
-		for _, other := range s.Documents {
-			if other == nil {
-				continue
-			}
-			for _, ev := range other.FiveMEvents {
-				if ev.Name == "" || ev.Name == name {
-					continue
-				}
-				if levenshteinFast(strings.ToLower(name), strings.ToLower(ev.Name), 2) <= 2 {
-					if match != "" && match != ev.Name {
-						return CodeAction{}, false
-					}
-					match = ev.Name
-				}
-			}
-		}
-		if match == "" {
-			return CodeAction{}, false
-		}
-		return s.fiveMReplacementAction(uri, diag, match, "Change event to '%s'"), true
+		return s.unknownEventQuickFix(doc, uri, diag)
 	}
 
 	if diag.Code == "fivem-unregistered-net-event" {
-		name := ""
-		if i := strings.Index(diag.Message, "'"); i >= 0 {
-			rest := diag.Message[i+1:]
-			if j := strings.Index(rest, "'"); j >= 0 {
-				name = rest[:j]
-			}
-		}
-		if name == "" {
-			return CodeAction{}, false
-		}
-		trigger := doc.Tree.NodeAt(doc.Tree.Offset(diag.Range.Start.Line, diag.Range.Start.Character))
-		var kind FiveMEventKind
-		for _, ev := range doc.FiveMEvents {
-			if ev.NodeID == trigger {
-				kind = ev.Kind
-				break
-			}
-		}
-		env := EnvServer
-		if kind == FiveMEventTriggerClient {
-			env = EnvClient
-		}
-		var target *Document
-		for _, other := range s.Documents {
-			if other == nil || other.IsMeta || s.getDocumentFiveMProfile(other).Env() != env {
-				continue
-			}
-			for _, ev := range other.FiveMEvents {
-				if ev.Name == name && ev.Kind == FiveMEventRegisterNet {
-					return CodeAction{}, false
-				}
-			}
-			if target != nil {
-				return CodeAction{}, false
-			}
-			target = other
-		}
-		if target == nil {
-			return CodeAction{}, false
-		}
-		return CodeAction{Title: fmt.Sprintf("Register network event '%s'", name), Kind: "quickfix", Diagnostics: []Diagnostic{diag}, IsPreferred: true, Edit: &WorkspaceEdit{Changes: map[string][]TextEdit{target.URI: {{Range: Range{}, NewText: fmt.Sprintf("RegisterNetEvent('%s')\n", name)}}}}}, true
+		return s.unregisteredEventQuickFix(doc, uri, diag)
 	}
 
 	if diag.Code == "fivem-event-direction" {
-		offset := doc.Tree.Offset(diag.Range.Start.Line, diag.Range.Start.Character)
-		id := doc.Tree.NodeAt(offset)
-		for id != ast.InvalidNode && int(id) < len(doc.Tree.Nodes) {
-			n := doc.Tree.Nodes[id]
-			if n.Kind == ast.KindIdent {
-				old := string(doc.Source()[n.Start:n.End])
-				if old == "TriggerServerEvent" || old == "TriggerClientEvent" {
-					return s.fiveMReplacementAction(uri, Diagnostic{Range: getNodeRange(doc.Tree, id)}, "TriggerEvent", "Use '%s' for a local event"), true
-				}
-			}
-			id = n.Parent
-		}
+		return s.eventDirectionQuickFix(doc, uri, diag)
 	}
 
 	// Manifest path diagnostics must carry a checked, relative replacement.
