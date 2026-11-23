@@ -184,3 +184,20 @@ func TestFiveMEventLoadOrderDependencies(t *testing.T) {
 		})
 	}
 }
+
+func TestFiveMEventLoadOrderProvidedDependency(t *testing.T) {
+	h := newFiveMFixtureHarnessWithoutIndex(t)
+	h.writeWorkspaceFile("server.cfg", "ensure consumer\nensure replacement\n")
+	h.writeWorkspaceFile("consumer/fxmanifest.lua", "fx_version 'cerulean'\ngame 'gta5'\ndependency 'original'\nserver_script 'main.lua'\n")
+	h.writeWorkspaceFile("consumer/main.lua", "TriggerEvent('example', function(value) print(value) end)\n")
+	h.writeWorkspaceFile("replacement/fxmanifest.lua", "fx_version 'cerulean'\ngame 'gta5'\nprovide 'original'\nserver_script 'main.lua'\n")
+	h.writeWorkspaceFile("replacement/main.lua", "AddEventHandler('example', function(cb) cb(42) end)\n")
+	h.reindex()
+	doc := h.server.Documents[h.server.pathToURI(filepath.Join(h.root, "consumer", "main.lua"))]
+	if got := h.server.fiveMEventLoadOrderDiagnostics(doc); len(got) != 0 {
+		t.Fatalf("replacement should start before consumer: %#v", got)
+	}
+	if got := doc.InferType(mustFindIdentNode(t, doc, "value")); got.Basics != TypeNumber {
+		t.Fatalf("replacement callback type = %s, want number", got.Format())
+	}
+}
