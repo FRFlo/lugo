@@ -29,14 +29,24 @@ type workspaceDiagnosticFacts struct {
 	aces             map[string]bool
 	convars          fiveMConvarFacts
 	nui              map[string]nuiResourceFacts
+	serverConfigs    map[string]fiveMServerConfig
+	serverHandlers   map[string][]fiveMConfigEventHandler
 }
 
 var workspaceDiagnosticFactCaches sync.Map // map[*Server]*workspaceDiagnosticFacts
 
 func (s *Server) beginWorkspaceDiagnosticFacts() *workspaceDiagnosticFacts {
 	facts := &workspaceDiagnosticFacts{
-		convars: s.collectFiveMConvars(),
-		nui:     s.collectFiveMNUIResourceFacts(),
+		convars:        s.collectFiveMConvars(),
+		nui:            s.collectFiveMNUIResourceFacts(),
+		serverConfigs:  make(map[string]fiveMServerConfig),
+		serverHandlers: make(map[string][]fiveMConfigEventHandler),
+	}
+	if s.DiagFiveMServerConfig {
+		for _, path := range s.fiveMServerConfigPaths() {
+			facts.serverConfigs[path] = readFiveMServerConfig(path)
+		}
+		facts.serverHandlers = s.collectFiveMConfigEventHandlers()
 	}
 	facts.commands, facts.mappings, facts.aces = s.collectFiveMCommands()
 	if s.GlobalIndex != nil {
@@ -410,6 +420,7 @@ func (s *Server) publishWorkspaceDiagnostics(progress ...func(int, int)) {
 			delete(nuiState.published, assetURI)
 		}
 	}
+	s.publishFiveMServerConfigDiagnostics()
 
 	took := time.Since(start)
 
@@ -705,6 +716,9 @@ func (s *Server) publishDiagnostics(uri string) {
 	}
 	if s.DiagFiveMEventPayload {
 		s.diagFiveMEventPayload(doc)
+	}
+	if s.DiagFiveMServerConfig {
+		s.diagBuf = append(s.diagBuf, s.fiveMEventLoadOrderDiagnostics(doc)...)
 	}
 	if s.DiagFiveMTrustBoundary {
 		s.buildFiveMTrustBoundaryDiagnostics(doc)
@@ -1566,6 +1580,10 @@ func (s *Server) publishDiagnostics(uri string) {
 				}
 			}
 		case ast.KindCallExpr, ast.KindMethodCall:
+			if s.DiagFiveMEventPayload {
+				s.diagBuf = append(s.diagBuf, s.fiveMCallbackArgumentDiagnostics(doc, node)...)
+				s.diagBuf = append(s.diagBuf, s.fiveMEventPayloadTypeDiagnostics(doc, nodeID)...)
+			}
 			if s.DiagTypeCheck {
 				var funcID ast.NodeID
 
@@ -2519,10 +2537,10 @@ func (s *Server) diagFiveMEventPayload(doc *Document) {
 		if trigger.Kind != FiveMEventTriggerServer && trigger.Kind != FiveMEventTriggerClient {
 			continue
 		}
-		payloadCount := 0
+		payloadCount := -int(trigger.ExtraPayloadArgs)
 		// TriggerClientEvent has an event target between the name and payload.
 		if trigger.Kind == FiveMEventTriggerClient {
-			payloadCount = -1
+			payloadCount--
 		}
 		// Find the call node containing the event-name argument and count its arguments.
 		var call ast.Node

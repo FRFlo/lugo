@@ -510,6 +510,9 @@ func (doc *Document) fiveMEventAtOffset(offset uint32) (FiveMEventInfo, bool) {
 	}
 
 	for _, ev := range doc.FiveMEvents {
+		if ev.Kind == FiveMFrameworkRegisterServerCallback || ev.Kind == FiveMFrameworkTriggerServerCallback {
+			continue
+		}
 		if ev.NodeID == ast.InvalidNode || int(ev.NodeID) >= len(doc.Tree.Nodes) {
 			continue
 		}
@@ -1236,6 +1239,9 @@ func (s *Server) handleWorkspaceSymbol(req Request) {
 		if count < MaxWorkspaceResults {
 			for uri, doc := range s.Documents {
 				for _, event := range doc.FiveMEvents {
+					if event.Kind == FiveMFrameworkRegisterServerCallback || event.Kind == FiveMFrameworkTriggerServerCallback {
+						continue
+					}
 					if addEventSymbol(event.Name, Location{URI: uri, Range: getNodeRange(doc.Tree, event.NodeID)}) {
 						break
 					}

@@ -497,7 +497,7 @@
                         "type": "boolean",
                         "default": true,
                         "scope": "resource",
-                        "markdownDescription": "Enable diagnostics when FiveM network event arguments do not match a known handler payload.",
+                        "markdownDescription": "Enable FiveM event payload and inferred callback argument diagnostics.",
                         "order": 7
                     },
                     "lugo.fivem.diagnostics.trustBoundary": {
@@ -520,6 +520,18 @@
                         "scope": "resource",
                         "markdownDescription": "Enable FiveM SQL diagnostics for synchronous adapter calls, placeholder counts, and annotated schemas.",
                         "order": 10
+                    },
+                    "lugo.fivem.serverConfig": {
+                        "type": "string",
+                        "default": "",
+                        "scope": "resource",
+                        "markdownDescription": "FiveM server configuration path, relative to the workspace. Leave empty to detect server.cfg."
+                    },
+                    "lugo.fivem.diagnostics.serverConfig": {
+                        "type": "boolean",
+                        "default": true,
+                        "scope": "resource",
+                        "markdownDescription": "Report missing or cyclic FiveM configuration includes."
                     },
                     "lugo.fivem.frameworkAdapters": {
                         "type": "array",

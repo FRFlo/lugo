@@ -3,6 +3,7 @@ package lsp
 import (
 	"bytes"
 	"iter"
+	"sort"
 	"strings"
 
 	"github.com/FRFlo/lugo/ast"
@@ -26,17 +27,18 @@ const (
 
 // TypeSet efficiently represents union types as bitmasks and custom names.
 type TypeSet struct {
-	CustomName string
-	DeclURI    string
-	DeclNode   ast.NodeID
-	MetaURI    string
-	MetaNode   ast.NodeID
-	CallURI    string
-	CallNode   ast.NodeID
-	CallSig    string
-	CallParams []LuaDocParam
-	CallRet    []LuaDocReturn
-	Basics     BasicType
+	CustomName   string
+	DeclURI      string
+	DeclNode     ast.NodeID
+	MetaURI      string
+	MetaNode     ast.NodeID
+	CallURI      string
+	CallNode     ast.NodeID
+	CallSig      string
+	CallParams   []LuaDocParam
+	CallRet      []LuaDocReturn
+	Alternatives []TypeSet
+	Basics       BasicType
 }
 
 func (s *Server) inferGlobalSymbols(srcDoc *Document, recHash, propHash uint64) ([]GlobalSymbol, bool) {
@@ -162,6 +164,31 @@ func ParseTypeString(tStr string) TypeSet {
 }
 
 func (typeSet TypeSet) Format() string {
+	if len(typeSet.Alternatives) > 0 {
+		seen := make(map[string]bool, len(typeSet.Alternatives)+1)
+		var parts []string
+		var covered BasicType
+		for _, variant := range typeSet.Alternatives {
+			covered |= variant.Basics
+			label := variant.Format()
+			if !seen[label] {
+				seen[label] = true
+				parts = append(parts, label)
+			}
+		}
+		remaining := typeSet
+		remaining.Alternatives = nil
+		remaining.Basics &^= covered
+		remaining.CustomName = ""
+		if remaining.Basics != TypeUnknown {
+			label := remaining.Format()
+			if !seen[label] {
+				parts = append(parts, label)
+			}
+		}
+		sort.Strings(parts)
+		return strings.Join(parts, " | ")
+	}
 	var parts []string
 
 	if typeSet.Basics&TypeNumber != 0 {
@@ -514,13 +541,24 @@ func (doc *Document) inferIdent(id ast.NodeID) TypeSet {
 			if match {
 				rt := d.InferType(reassignment.ValID)
 
-				if rt.Basics == TypeUnknown && rt.CustomName == "" {
+				distinctReturnedObjects := t.DeclURI != "" && rt.DeclURI != "" &&
+					(t.DeclURI != d.URI || rt.DeclURI != d.URI) &&
+					(t.DeclURI != rt.DeclURI || t.DeclNode != rt.DeclNode || t.CustomName != rt.CustomName)
+				if len(t.Alternatives) != 0 || len(rt.Alternatives) != 0 || distinctReturnedObjects {
+					if !reusableType(rt) {
+						rt.Basics = TypeAny
+					}
+					t = mergeFiveMEventTypes(t, rt)
+				} else if rt.Basics == TypeUnknown && rt.CustomName == "" {
 					t.Basics |= TypeAny
 				} else {
 					t.Basics |= rt.Basics
 
 					if t.CustomName == "" {
 						t.CustomName = rt.CustomName
+						if rt.CustomName != "" && t.DeclNode == ast.InvalidNode && rt.DeclNode == ast.InvalidNode {
+							t.DeclURI = rt.DeclURI
+						}
 					}
 
 					if t.DeclNode == ast.InvalidNode && rt.DeclNode != ast.InvalidNode {
@@ -581,7 +619,40 @@ func (doc *Document) inferMethodSelfType(methodNameID ast.NodeID) TypeSet {
 	return doc.InferType(methodName.Left)
 }
 
-func (doc *Document) inferFunctionParameter(defID, funcExprID ast.NodeID) TypeSet {
+func (doc *Document) inferFunctionParameter(defID, funcExprID ast.NodeID) (result TypeSet) {
+	explicit := false
+	defer func() {
+		if explicit {
+			return
+		}
+		genericAny := result.Basics == TypeAny && result.CustomName == "" && len(result.Alternatives) == 0
+		if !reusableType(result) || genericAny {
+			if inferred := doc.inferFiveMEventHandlerParameter(defID, funcExprID); reusableType(inferred) {
+				result = inferred
+			}
+		}
+		genericAny = result.Basics == TypeAny && result.CustomName == "" && len(result.Alternatives) == 0
+		if !reusableType(result) || genericAny {
+			if inferred := doc.inferFiveMFrameworkHandlerParameter(defID, funcExprID); reusableType(inferred) {
+				result = inferred
+			}
+		}
+		genericAny = result.Basics == TypeAny && result.CustomName == "" && len(result.Alternatives) == 0
+		if !reusableType(result) || genericAny {
+			if inferred := doc.inferFiveMNamedEventCallbackParameter(defID, funcExprID); reusableType(inferred) {
+				result = inferred
+			}
+		}
+	}()
+	paramName := ast.String(doc.nodeSource(defID))
+	if funcDoc := doc.GetLuaDoc(funcExprID); funcDoc != nil {
+		for _, param := range funcDoc.Params {
+			if param.Name == paramName && param.Type != "" {
+				explicit = true
+				return ParseTypeString(param.Type)
+			}
+		}
+	}
 	grandParentID := doc.Tree.Nodes[funcExprID].Parent
 	if grandParentID == ast.InvalidNode {
 		return doc.inferBridgeCallbackParameter(defID, funcExprID)
@@ -607,10 +678,9 @@ func (doc *Document) inferFunctionParameter(defID, funcExprID ast.NodeID) TypeSe
 		return doc.inferBridgeCallbackParameter(defID, funcExprID)
 	}
 
-	paramName := ast.String(doc.nodeSource(defID))
-
 	for _, p := range funcDoc.Params {
 		if p.Name == paramName {
+			explicit = true
 			return ParseTypeString(p.Type)
 		}
 	}
@@ -618,7 +688,7 @@ func (doc *Document) inferFunctionParameter(defID, funcExprID ast.NodeID) TypeSe
 	return doc.inferBridgeCallbackParameter(defID, funcExprID)
 }
 
-func (doc *Document) inferBridgeCallbackParameter(defID, funcExprID ast.NodeID) TypeSet {
+func (doc *Document) inferBridgeCallbackParameter(defID, funcExprID ast.NodeID) (result TypeSet) {
 	if doc.Server == nil || funcExprID == ast.InvalidNode || defID == ast.InvalidNode {
 		return TypeSet{}
 	}
@@ -656,6 +726,21 @@ func (doc *Document) inferBridgeCallbackParameter(defID, funcExprID ast.NodeID) 
 	if argIndex == -1 {
 		return TypeSet{}
 	}
+
+	defer func() {
+		genericAny := result.Basics == TypeAny && result.CustomName == "" && len(result.Alternatives) == 0
+		if !reusableType(result) || genericAny {
+			if inferred := doc.inferFiveMEventCallbackParameter(callID, argIndex, paramIndex); reusableType(inferred) {
+				result = inferred
+			}
+		}
+		genericAny = result.Basics == TypeAny && result.CustomName == "" && len(result.Alternatives) == 0
+		if !reusableType(result) || genericAny {
+			if inferred := doc.inferFiveMFrameworkCallbackResult(callID, argIndex, paramIndex); reusableType(inferred) {
+				result = inferred
+			}
+		}
+	}()
 
 	funcIdentID := callNode.Left
 	if callNode.Kind == ast.KindMethodCall {
@@ -1012,6 +1097,22 @@ func (doc *Document) inferMemberExprWithContext(node ast.Node, symbolCtx *Symbol
 	} else {
 		leftType = doc.InferType(node.Left)
 	}
+	if len(leftType.Alternatives) > 0 {
+		var result TypeSet
+		found := false
+		for _, variant := range leftType.Alternatives {
+			field := doc.inferMemberExprWithContext(node, nil, &symbolReceiverInfo{Known: true, Type: variant}, true)
+			if !reusableType(field) {
+				field.Basics = TypeAny
+			}
+			if !found {
+				result, found = field, true
+			} else {
+				result = mergeFiveMEventTypes(result, field)
+			}
+		}
+		return result
+	}
 
 	var t TypeSet
 
@@ -1038,13 +1139,19 @@ func (doc *Document) inferMemberExprWithContext(node ast.Node, symbolCtx *Symbol
 	}
 	scopedClassHierarchy := false
 	if doc.Server != nil && doc.Server.GlobalIndex != nil && leftType.CustomName != "" {
-		resource, scope := doc.Server.globalIndexContext(doc)
+		lookupDoc := doc
+		if leftType.DeclURI != "" && leftType.DeclURI != doc.URI {
+			if owner := doc.Server.Documents[leftType.DeclURI]; owner != nil {
+				lookupDoc = doc.Server.fiveMTableVisibilityDoc(owner, doc)
+			}
+		}
+		resource, scope := doc.Server.globalIndexContext(lookupDoc)
 		className := luaDocGenericClassName(leftType.CustomName)
 		_, rootArgs, _ := splitLuaDocGenericType(leftType.CustomName)
 		hierarchy := doc.Server.GlobalIndex.LookupLuaDocClassHierarchy(resource, scope, className)
 		fields := doc.Server.luaDocClassMemberCandidates(resource, scope, className, string(fieldName), hierarchy)
 		genericBindings := luaDocGenericBindingsForHierarchy(hierarchy, rootArgs)
-		reachable := doc.Server.luaDocClassFieldReachability(doc, hierarchy)
+		reachable := doc.Server.luaDocClassFieldReachability(lookupDoc, hierarchy)
 		scopedClassHierarchy = len(hierarchy) > 0
 		for _, candidate := range fields {
 			field := candidate.Entry
@@ -1207,6 +1314,21 @@ func (doc *Document) inferMemberExprWithContext(node ast.Node, symbolCtx *Symbol
 
 		if targetDoc != nil {
 			checkTableFields(targetDoc, leftType.DeclNode)
+			if targetDoc != doc && doc.Server != nil {
+				if owner, receiver := doc.Server.fiveMTableGlobalOwner(leftType); owner != nil && receiver != 0 {
+					key := GlobalKey{ReceiverHash: receiver, PropHash: propHash}
+					for _, symbol := range doc.Server.visibleGlobalSymbolsFromEntries(doc.Server.fiveMTableVisibilityDoc(owner, doc), doc.Server.GlobalIndex.SymbolsByHash(key), 0) {
+						fieldDoc := doc.Server.Documents[symbol.URI]
+						if fieldDoc == nil {
+							continue
+						}
+						if value := fieldDoc.getAssignedValue(symbol.NodeID); value != ast.InvalidNode {
+							mergeType(fieldDoc.InferType(value))
+							doc.Server.trackMetatableTypeDependency(fieldDoc.URI, doc.URI)
+						}
+					}
+				}
+			}
 		}
 	}
 

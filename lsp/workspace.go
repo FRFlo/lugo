@@ -347,6 +347,11 @@ func (s *Server) handleDidChangeWatchedFiles(req Request) {
 		if s.isIgnoredURI(uri) {
 			continue
 		}
+		if strings.EqualFold(filepath.Ext(s.uriToPath(uri)), ".cfg") {
+			s.invalidateFiveMEventConfiguration()
+			needsWorkspaceRepublish = true
+			continue
+		}
 
 		switch change.Type {
 		case 1, 2: // Created, Changed
@@ -1407,11 +1412,27 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 		node := tree.Nodes[i]
 		if node.Kind == ast.KindCallExpr && int(node.Left) < len(tree.Nodes) {
 			leftNode := tree.Nodes[node.Left]
+			if leftNode.Kind == ast.KindMemberExpr && leftNode.Right != ast.InvalidNode && int(leftNode.Right) < len(tree.Nodes) && tree.Nodes[leftNode.Right].Kind == ast.KindIdent && node.Count >= 2 && node.Extra+1 < uint32(len(tree.ExtraList)) {
+				var callbackKind FiveMEventKind
+				switch string(doc.nodeSource(leftNode.Right)) {
+				case "RegisterServerCallback":
+					callbackKind = FiveMFrameworkRegisterServerCallback
+				case "TriggerServerCallback":
+					callbackKind = FiveMFrameworkTriggerServerCallback
+				}
+				if callbackKind != 0 {
+					nameID := tree.ExtraList[node.Extra]
+					if name, ok := doc.fiveMStaticEventName(nameID, 0); ok {
+						doc.FiveMEvents = append(doc.FiveMEvents, FiveMEventInfo{Name: name, Kind: callbackKind, NodeID: nameID, HandlerID: tree.ExtraList[node.Extra+1]})
+					}
+				}
+			}
 			if leftNode.Kind == ast.KindIdent && doc.referenceAt(node.Left) == ast.InvalidNode {
 				src := doc.Source()
 				ident := src[leftNode.Start:leftNode.End]
 
 				var kind FiveMEventKind
+				var extraPayloadArgs uint8
 				matched := true
 
 				switch {
@@ -1423,21 +1444,24 @@ func (s *Server) finalizeDocumentUpdate(uri string, source []byte, tree *ast.Tre
 					kind = FiveMEventTriggerLocal
 				case bytes.Equal(ident, []byte("TriggerServerEvent")):
 					kind = FiveMEventTriggerServer
+				case bytes.Equal(ident, []byte("TriggerLatentServerEvent")):
+					kind, extraPayloadArgs = FiveMEventTriggerServer, 1
 				case bytes.Equal(ident, []byte("TriggerClientEvent")):
 					kind = FiveMEventTriggerClient
+				case bytes.Equal(ident, []byte("TriggerLatentClientEvent")):
+					kind, extraPayloadArgs = FiveMEventTriggerClient, 1
 				default:
 					matched = false
 				}
 
 				if matched && node.Count >= 1 && node.Extra < uint32(len(tree.ExtraList)) {
 					arg1ID := tree.ExtraList[node.Extra]
-					if int(arg1ID) < len(tree.Nodes) && tree.Nodes[arg1ID].Kind == ast.KindString {
-						eventName := unquoteLuaString(string(src[tree.Nodes[arg1ID].Start:tree.Nodes[arg1ID].End]))
-
+					if eventName, ok := doc.fiveMStaticEventName(arg1ID, 0); ok {
 						info := FiveMEventInfo{
-							Name:   eventName,
-							Kind:   kind,
-							NodeID: arg1ID,
+							Name:             eventName,
+							Kind:             kind,
+							NodeID:           arg1ID,
+							ExtraPayloadArgs: extraPayloadArgs,
 						}
 
 						// For AddEventHandler and RegisterNetEvent, record handler NodeID (second arg)
@@ -2121,6 +2145,7 @@ func documentPublicFacts(doc *Document) uint64 {
 	}
 	for _, event := range doc.FiveMEvents {
 		write(uint64(event.Kind))
+		write(uint64(event.ExtraPayloadArgs))
 		writeString(event.Name)
 	}
 	return h

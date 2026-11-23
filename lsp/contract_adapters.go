@@ -108,6 +108,9 @@ func fiveMEventContractSymbols(doc *Document) []FiveMContractSymbol {
 		if event.Name == "" || event.NodeID == ast.InvalidNode || int(event.NodeID) >= len(doc.Tree.Nodes) {
 			continue
 		}
+		if event.Kind == FiveMFrameworkRegisterServerCallback || event.Kind == FiveMFrameworkTriggerServerCallback {
+			continue
+		}
 		direction := FiveMContractHostToLua
 		switch event.Kind {
 		case FiveMEventTriggerLocal, FiveMEventTriggerServer, FiveMEventTriggerClient:

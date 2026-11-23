@@ -399,6 +399,7 @@ func (s *Server) invalidateMetatableIndexesNow(changedURIs ...string) {
 	s.newIndexWrites = nil
 	if len(changedURIs) != 0 {
 		newGlobalNames := make(map[uint64]struct{})
+		changedEvents := make(map[string]struct{})
 		changedSet := make(map[string]struct{}, len(changedURIs))
 		queue := make([]string, 0, len(changedURIs))
 		visited := make(map[string]struct{})
@@ -409,6 +410,17 @@ func (s *Server) invalidateMetatableIndexesNow(changedURIs ...string) {
 			changedSet[uri] = struct{}{}
 			queue = append(queue, uri)
 			changed := s.Documents[uri]
+			if changed != nil {
+				// A previously unknown dispatcher can appear in a new file. Its
+				// consumers depend on the provider resource even before a concrete
+				// dispatcher document exists to receive a dependency edge.
+				if root := s.getDocumentFiveMProfile(changed).ResourceRoot; root != "" && root != uri && len(s.metatableTypeDependents[root]) != 0 {
+					queue = append(queue, root)
+				}
+				for _, event := range changed.FiveMEvents {
+					changedEvents[event.Name] = struct{}{}
+				}
+			}
 			if changed != nil && changed.Resolver != nil {
 				for _, definition := range changed.Resolver.GlobalDefs {
 					if hash := ast.HashBytes(changed.nodeSource(definition)); hash != 0 {
@@ -441,13 +453,19 @@ func (s *Server) invalidateMetatableIndexesNow(changedURIs ...string) {
 		// document. Such consumers could not have registered a source edge yet,
 		// so discover them by matching unresolved resolver references.
 		for consumerURI, consumer := range s.Documents {
-			if consumer == nil || len(newGlobalNames) == 0 {
+			if consumer == nil || (len(newGlobalNames) == 0 && len(changedEvents) == 0) {
 				continue
 			}
 			if _, changed := changedSet[consumerURI]; changed {
 				continue
 			}
 			matched := false
+			for _, event := range consumer.FiveMEvents {
+				if _, exists := changedEvents[event.Name]; exists {
+					matched = true
+					break
+				}
+			}
 			if consumer.Resolver != nil && consumer.Tree != nil && consumer.Source() != nil {
 				for _, ref := range consumer.Resolver.GlobalRefs {
 					if int(ref) >= len(consumer.Tree.Nodes) {

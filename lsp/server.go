@@ -38,6 +38,7 @@ type Server struct {
 
 	// Config
 	LibraryPaths            []string
+	FiveMServerConfig       string
 	lowerLibraryPaths       []string
 	IgnoreGlobs             []string
 	compiledIgnores         []IgnorePattern
@@ -63,6 +64,7 @@ type Server struct {
 	Documents                  map[string]*Document
 	metatableIndexMu           sync.Mutex
 	metatableIndexVersion      uint64
+	fiveMEventIndex            fiveMEventIndex
 	newIndexWrites             *newIndexWriteIndex
 	metatableTypeDependents    map[string]map[string]struct{}
 	metatableInvalidationBatch map[string]struct{}
@@ -75,6 +77,7 @@ type Server struct {
 	workspaceReadDir           func(string) ([]os.DirEntry, error)
 	workspaceStat              func(string) (fs.FileInfo, error)
 	FiveMResourceGraph         *FiveMResourceGraph
+	fiveMConfigPublished       map[string]struct{}
 	uriCache                   map[string]string
 	symlinkCache               map[string]string
 
@@ -133,6 +136,7 @@ type Server struct {
 	DiagFiveMUnknownResource      bool
 	DiagFiveMEventDirection       bool
 	DiagFiveMEventPayload         bool
+	DiagFiveMServerConfig         bool
 	DiagFiveMUnregisteredNetEvent bool
 	DiagFiveMUnknownEvent         bool
 	DiagFiveMTrustBoundary        bool
@@ -352,6 +356,11 @@ func (s *Server) Start() error {
 
 func (s *Server) applyInitializationOptions(opts InitializationOptions) (needsReindex bool, needsRepublish bool) {
 	SetTelemetryEnabled(opts.TelemetryEnabled)
+	if s.FiveMServerConfig != opts.FiveMServerConfig {
+		s.FiveMServerConfig = opts.FiveMServerConfig
+		s.invalidateFiveMEventConfiguration()
+		needsRepublish = true
+	}
 	if opts.TelemetryTraceID != "" {
 		s.trace = TraceContext{TraceID: opts.TelemetryTraceID, SpanID: opts.TelemetrySpanID}
 	}
@@ -439,6 +448,7 @@ func (s *Server) applyInitializationOptions(opts InitializationOptions) (needsRe
 	setCfg(&s.DiagFiveMUnknownResource, opts.DiagFiveMUnknownResource, &needsRepublish)
 	setCfg(&s.DiagFiveMEventDirection, opts.DiagFiveMEventDirection, &needsRepublish)
 	setCfg(&s.DiagFiveMEventPayload, opts.DiagFiveMEventPayload, &needsRepublish)
+	setCfg(&s.DiagFiveMServerConfig, opts.DiagFiveMServerConfig, &needsRepublish)
 	setCfg(&s.DiagFiveMUnregisteredNetEvent, opts.DiagFiveMUnregisteredNetEvent, &needsRepublish)
 	setCfg(&s.DiagFiveMUnknownEvent, opts.DiagFiveMUnknownEvent, &needsRepublish)
 	setCfg(&s.DiagFiveMTrustBoundary, opts.DiagFiveMTrustBoundary, &needsRepublish)

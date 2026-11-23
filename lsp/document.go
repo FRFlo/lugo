@@ -326,13 +326,16 @@ const (
 	FiveMEventTriggerLocal
 	FiveMEventTriggerServer
 	FiveMEventTriggerClient
+	FiveMFrameworkRegisterServerCallback
+	FiveMFrameworkTriggerServerCallback
 )
 
 type FiveMEventInfo struct {
-	Name      string
-	Kind      FiveMEventKind
-	NodeID    ast.NodeID
-	HandlerID ast.NodeID
+	Name             string
+	Kind             FiveMEventKind
+	NodeID           ast.NodeID
+	HandlerID        ast.NodeID
+	ExtraPayloadArgs uint8
 }
 
 func (doc *Document) getAssignedValue(id ast.NodeID) ast.NodeID {

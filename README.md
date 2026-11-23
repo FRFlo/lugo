@@ -285,7 +285,9 @@ tool arguments or paths.
 VS Code uses the `lugo.fivem.*` names below. Standalone clients and CI use the matching `initializationOptions` keys shown in parentheses.
 
 * `lugo.fivem.diagnostics.eventDirection` (`diagFiveMEventDirection`): Toggle client/server event direction validation.
-* `lugo.fivem.diagnostics.eventPayload` (`diagFiveMEventPayload`): Toggle validation of network event arguments against known handler payloads.
+* `lugo.fivem.diagnostics.eventPayload` (`diagFiveMEventPayload`): Toggle FiveM event payload and inferred callback argument diagnostics.
+* `lugo.fivem.serverConfig` (`fiveMServerConfig`): Optional path to the server configuration, relative to the workspace or absolute. When unset, Lugo searches workspace folders and their ancestors for `server.cfg`.
+* `lugo.fivem.diagnostics.serverConfig` (`diagFiveMServerConfig`): Toggle warnings for missing or cyclic `exec` files and for a direct startup event whose known handlers all start later.
 * `lugo.fivem.diagnostics.unregisteredNetEvent` (`diagFiveMUnregisteredNetEvent`): Toggle checks for registered-but-never-triggered and triggered-but-never-registered network events.
 * `lugo.fivem.diagnostics.unknownEvent` (`diagFiveMUnknownEvent`): Toggle warnings for event names unknown to the workspace.
 * `lugo.fivem.diagnostics.unaccountedFile` (`diagFiveMUnaccountedFile`): Toggle warnings for Lua files inside a detected resource root that are not matched by the active manifest. Unaccounted files remain plain Lua.
@@ -298,6 +300,8 @@ VS Code uses the `lugo.fivem.*` names below. Standalone clients and CI use the m
 * `lugo.fivem.sqlAdapters` (`sqlAdapters`): Additional SQL adapter metadata. Each item requires `name` and may set `calls` and `syncCalls` arrays. Built-in `oxmysql` and `mysql-async` call shapes are always available.
 
 Manifest/runtime/native selection remains derived from the active resource manifest. The FiveM Resources view discovers manifests asynchronously and incrementally; diagnostic changes refresh it after a short debounce.
+
+Lugo infers literal or locally constant event names, event payloads, and values passed to local event callbacks across resources. Multiple compatible handlers contribute a union; client and server runtimes remain separate. This includes patterns such as `TriggerEvent('esx:getSharedObject', function(obj) ESX = obj end)`. When a framework's `RegisterServerCallback` / `TriggerServerCallback` dispatcher is present and its callback position can be established from source, Lugo also infers the request and response types across the network. For a complete server configuration, literal `ensure` and `start` commands, nested `exec` files, resource groups and manifest dependencies determine which resources contribute. Calls deferred through functions or threads may reach resources started later. If the configuration is absent, incomplete, or does not list the calling resource, Lugo falls back to the workspace. Runtime-created names, dynamically started resources, and `stop`/`restart` sequences involving active dependents cannot always be determined statically, so the workspace fallback avoids assuming a fixed runtime state.
 
 ## Commands
 
