@@ -12,7 +12,7 @@ type typeCache struct {
 }
 
 func reusableType(t TypeSet) bool {
-	return t.Basics != TypeUnknown || t.CustomName != "" || t.DeclNode != ast.InvalidNode
+	return t.Basics != TypeUnknown || t.CustomName != "" || t.DeclNode != ast.InvalidNode || len(t.Alternatives) != 0
 }
 
 func (c *typeCache) Get(id ast.NodeID) TypeSet {

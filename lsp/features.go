@@ -74,6 +74,10 @@ func fiveMEventCompletionCall(doc *Document, offset uint32) (string, bool) {
 
 	callName := ast.String(doc.Source()[leftNode.Start:leftNode.End])
 	switch callName {
+	case "TriggerLatentServerEvent":
+		return "TriggerServerEvent", true
+	case "TriggerLatentClientEvent":
+		return "TriggerClientEvent", true
 	case "AddEventHandler", "TriggerEvent", "TriggerServerEvent", "TriggerClientEvent":
 		return callName, true
 	default:
@@ -1244,16 +1248,22 @@ func (s *Server) handleCompletion(req Request) {
 
 		if recType.CustomName != "" {
 			className := luaDocGenericClassName(recType.CustomName)
+			classLookupDoc := doc
+			if recType.DeclURI != "" && recType.DeclURI != doc.URI {
+				if owner := s.Documents[recType.DeclURI]; owner != nil {
+					classLookupDoc = s.fiveMTableVisibilityDoc(owner, doc)
+				}
+			}
 			type classAtDepth struct {
 				name  string
 				depth int
 			}
 			queue := []classAtDepth{{name: className}}
 			if s.GlobalIndex != nil {
-				resource, scope := s.globalIndexContext(doc)
+				resource, scope := s.globalIndexContext(classLookupDoc)
 				hierarchy := s.GlobalIndex.LookupLuaDocClassHierarchy(resource, scope, className)
 				scopedClassFields = s.luaDocClassFields(resource, scope, className, hierarchy)
-				scopedClassVisibility = s.luaDocClassFieldReachability(doc, hierarchy)
+				scopedClassVisibility = s.luaDocClassFieldReachability(classLookupDoc, hierarchy)
 				for _, class := range hierarchy {
 					classHash := ast.HashBytes([]byte(class.Name))
 					if tableHash, _ := s.luaDocClassTableAlias(class.Entry); tableHash != 0 {
@@ -1436,6 +1446,18 @@ func (s *Server) handleCompletion(req Request) {
 				addFieldsFromTable(declDoc, recType.DeclNode, "field")
 			}
 		}
+		for _, variant := range recType.Alternatives {
+			if variant.DeclNode != ast.InvalidNode {
+				declDoc := doc
+				if variant.DeclURI != "" && variant.DeclURI != doc.URI {
+					declDoc = s.Documents[variant.DeclURI]
+				}
+				addFieldsFromTable(declDoc, variant.DeclNode, "possible field")
+			}
+			if variant.CustomName != "" {
+				validRecs[ast.HashBytes([]byte(luaDocGenericClassName(variant.CustomName)))] = true
+			}
+		}
 
 		if recType.MetaNode != ast.InvalidNode {
 			metaDoc := doc
@@ -1508,6 +1530,45 @@ func (s *Server) handleCompletion(req Request) {
 			}
 
 			return false
+		}
+
+		// A callback can pass a resource-global table to another resource.
+		// Resolve its fields in the declaring resource, where subsequent scripts
+		// can extend the table, rather than in the consumer's global scope.
+		if recType.DeclURI != doc.URI {
+			if declDoc, receiver := s.fiveMTableGlobalOwner(recType); declDoc != nil && receiver != 0 {
+				for _, key := range s.GlobalIndex.FieldKeysForReceivers(map[uint64]bool{receiver: true}) {
+					for _, sym := range s.visibleGlobalSymbolsFromEntries(s.fiveMTableVisibilityDoc(declDoc, doc), s.GlobalIndex.SymbolsByHash(key), 0) {
+						addGlobalFieldCompletion(sym)
+					}
+				}
+			}
+		}
+		for _, variant := range recType.Alternatives {
+			if variant.CustomName != "" && variant.DeclURI != "" && s.GlobalIndex != nil {
+				if owner := s.Documents[variant.DeclURI]; owner != nil {
+					view := s.fiveMTableVisibilityDoc(owner, doc)
+					resource, scope := s.globalIndexContext(view)
+					className := luaDocGenericClassName(variant.CustomName)
+					hierarchy := s.GlobalIndex.LookupLuaDocClassHierarchy(resource, scope, className)
+					reachable := s.luaDocClassFieldReachability(view, hierarchy)
+					for _, field := range s.luaDocClassFields(resource, scope, className, hierarchy) {
+						if field.Entry != nil && s.canSeeLuaDocClassFieldLookup(s.Documents[field.Entry.URI], field, reachable) {
+							addGlobalFieldCompletion(GlobalSymbol{URI: field.Entry.URI, Name: string(field.Entry.Name), NodeID: field.Entry.NodeID})
+						}
+					}
+				}
+			}
+			if variant.DeclURI == doc.URI {
+				continue
+			}
+			if declDoc, receiver := s.fiveMTableGlobalOwner(variant); declDoc != nil && receiver != 0 {
+				for _, key := range s.GlobalIndex.FieldKeysForReceivers(map[uint64]bool{receiver: true}) {
+					for _, sym := range s.visibleGlobalSymbolsFromEntries(s.fiveMTableVisibilityDoc(declDoc, doc), s.GlobalIndex.SymbolsByHash(key), 0) {
+						addGlobalFieldCompletion(sym)
+					}
+				}
+			}
 		}
 
 		var fieldKeys []GlobalKey

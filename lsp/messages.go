@@ -224,6 +224,7 @@ type InitializationOptions struct {
 	IgnoreGlobs       []string                 `json:"ignoreGlobs,omitempty"`
 	KnownGlobals      []string                 `json:"knownGlobals,omitempty"`
 	FrameworkAdapters []FrameworkAdapterConfig `json:"frameworkAdapters,omitempty"`
+	FiveMServerConfig string                   `json:"fiveMServerConfig,omitempty"`
 	BannedSymbols     map[string]string        `json:"bannedSymbols,omitempty"`
 	MaxFileSizeMB     int                      `json:"maxFileSizeMB"`
 
@@ -276,6 +277,7 @@ type InitializationOptions struct {
 	DiagFiveMUnknownResource      bool                      `json:"diagFiveMUnknownResource"`
 	DiagFiveMEventDirection       bool                      `json:"diagFiveMEventDirection"`
 	DiagFiveMEventPayload         bool                      `json:"diagFiveMEventPayload"`
+	DiagFiveMServerConfig         bool                      `json:"diagFiveMServerConfig"`
 	DiagFiveMUnregisteredNetEvent bool                      `json:"diagFiveMUnregisteredNetEvent"`
 	DiagFiveMUnknownEvent         bool                      `json:"diagFiveMUnknownEvent"`
 	DiagFiveMTrustBoundary        bool                      `json:"diagFiveMTrustBoundary"`
@@ -335,6 +337,7 @@ func defaultInitializationOptions() InitializationOptions {
 		DiagFiveMUnknownResource:      true,
 		DiagFiveMEventDirection:       true,
 		DiagFiveMEventPayload:         true,
+		DiagFiveMServerConfig:         true,
 		DiagFiveMUnregisteredNetEvent: true,
 		DiagFiveMUnknownEvent:         true,
 		DiagFiveMTrustBoundary:        true,

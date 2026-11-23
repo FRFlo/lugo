@@ -320,6 +320,7 @@ function buildInitializationOptions() {
 		ignoreGlobs: ignoreGlobs,
 		knownGlobals: lugoConfig.get("environment.knownGlobals") || [],
 		frameworkAdapters: lugoConfig.get("fivem.frameworkAdapters") || [],
+		fiveMServerConfig: lugoConfig.get("fivem.serverConfig") || "",
 		sqlAdapters: lugoConfig.get("fivem.sqlAdapters") || [],
 		bannedSymbols: lugoConfig.get("diagnostics.bannedSymbols") || {},
 		maxFileSizeMB: lugoConfig.get("workspace.maxFileSizeMB") ?? 4,
@@ -372,6 +373,7 @@ function buildInitializationOptions() {
 
 		diagFiveMEventDirection: lugoConfig.get("fivem.diagnostics.eventDirection") !== false,
 		diagFiveMEventPayload: lugoConfig.get("fivem.diagnostics.eventPayload") !== false,
+		diagFiveMServerConfig: lugoConfig.get("fivem.diagnostics.serverConfig") !== false,
 		diagFiveMUnregisteredNetEvent: lugoConfig.get("fivem.diagnostics.unregisteredNetEvent") !== false,
 		diagFiveMUnknownEvent: lugoConfig.get("fivem.diagnostics.unknownEvent") !== false,
 		diagFiveMUnaccountedFile: lugoConfig.get("fivem.diagnostics.unaccountedFile") !== false,
@@ -799,7 +801,7 @@ async function startClient(context) {
 			{ scheme: "untitled", language: "lua" },
 		],
 		synchronize: {
-			fileEvents: vscode.workspace.createFileSystemWatcher("**/*.lua"),
+			fileEvents: vscode.workspace.createFileSystemWatcher("**/*.{lua,cfg}"),
 		},
 		initializationOptions: () => {
 			const options = buildInitializationOptions();
