@@ -171,7 +171,7 @@ func (s *Server) buildFiveMCommandDiagnostics(doc *Document) []Diagnostic {
 	for _, command := range commands {
 		declared[command.name] = true
 		if command.doc == doc && command.restricted && !aces[command.name] {
-			out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, command.node), Severity: SeverityWarning, Code: "fivem-command-missing-ace", Message: fmt.Sprintf("Command '%s' is restricted but has no documented ACE permission.", command.name)})
+			out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, command.node), Severity: SeverityWarning, Code: "fivem-command-missing-ace", Message: fmt.Sprintf("Command '%s' is restricted but has no documented ACE permission. Add 'add_ace <principal> command.%s allow' to server.cfg or an executed config, replacing <principal> with the intended ACE principal.", command.name, command.name)})
 		}
 	}
 	for _, mapping := range mappings {
@@ -179,14 +179,14 @@ func (s *Server) buildFiveMCommandDiagnostics(doc *Document) []Diagnostic {
 			continue
 		}
 		if !declared[mapping.command] {
-			out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, mapping.node), Severity: SeverityWarning, Code: "fivem-command-missing-declaration", Message: fmt.Sprintf("Key mapping references undeclared command '%s'.", mapping.command)})
+			out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, mapping.node), Severity: SeverityWarning, Code: "fivem-command-missing-declaration", Message: fmt.Sprintf("Key mapping references undeclared command '%s'. Declare it with RegisterCommand before relying on this binding.", mapping.command)})
 		}
 	}
 	seen := make(map[string]fiveMKeyMapping)
 	for _, mapping := range mappings {
 		key := mapping.device + "\x00" + mapping.key
 		if previous, ok := seen[key]; ok && previous.command != mapping.command && mapping.doc == doc {
-			out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, mapping.node), Severity: SeverityWarning, Code: "fivem-key-mapping-conflict", Message: fmt.Sprintf("Key mapping '%s' conflicts with command '%s'.", mapping.command, previous.command)})
+			out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, mapping.node), Severity: SeverityWarning, Code: "fivem-key-mapping-conflict", Message: fmt.Sprintf("Key mapping '%s' conflicts with command '%s'. Choose which binding should use this key, then assign a different key in the fourth argument of one RegisterKeyMapping call.", mapping.command, previous.command)})
 		} else {
 			seen[key] = mapping
 		}
@@ -207,7 +207,7 @@ func (s *Server) buildFiveMCommandDiagnostics(doc *Document) []Diagnostic {
 			continue
 		}
 		if !declared[invoked[0]] {
-			out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, node), Severity: SeverityWarning, Code: "fivem-command-missing-declaration", Message: fmt.Sprintf("ExecuteCommand invokes undeclared command '%s'.", invoked[0])})
+			out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, node), Severity: SeverityWarning, Code: "fivem-command-missing-declaration", Message: fmt.Sprintf("ExecuteCommand invokes undeclared command '%s'. Declare it with RegisterCommand before invoking it.", invoked[0])})
 		}
 	}
 	sortFiveMDiagnostics(out)

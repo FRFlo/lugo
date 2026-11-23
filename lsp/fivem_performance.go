@@ -29,7 +29,7 @@ func (s *Server) buildFiveMPerformanceDiagnostics(doc *Document) []Diagnostic {
 				}
 			}
 			if performanceSQLCall(name) {
-				out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, id), Severity: SeverityWarning, Code: "fivem-performance-sync-sql", Message: "Low-confidence performance warning: synchronous SQL-like work may block the FiveM thread."})
+				out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, id), Severity: SeverityWarning, Code: "fivem-performance-sync-sql", Message: "Low-confidence performance warning: " + performanceSQLAdvice(name)})
 			}
 		}
 		loop, ok := facts.loops[id]
@@ -37,16 +37,16 @@ func (s *Server) buildFiveMPerformanceDiagnostics(doc *Document) []Diagnostic {
 			continue
 		}
 		if loop.waitZero {
-			out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, id), Severity: SeverityWarning, Code: "fivem-performance-wait-zero", Message: "Low-confidence performance warning: this tight loop calls Wait(0); verify that per-frame work is necessary."})
+			out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, id), Severity: SeverityWarning, Code: "fivem-performance-wait-zero", Message: "Low-confidence performance warning: this tight loop calls Wait(0); confirm per-frame work is needed, otherwise use an explicit positive Wait delay (or a longer/adaptive delay for polling)."})
 		} else if !loop.yield && performanceUnboundedLoop(doc, id) {
-			out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, id), Severity: SeverityWarning, Code: "fivem-performance-no-yield", Message: "Low-confidence performance warning: this loop has no obvious yield and may block the FiveM thread."})
+			out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, id), Severity: SeverityWarning, Code: "fivem-performance-no-yield", Message: "Low-confidence performance warning: this loop has no obvious yield and may block the FiveM thread; add an explicit Wait(delay) or another yield on each repeating path."})
 		}
 		if loop.lookup {
-			out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, id), Severity: SeverityWarning, Code: "fivem-performance-repeated-lookup", Message: "Low-confidence performance warning: repeated native/entity lookup inside a loop may be expensive; consider caching or reducing its frequency."})
+			out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, id), Severity: SeverityWarning, Code: "fivem-performance-repeated-lookup", Message: "Low-confidence performance warning: repeated native/entity lookup inside a loop may be expensive; reduce its frequency or cache it only while the underlying entity/search result remains valid."})
 		}
 	}
 	if registers > 10 {
-		out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, firstRegister), Severity: SeverityWarning, Code: "fivem-performance-many-handlers", Message: fmt.Sprintf("Low-confidence performance warning: %d RegisterNetEvent handlers are declared in this file; review handler count and event work.", registers)})
+		out = append(out, Diagnostic{Range: getNodeRange(doc.Tree, firstRegister), Severity: SeverityWarning, Code: "fivem-performance-many-handlers", Message: fmt.Sprintf("Low-confidence performance warning: %d RegisterNetEvent handlers are declared in this file; inspect each handler's workload and state mutations. Static analysis cannot determine whether these handlers modify shared state, so review synchronization and ownership explicitly.", registers)})
 	}
 	return out
 }

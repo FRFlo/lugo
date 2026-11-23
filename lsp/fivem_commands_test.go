@@ -2,6 +2,7 @@ package lsp
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -20,6 +21,33 @@ func assertFiveMDiagnosticsDeterministic(t *testing.T, diagnostics func() []Diag
 		}
 	}
 	return want
+}
+
+func TestFiveMCommandDiagnosticsGiveExplicitConfigurationGuidance(t *testing.T) {
+	h := newFiveMFixtureHarnessWithoutIndex(t)
+	h.writeWorkspaceFile("fxmanifest.lua", "fx_version 'cerulean'\ngame 'gta5'\nserver_script 'server.lua'\n")
+	h.writeWorkspaceFile("server.lua", `RegisterCommand("kick", function() end, true)
+RegisterKeyMapping("first", "First", "keyboard", "K")
+RegisterKeyMapping("second", "Second", "keyboard", "K")
+`)
+	h.reindex()
+	diagnostics := h.diagnostics("server.lua")
+	for _, diag := range diagnostics {
+		switch diag.Code {
+		case "fivem-command-missing-ace":
+			for _, want := range []string{"add_ace <principal> command.kick allow", "server.cfg", "intended ACE principal"} {
+				if !strings.Contains(diag.Message, want) {
+					t.Errorf("ACE diagnostic %q missing guidance %q", diag.Message, want)
+				}
+			}
+		case "fivem-key-mapping-conflict":
+			for _, want := range []string{"Choose which binding", "different key", "fourth argument"} {
+				if !strings.Contains(diag.Message, want) {
+					t.Errorf("key conflict diagnostic %q missing guidance %q", diag.Message, want)
+				}
+			}
+		}
+	}
 }
 
 func TestFiveMCommandAndKeyMappingDiagnostics(t *testing.T) {
