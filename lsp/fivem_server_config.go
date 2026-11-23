@@ -270,7 +270,7 @@ func (s *Server) collectFiveMConfigEventHandlers() map[string][]fiveMConfigEvent
 
 // fiveMEventLoadOrderDiagnostics reports only literal, top-level local
 // triggers whose known handlers are all in resources started later. An
-// unlisted resource, dependency or dynamic startup keeps the result unknown.
+// unlisted resource, unresolved dependency or dynamic startup keeps the result unknown.
 func (s *Server) fiveMEventLoadOrderDiagnostics(doc *Document) []Diagnostic {
 	if doc == nil || doc.Tree == nil || len(doc.FiveMEvents) == 0 {
 		return nil
@@ -289,91 +289,36 @@ func (s *Server) fiveMEventLoadOrderDiagnostics(doc *Document) []Diagnostic {
 	if !hasLocalTrigger {
 		return nil
 	}
-	root := s.uriToPath(profile.ResourceRoot)
-	var chosen string
-	var chosenWorkspace string
-	if s.FiveMServerConfig != "" {
-		for _, uri := range s.WorkspaceFolders {
-			workspace := s.uriToPath(uri)
-			rel, err := filepath.Rel(workspace, root)
-			if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && len(workspace) > len(chosenWorkspace) {
-				chosenWorkspace = workspace
-			}
-		}
-		if chosenWorkspace != "" {
-			chosen = s.FiveMServerConfig
-			if !filepath.IsAbs(chosen) {
-				chosen = filepath.Join(chosenWorkspace, chosen)
-			}
-			chosen = filepath.Clean(chosen)
-		}
-	}
-	facts := s.workspaceDiagnosticFacts()
-	var paths []string
-	if facts != nil {
-		for path := range facts.serverConfigs {
-			paths = append(paths, path)
-		}
-	} else {
-		paths = s.fiveMServerConfigPaths()
-	}
-	if chosen == "" && s.FiveMServerConfig == "" {
-		for _, path := range paths {
-			rel, err := filepath.Rel(filepath.Dir(path), root)
-			if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && len(filepath.Dir(path)) > len(filepath.Dir(chosen)) {
-				chosen = path
-			}
-		}
-	}
-	if chosen == "" {
+	workspace := s.fiveMSelectionWorkspace(doc)
+	if workspace == "" {
 		return nil
 	}
-	var config fiveMServerConfig
-	if facts != nil {
-		config = facts.serverConfigs[chosen]
-	} else {
-		config = readFiveMServerConfig(chosen)
+	path := s.fiveMSelectionConfigPath(workspace)
+	if path == "" {
+		return nil
 	}
+	config := readFiveMServerConfig(path)
 	if !config.Complete {
 		return nil
 	}
-	positions := make(map[string]int)
-	for i, command := range config.Commands {
+	// A final active-resource snapshot cannot establish the state at an
+	// earlier startup when resources are stopped or restarted.
+	for _, command := range config.Commands {
 		if command.Name == "stop" || command.Name == "restart" {
 			return nil
 		}
-		if strings.HasPrefix(command.Argument, "[") && strings.HasSuffix(command.Argument, "]") {
-			if s.FiveMResourceGraph == nil {
-				return nil
-			}
-			for _, node := range s.FiveMResourceGraph.ByRoot {
-				if node == nil || node.Name == "" {
-					continue
-				}
-				for _, segment := range strings.Split(filepath.ToSlash(s.uriToPath(node.RootURI)), "/") {
-					if segment == command.Argument {
-						if _, exists := positions[node.Name]; !exists {
-							positions[node.Name] = i
-						}
-						break
-					}
-				}
-			}
-		} else if _, exists := positions[command.Argument]; !exists {
-			positions[command.Argument] = i
-		}
 	}
-	consumerPos, ok := positions[profile.ResourceName]
-	if !ok {
+	selection := s.buildFiveMResourceSelection(workspace)
+	if !selection.complete {
 		return nil
 	}
-	// A dependency may start the provider implicitly, including transitively;
-	// without modeling that startup graph the configured order is insufficient.
-	if resource := s.resolveFiveMResourceByRoot(profile.ResourceRoot); resource != nil && len(resource.Dependencies) != 0 {
+	consumerPos, ok := selection.active[profile.ResourceRoot]
+	if !ok {
 		return nil
 	}
 	var diagnostics []Diagnostic
 	var handlers map[string][]fiveMConfigEventHandler
+	facts := s.workspaceDiagnosticFacts()
 	if facts != nil {
 		handlers = facts.serverHandlers
 	} else {
@@ -402,7 +347,7 @@ func (s *Server) fiveMEventLoadOrderDiagnostics(doc *Document) []Diagnostic {
 				continue
 			}
 			found = true
-			pos, exists := positions[targetProfile.ResourceName]
+			pos, exists := selection.active[targetProfile.ResourceRoot]
 			if !exists || pos <= consumerPos {
 				uncertain = true
 			}

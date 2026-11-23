@@ -155,3 +155,32 @@ func TestFiveMServerConfigWatchedChangesRepublish(t *testing.T) {
 		t.Fatalf("expected cleared diagnostics after watched edit, got %#v", notification.Params)
 	}
 }
+
+func TestFiveMEventLoadOrderDependencies(t *testing.T) {
+	for _, tc := range []struct {
+		name, consumerDeps, middleDeps, config string
+		wantWarning                            bool
+	}{
+		{"unrelated dependency", "dependency 'middle'\n", "", "ensure consumer\nensure provider\n", true},
+		{"direct dependency", "dependency 'provider'\n", "", "ensure consumer\nensure provider\n", false},
+		{"transitive dependency", "dependency 'middle'\n", "dependency 'provider'\n", "ensure consumer\nensure provider\n", false},
+		{"unresolved dependency", "dependency 'missing'\n", "", "ensure consumer\nensure provider\n", false},
+		{"dependency cycle", "dependency 'middle'\n", "dependency 'consumer'\n", "ensure consumer\nensure provider\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newFiveMFixtureHarnessWithoutIndex(t)
+			h.writeWorkspaceFile("server.cfg", tc.config)
+			h.writeWorkspaceFile("consumer/fxmanifest.lua", "fx_version 'cerulean'\ngame 'gta5'\n"+tc.consumerDeps+"server_script 'main.lua'\n")
+			h.writeWorkspaceFile("consumer/main.lua", "TriggerEvent('example')\n")
+			h.writeWorkspaceFile("middle/fxmanifest.lua", "fx_version 'cerulean'\ngame 'gta5'\n"+tc.middleDeps)
+			h.writeWorkspaceFile("provider/fxmanifest.lua", "fx_version 'cerulean'\ngame 'gta5'\nserver_script 'main.lua'\n")
+			h.writeWorkspaceFile("provider/main.lua", "AddEventHandler('example', function() end)\n")
+			h.reindex()
+			doc := h.server.Documents[h.server.pathToURI(filepath.Join(h.root, "consumer", "main.lua"))]
+			got := h.server.fiveMEventLoadOrderDiagnostics(doc)
+			if (len(got) != 0) != tc.wantWarning {
+				t.Fatalf("diagnostics = %#v, want warning = %v", got, tc.wantWarning)
+			}
+		})
+	}
+}
