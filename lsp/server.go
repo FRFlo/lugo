@@ -320,6 +320,17 @@ func (s *Server) Start() error {
 
 			continue
 		}
+		// Responses to server-originated requests have no method. They must not
+		// be answered: their IDs can coincide with client request IDs.
+		if req.RPC == "2.0" && req.Method == "" {
+			var response struct {
+				Result json.RawMessage `json:"result"`
+				Error  json.RawMessage `json:"error"`
+			}
+			if json.Unmarshal(msg, &response) == nil && (response.Result != nil || response.Error != nil) {
+				continue
+			}
+		}
 		if req.RPC != "2.0" || req.Method == "" {
 			RecordTelemetry(WithTraceContext(context.Background(), s.trace), "lugo.lsp.request", map[string]any{"status": "invalid"})
 			if req.ID != nil {
