@@ -156,6 +156,36 @@ func TestLSPMalformedMessageAndEOF(t *testing.T) {
 	}
 }
 
+func TestLSPClientResponsesAreNotAnswered(t *testing.T) {
+	input := framed(`{"jsonrpc":"2.0","id":1,"result":null}`) +
+		framed(`{"jsonrpc":"2.0","id":2,"error":{"code":-32601,"message":"unsupported"}}`) +
+		framed(`{"jsonrpc":"2.0","id":3}`) +
+		framed(`{"jsonrpc":"2.0","id":1,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":"file:///missing.lua"}}}`)
+	server := NewServer("test")
+	server.Reader = bufio.NewReader(strings.NewReader(input))
+	var output bytes.Buffer
+	server.Writer = &output
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(&output)
+	for _, wantID := range []string{"3", "1"} {
+		body, err := ReadMessage(reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var response struct {
+			ID json.RawMessage `json:"id"`
+		}
+		if err := json.Unmarshal(body, &response); err != nil || string(response.ID) != wantID {
+			t.Fatalf("response = %s, want id %s (error: %v)", body, wantID, err)
+		}
+	}
+	if _, err := ReadMessage(reader); !errors.Is(err, io.EOF) {
+		t.Fatalf("unexpected additional response: %v", err)
+	}
+}
+
 func framed(body string) string {
 	return rpcFrame(body)
 }
