@@ -200,6 +200,9 @@ func TestFiveMEventHover(t *testing.T) {
 	if hover == nil {
 		t.Fatalf("expected hover on server_hover to produce content, got nil")
 	}
+	if !strings.Contains(hover.Contents.Value, "data") {
+		t.Fatalf("hover missing receiver parameter: %#v", hover.Contents)
+	}
 	if !strings.Contains(hover.Contents.Value, "shared:syncData") {
 		t.Fatalf("hover content did not include event name: %#v", hover.Contents)
 	}
@@ -238,6 +241,9 @@ func TestFiveMEventCompletion(t *testing.T) {
 	clientHandler := completionItemByLabel(serverItems, "shared:syncData")
 	if clientHandler == nil {
 		t.Fatalf("TriggerClientEvent completion missing client handler shared:syncData: %#v", serverItems.Items)
+	}
+	if !strings.Contains(clientHandler.Detail, "data") {
+		t.Fatalf("client handler completion missing receiver parameter: %q", clientHandler.Detail)
 	}
 	if !strings.Contains(clientHandler.Detail, "network handler") {
 		t.Fatalf("shared:syncData detail = %q, want network handler", clientHandler.Detail)
@@ -463,4 +469,12 @@ func countUndefinedSourceDiagnostics(diags []Diagnostic) int {
 	}
 
 	return count
+}
+
+func TestFiveMEventReceiverSignatureHelp(t *testing.T) {
+	h := newFiveMFixtureHarness(t, "resource_events")
+	help := h.signatureHelp("server_hover")
+	if help == nil || len(help.Signatures) == 0 || !strings.Contains(help.Signatures[0].Label, "target") || !strings.Contains(help.Signatures[0].Label, "data") {
+		t.Fatalf("signature help missing target or receiver parameter: %#v", help)
+	}
 }

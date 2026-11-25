@@ -172,6 +172,25 @@ func (s *Server) handleHover(req Request) {
 	}
 
 	offset := doc.Tree.Offset(params.Position.Line, params.Position.Character)
+	if id := doc.Tree.NodeAt(offset); id != ast.InvalidNode && int(id) < len(doc.Tree.Nodes) {
+		node := doc.Tree.Nodes[id]
+		callID := node.Parent
+		if trigger, ok := fiveMTriggerForCall(doc, callID); ok && (doc.Tree.Nodes[callID].Left == id || trigger.NodeID == id) {
+			name := ctxDisplayNameForSignature(doc, doc.Tree.Nodes[callID].Left)
+			if signatures := s.fiveMTriggerSignatures(doc, callID, trigger, name); len(signatures) > 0 {
+				var labels []string
+				for _, sig := range signatures {
+					labels = append(labels, sig.Label)
+				}
+				hoverText := "```lua\n" + strings.Join(labels, "\n") + "\n```\n\nEvent: `" + trigger.Name + "`"
+				if builtin, ok := lookupFiveMBuiltinEvent(trigger.Name); ok {
+					hoverText += "\n\n" + builtinEventDocumentation(builtin)
+				}
+				WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: Hover{Contents: MarkupContent{Kind: "markdown", Value: hoverText}}})
+				return
+			}
+		}
+	}
 	// FiveM event hover: if cursor is on a first-argument event name string in AddEventHandler/RegisterNetEvent/TriggerEvent/TriggerServerEvent/TriggerClientEvent
 	if doc != nil {
 		if currID := doc.Tree.NodeAt(offset); currID != ast.InvalidNode {
@@ -723,19 +742,27 @@ func (s *Server) handleCompletion(req Request) {
 
 	if callName, ok := fiveMEventCompletionCall(doc, offset); ok {
 		addFiveMEventCompletions := func() {
+			var callID ast.NodeID
+			var trigger FiveMEventInfo
+			var hasTrigger bool
+			if id := doc.Tree.NodeAt(offset); id != ast.InvalidNode && int(id) < len(doc.Tree.Nodes) {
+				callID = doc.Tree.Nodes[id].Parent
+				trigger, hasTrigger = fiveMTriggerForCall(doc, callID)
+			}
 			addEvent := func(name, detail, sortText string) {
 				if name == "" || name == "*" {
 					return
 				}
 
-				addCompletion(name, FieldCompletion, detail, false, sortText, name, PlainTextTextFormat)
-				if builtin, ok := lookupFiveMBuiltinEvent(name); ok {
-					for i := range items {
-						if items[i].Label == name {
-							items[i].Documentation = &MarkupContent{Kind: "markdown", Value: builtinEventDocumentation(builtin)}
-							break
-						}
+				if _, exists := seen[name]; !exists && hasTrigger {
+					trigger.Name = name
+					if signatures := s.fiveMTriggerSignatures(doc, callID, trigger, callName); len(signatures) > 0 {
+						detail += " — " + signatures[0].Label
 					}
+				}
+				index, _ := addCompletion(name, FieldCompletion, detail, false, sortText, name, PlainTextTextFormat)
+				if builtin, ok := lookupFiveMBuiltinEvent(name); ok {
+					items[index].Documentation = &MarkupContent{Kind: "markdown", Value: builtinEventDocumentation(builtin)}
 				}
 			}
 
@@ -1998,6 +2025,13 @@ func (s *Server) handleSignatureHelp(req Request) {
 			activeParam = int(i)
 
 			break
+		}
+	}
+
+	if trigger, ok := fiveMTriggerForCall(doc, callID); ok {
+		if signatures := s.fiveMTriggerSignatures(doc, callID, trigger, funcName); len(signatures) > 0 {
+			WriteMessage(s.Writer, Response{RPC: "2.0", ID: req.ID, Result: SignatureHelp{Signatures: signatures, ActiveParameter: activeParam}})
+			return
 		}
 	}
 
