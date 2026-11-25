@@ -6,6 +6,9 @@ const vscode = require("vscode");
 const { LanguageClient, ErrorAction, CloseAction, State } = require("vscode-languageclient/node");
 const { PostHog } = require("posthog-node");
 const { discoverResources, parseManifest, renderResource } = require("./fivem_resources");
+const { createTableHoverController } = require("./hover_table");
+
+let tableHoverController;
 
 const DEFAULT_LIMIT = 50;
 const STORAGE_KEY = "lugo.telemetry.buffer.v1";
@@ -543,6 +546,8 @@ async function addToIgnoredGlobs(folderUri) {
 }
 
 async function activate(context) {
+	tableHoverController = createTableHoverController(vscode, () => client);
+	context.subscriptions.push(vscode.commands.registerCommand("lugo.tableHoverDepth", (...args) => tableHoverController.changeDepth(...args)));
 	const telemetryEnabled = vscode.workspace.getConfiguration("lugo").get("telemetry.enabled") !== false;
 	telemetry = new Telemetry({
 		posthog: posthogClient,
@@ -791,6 +796,7 @@ async function startClient(context) {
 
 	const clientOptions = {
 		middleware: {
+			provideHover: (document, position, token, next) => tableHoverController.provideHover(document, position, token, next),
 			handleWorkDoneProgress: (token, progress, next) => {
 				if (token === "indexing") updateWorkspaceStatus(progress);
 				return next();

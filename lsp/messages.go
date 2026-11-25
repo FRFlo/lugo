@@ -533,8 +533,14 @@ type PublishDiagnosticsParams struct {
 
 // Hover represents the result of a hover request.
 type Hover struct {
-	Contents MarkupContent `json:"contents"`
-	Range    *Range        `json:"range,omitempty"`
+	Contents  MarkupContent   `json:"contents"`
+	Range     *Range          `json:"range,omitempty"`
+	LugoTable *HoverTableInfo `json:"lugoTable,omitempty"`
+}
+
+type HoverTableInfo struct {
+	Depth int  `json:"depth"`
+	More  bool `json:"more"`
 }
 
 // CompletionOptions represents options for the completion provider.
