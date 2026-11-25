@@ -1,7 +1,7 @@
 package lsp
 
 import (
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/FRFlo/lugo/ast"
@@ -31,12 +31,13 @@ func (s *Server) fiveMTriggerSignatures(doc *Document, callID ast.NodeID, trigge
 			continue
 		}
 		fn := owner.Tree.Nodes[id]
-		labels := []string{"eventName: string"}
+		params := make([]ParameterInformation, 1, int(fn.Count)+3)
+		params[0].Label = "eventName: string"
 		if trigger.Kind == FiveMEventTriggerClient {
-			labels = append(labels, "target: number|string")
+			params = append(params, ParameterInformation{Label: "target: number|string"})
 		}
 		if trigger.ExtraPayloadArgs != 0 {
-			labels = append(labels, "bytesPerSecond: number")
+			params = append(params, ParameterInformation{Label: "bytesPerSecond: number"})
 		}
 		annotation := fiveMFunctionAnnotation(owner, id)
 		for i := uint32(0); i < fn.Count && fn.Extra+i < uint32(len(owner.Tree.ExtraList)); i++ {
@@ -53,20 +54,34 @@ func (s *Server) fiveMTriggerSignatures(doc *Document, callID ast.NodeID, trigge
 					}
 				}
 			}
-			labels = append(labels, label)
+			params = append(params, ParameterInformation{Label: label})
 		}
-		label := name + "(" + strings.Join(labels, ", ") + ")"
+		var builder strings.Builder
+		size := len(name) + 2
+		for _, part := range params {
+			size += len(part.Label)
+		}
+		if len(params) > 1 {
+			size += 2 * (len(params) - 1)
+		}
+		builder.Grow(size)
+		builder.WriteString(name)
+		builder.WriteByte('(')
+		for i, part := range params {
+			if i > 0 {
+				builder.WriteString(", ")
+			}
+			builder.WriteString(part.Label)
+		}
+		builder.WriteByte(')')
+		label := builder.String()
 		if seen[label] {
 			continue
 		}
 		seen[label] = true
-		sig := SignatureInformation{Label: label}
-		for _, p := range labels {
-			sig.Parameters = append(sig.Parameters, ParameterInformation{Label: p})
-		}
-		signatures = append(signatures, sig)
+		signatures = append(signatures, SignatureInformation{Label: label, Parameters: params})
 	}
-	sort.Slice(signatures, func(i, j int) bool { return signatures[i].Label < signatures[j].Label })
+	slices.SortFunc(signatures, func(a, b SignatureInformation) int { return strings.Compare(a.Label, b.Label) })
 	return signatures
 }
 
