@@ -9,7 +9,8 @@ function createTableHoverController(vscode, getClient) {
 		const uri = document.uri.toString();
 		const matches = pending && pending.uri === uri && pending.version === document.version &&
 			pending.line === position.line && pending.character === position.character;
-		const depth = matches ? pending.depth : 0;
+		const expandTypes = vscode.workspace.getConfiguration("lugo", document.uri).get("hover.expandTypes") === true;
+		const depth = matches ? pending.depth : (expandTypes ? -1 : 0);
 		pending = undefined;
 		const params = client.code2ProtocolConverter.asTextDocumentPositionParams(document, position);
 		params.lugoTableDepth = depth;
@@ -28,7 +29,7 @@ function createTableHoverController(vscode, getClient) {
 			const args = encodeURIComponent(JSON.stringify([uri, document.version, position.line, position.character, targetDepth]));
 			return `[${label}](command:lugo.tableHoverDepth?${args})`;
 		};
-		if (result.lugoTable.depth > 0) links.push(link("− Less detail", result.lugoTable.depth - 1));
+		if (result.lugoTable.depth !== 0) links.push(link("− Less detail", result.lugoTable.depth < 0 ? 0 : result.lugoTable.depth - 1));
 		if (result.lugoTable.more) links.push(link("+ More detail", result.lugoTable.depth + 1));
 		if (links.length) {
 			const controls = new vscode.MarkdownString(links.join("　"));

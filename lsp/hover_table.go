@@ -20,6 +20,7 @@ func (s *Server) hoverTableDetail(doc *Document, ctx *SymbolContext, offset uint
 		return "", false
 	}
 	var typ TypeSet
+	var raw string
 	if ctx.IsProp {
 		parent := doc.Tree.Nodes[ctx.IdentNodeID].Parent
 		if parent != ast.InvalidNode {
@@ -31,8 +32,21 @@ func (s *Server) hoverTableDetail(doc *Document, ctx *SymbolContext, offset uint
 	} else if ctx.TargetDoc != nil && ctx.TargetDefID != ast.InvalidNode {
 		typ = ctx.TargetDoc.InferType(ctx.TargetDefID)
 	}
+	if ctx.TargetDoc != nil && ctx.TargetDefID != ast.InvalidNode {
+		if luadoc := ctx.TargetDoc.GetLuaDoc(ctx.TargetDefID); luadoc != nil {
+			if luadoc.Type != nil {
+				raw = luadoc.Type.Type
+			} else if luadoc.Alias != nil {
+				raw = luadoc.Alias.Type
+			}
+		}
+		if typ.Basics&TypeFunction != 0 && raw == "" {
+			proxy := ctx.TargetDoc.makeCallableProxyType(ctx.TargetDefID)
+			raw = hoverCallableSignature(proxy)
+		}
+	}
 	typ = doc.ContextualType(ctx.IdentNodeID, offset, typ)
-	return s.formatHoverTable(doc, typ, depth, 0, make(map[hoverTableKey]bool))
+	return s.formatHoverType(doc, typ, raw, depth, 0, make(map[hoverTableKey]bool))
 }
 
 func (s *Server) formatHoverTable(doc *Document, typ TypeSet, depth, indent int, seen map[hoverTableKey]bool) (string, bool) {
@@ -48,6 +62,10 @@ func (s *Server) formatHoverTable(doc *Document, typ TypeSet, depth, indent int,
 		return "", false
 	}
 	key := hoverTableKey{uri: owner.URI, id: typ.DeclNode, name: typ.CustomName}
+	if typ.CustomName != "" {
+		key.id = ast.InvalidNode
+		key.name = luaDocGenericClassName(typ.CustomName)
+	}
 	if seen[key] {
 		return "", false
 	}
@@ -55,6 +73,7 @@ func (s *Server) formatHoverTable(doc *Document, typ TypeSet, depth, indent int,
 	defer delete(seen, key)
 
 	fields := make(map[string]TypeSet)
+	rawFields := make(map[string]string)
 	if validTable {
 		node := owner.Tree.Nodes[typ.DeclNode]
 		arrayIndex := 0
@@ -154,6 +173,7 @@ func (s *Server) formatHoverTable(doc *Document, typ TypeSet, depth, indent int,
 					fieldType = substituteLuaDocGenericType(fieldType, bindings[candidate.ClassIndex])
 				}
 				fields[name] = ParseTypeString(fieldType)
+				rawFields[name] = fieldType
 			} else if entry.Type.Primitive != TypeUnknown {
 				fields[name] = TypeSet{Basics: entry.Type.Primitive}
 			}
@@ -184,12 +204,11 @@ func (s *Server) formatHoverTable(doc *Document, typ TypeSet, depth, indent int,
 			b.WriteString(name)
 		}
 		b.WriteString(": ")
-		nested, nestedMore := s.formatHoverTable(owner, field, depth-1, indent+1, seen)
+		nested, nestedMore := s.formatHoverType(owner, field, rawFields[name], depth-1, indent+1, seen)
 		if nested != "" {
-			if field.CustomName != "" || field.Basics != TypeTable {
-				b.WriteString(field.Format() + " ")
-			}
 			b.WriteString(nested)
+		} else if rawFields[name] != "" {
+			b.WriteString(rawFields[name])
 		} else {
 			b.WriteString(field.Format())
 		}

@@ -654,11 +654,11 @@ func (s *Server) handleHover(req Request) {
 
 	depth := 1
 	if params.LugoTableDepth != nil {
-		depth = max(0, *params.LugoTableDepth)
+		depth = max(-1, *params.LugoTableDepth)
 	}
 	detail, more := s.hoverTableDetail(doc, ctx, offset, depth)
 	if detail != "" {
-		hoverText += "\n\n---\n\n**Table structure**\n\n```lua\n" + detail + "\n```"
+		hoverText += "\n\n---\n\n**Type details**\n\n```lua\n" + detail + "\n```"
 	}
 	var tableInfo *HoverTableInfo
 	if detail != "" || more {

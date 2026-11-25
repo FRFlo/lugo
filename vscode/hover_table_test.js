@@ -11,8 +11,10 @@ const { createTableHoverController } = require("./hover_table");
 	const document = { uri: { toString: () => "file:///test.lua" }, version: 2, validatePosition: p => p };
 	const editor = { document, viewColumn: 1 };
 	const commands = [];
+	let expandTypes = false;
 	const vscode = {
 		Position, Selection, MarkdownString,
+		workspace: { getConfiguration: () => ({ get: () => expandTypes }) },
 		window: { visibleTextEditors: [editor], showTextDocument: async () => editor },
 		commands: { executeCommand: async command => commands.push(command) },
 	};
@@ -48,6 +50,10 @@ const { createTableHoverController } = require("./hover_table");
 	await controller.changeDepth(document.uri.toString(), 1, 1, 2, 2);
 	await controller.provideHover(document, position, token, () => {});
 	assert.equal(requested.lugoTableDepth, 0, "a stale document must not change depth");
+	expandTypes = true;
+	hover = await controller.provideHover(document, position, token, () => {});
+	assert.equal(requested.lugoTableDepth, -1, "the setting expands types by default");
+	assert.match(hover.contents[1].value, /Less detail/);
 	client.sendRequest = async () => { throw new Error("request failed"); };
 	assert.equal(await controller.provideHover(document, position, token, () => "fallback"), "fallback");
 	assert.equal(await controller.provideHover(document, position, { isCancellationRequested: true }, () => "fallback"), undefined);

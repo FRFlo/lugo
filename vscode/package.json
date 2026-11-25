@@ -409,6 +409,13 @@
                         "markdownDescription": "Evaluate and display the result of constant expressions on hover (e.g., `1 + 2` suggests `3`).",
                         "order": 5
                     },
+                    "lugo.hover.expandTypes": {
+                        "type": "boolean",
+                        "default": false,
+                        "scope": "resource",
+                        "markdownDescription": "Show all available nested type details in hovers by default.",
+                        "order": 6
+                    },
                     "lugo.features.codeLens": {
                         "type": "boolean",
                         "default": true,

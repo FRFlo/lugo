@@ -48,7 +48,7 @@ local b = config.nes--[[@field]]ted
 		absent   []string
 		more     bool
 	}{
-		{"summary", 0, nil, []string{"Table structure"}, true},
+		{"summary", 0, nil, []string{"Type details"}, true},
 		{"first level", 1, []string{"title: string", "nested: table", `["with space"]: number`, `[""]: boolean`, `["end"]: boolean`, "extra: string", "self: table"}, []string{"count: number", "later: number"}, true},
 		{"second level", 2, []string{"count: number", "deeper: table", "[1]: table", "[4]: boolean", "later: number"}, []string{"enabled: boolean", "value: number"}, true},
 		{"all levels", 3, []string{"enabled: boolean", "value: number"}, nil, false},
