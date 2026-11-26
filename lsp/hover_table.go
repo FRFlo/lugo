@@ -14,6 +14,30 @@ type hoverTableKey struct {
 	name string
 }
 
+type hoverFormatState struct {
+	active  map[hoverTableKey]bool
+	classes map[hoverClassKey]hoverClassFields
+	aliases map[hoverClassKey]hoverAlias
+}
+
+type hoverClassKey struct {
+	doc  *Document
+	name string
+}
+
+type hoverClassFields struct {
+	types   map[string]TypeSet
+	raw     map[string]string
+	names   []string
+	flat    bool
+	renders map[int]string
+}
+
+type hoverAlias struct {
+	doc      *Document
+	typeName string
+}
+
 // hoverTableDetail uses the same declaration-backed types as member inference.
 func (s *Server) hoverTableDetail(doc *Document, ctx *SymbolContext, offset uint32, depth int) (string, bool) {
 	if doc == nil || ctx == nil {
@@ -46,10 +70,10 @@ func (s *Server) hoverTableDetail(doc *Document, ctx *SymbolContext, offset uint
 		}
 	}
 	typ = doc.ContextualType(ctx.IdentNodeID, offset, typ)
-	return s.formatHoverType(doc, typ, raw, depth, 0, make(map[hoverTableKey]bool))
+	return s.formatHoverType(doc, typ, raw, depth, 0, &hoverFormatState{active: make(map[hoverTableKey]bool)})
 }
 
-func (s *Server) formatHoverTable(doc *Document, typ TypeSet, depth, indent int, seen map[hoverTableKey]bool) (string, bool) {
+func (s *Server) formatHoverTable(doc *Document, typ TypeSet, depth, indent int, seen *hoverFormatState) (string, bool) {
 	owner := doc
 	if typ.DeclURI != "" && typ.DeclURI != doc.URI {
 		owner = s.Documents[typ.DeclURI]
@@ -66,14 +90,17 @@ func (s *Server) formatHoverTable(doc *Document, typ TypeSet, depth, indent int,
 		key.id = ast.InvalidNode
 		key.name = luaDocGenericClassName(typ.CustomName)
 	}
-	if seen[key] {
+	if seen.active[key] {
 		return "", false
 	}
-	seen[key] = true
-	defer delete(seen, key)
+	seen.active[key] = true
+	defer delete(seen.active, key)
 
 	fields := make(map[string]TypeSet)
 	rawFields := make(map[string]string)
+	var sortedNames []string
+	var flatClassKey hoverClassKey
+	var flatClass bool
 	if validTable {
 		node := owner.Tree.Nodes[typ.DeclNode]
 		arrayIndex := 0
@@ -102,6 +129,9 @@ func (s *Server) formatHoverTable(doc *Document, typ TypeSet, depth, indent int,
 				value = fieldID
 			}
 			if known && value != ast.InvalidNode {
+				if depth == 0 {
+					return "", true
+				}
 				fields[name] = owner.InferType(value)
 			}
 		}
@@ -130,6 +160,9 @@ func (s *Server) formatHoverTable(doc *Document, typ TypeSet, depth, indent int,
 			}
 			value := owner.getAssignedValue(field.NodeID)
 			if value != ast.InvalidNode {
+				if depth == 0 {
+					return "", true
+				}
 				fields[name] = owner.InferType(value)
 			}
 		}
@@ -139,43 +172,84 @@ func (s *Server) formatHoverTable(doc *Document, typ TypeSet, depth, indent int,
 		if owner != doc {
 			lookupDoc = s.fiveMTableVisibilityDoc(owner, doc)
 		}
-		resource, scope := s.globalIndexContext(lookupDoc)
-		className := luaDocGenericClassName(typ.CustomName)
-		_, args, _ := splitLuaDocGenericType(typ.CustomName)
-		hierarchy := s.GlobalIndex.LookupLuaDocClassHierarchy(resource, scope, className)
-		reachable := s.luaDocClassFieldReachability(lookupDoc, hierarchy)
-		bindings := luaDocGenericBindingsForHierarchy(hierarchy, args)
-		classFields := s.luaDocClassFields(resource, scope, className, hierarchy)
-		classDepth := func(candidate LuaDocClassFieldLookup) int {
-			if candidate.ClassIndex < 0 || candidate.ClassIndex >= len(hierarchy) {
-				return len(hierarchy)
-			}
-			return hierarchy[candidate.ClassIndex].Depth
-		}
-		sort.SliceStable(classFields, func(i, j int) bool { return classDepth(classFields[i]) < classDepth(classFields[j]) })
-		classNames := make(map[string]bool)
-		for _, candidate := range classFields {
-			entry := candidate.Entry
-			if entry == nil || candidate.ClassIndex < 0 || candidate.ClassIndex >= len(hierarchy) || !s.canSeeLuaDocClassFieldLookup(s.Documents[entry.URI], candidate, reachable) {
-				continue
-			}
-			name := string(entry.Name)
-			if separator := strings.LastIndexAny(name, ".:"); separator >= 0 {
-				name = name[separator+1:]
-			}
-			if classNames[name] {
-				continue
-			}
-			classNames[name] = true
-			if entry.LuaDoc != nil && entry.LuaDoc.TypeString != "" {
-				fieldType := entry.LuaDoc.TypeString
-				if candidate.ClassIndex < len(bindings) {
-					fieldType = substituteLuaDocGenericType(fieldType, bindings[candidate.ClassIndex])
+		classKey := hoverClassKey{doc: lookupDoc, name: typ.CustomName}
+		cached, exists := seen.classes[classKey]
+		if !exists {
+			cached = hoverClassFields{types: make(map[string]TypeSet), raw: make(map[string]string)}
+			resource, scope := s.globalIndexContext(lookupDoc)
+			className := luaDocGenericClassName(typ.CustomName)
+			_, args, _ := splitLuaDocGenericType(typ.CustomName)
+			hierarchy := s.GlobalIndex.LookupLuaDocClassHierarchy(resource, scope, className)
+			reachable := s.luaDocClassFieldReachability(lookupDoc, hierarchy)
+			bindings := luaDocGenericBindingsForHierarchy(hierarchy, args)
+			classFields := s.luaDocClassFields(resource, scope, className, hierarchy)
+			classDepth := func(candidate LuaDocClassFieldLookup) int {
+				if candidate.ClassIndex < 0 || candidate.ClassIndex >= len(hierarchy) {
+					return len(hierarchy)
 				}
-				fields[name] = ParseTypeString(fieldType)
-				rawFields[name] = fieldType
-			} else if entry.Type.Primitive != TypeUnknown {
-				fields[name] = TypeSet{Basics: entry.Type.Primitive}
+				return hierarchy[candidate.ClassIndex].Depth
+			}
+			sort.SliceStable(classFields, func(i, j int) bool { return classDepth(classFields[i]) < classDepth(classFields[j]) })
+			classNames := make(map[string]bool)
+			for _, candidate := range classFields {
+				entry := candidate.Entry
+				if entry == nil || candidate.ClassIndex < 0 || candidate.ClassIndex >= len(hierarchy) || !s.canSeeLuaDocClassFieldLookup(s.Documents[entry.URI], candidate, reachable) {
+					continue
+				}
+				name := string(entry.Name)
+				if separator := strings.LastIndexAny(name, ".:"); separator >= 0 {
+					name = name[separator+1:]
+				}
+				if classNames[name] {
+					continue
+				}
+				classNames[name] = true
+				if entry.LuaDoc != nil && entry.LuaDoc.TypeString != "" {
+					if depth == 0 {
+						return "", true
+					}
+					fieldType := entry.LuaDoc.TypeString
+					if candidate.ClassIndex < len(bindings) {
+						fieldType = substituteLuaDocGenericType(fieldType, bindings[candidate.ClassIndex])
+					}
+					cached.types[name] = ParseTypeString(fieldType)
+					cached.raw[name] = fieldType
+				} else if entry.Type.Primitive != TypeUnknown {
+					if depth == 0 {
+						return "", true
+					}
+					cached.types[name] = TypeSet{Basics: entry.Type.Primitive}
+				}
+			}
+			if seen.classes == nil {
+				seen.classes = make(map[hoverClassKey]hoverClassFields)
+			}
+			cached.names = make([]string, 0, len(cached.types))
+			cached.flat = len(cached.types) > 0
+			for name, field := range cached.types {
+				cached.names = append(cached.names, name)
+				if field.CustomName != "" || field.DeclNode != ast.InvalidNode || field.CallSig != "" || len(field.Alternatives) != 0 || field.Basics == 0 || field.Basics&(field.Basics-1) != 0 || field.Basics&(TypeFunction|TypeTable) != 0 || strings.ContainsAny(cached.raw[name], "|?[]{}()<>") {
+					cached.flat = false
+				}
+			}
+			sort.Strings(cached.names)
+			seen.classes[classKey] = cached
+		}
+		if len(fields) == 0 {
+			fields, rawFields = cached.types, cached.raw
+			sortedNames = cached.names
+			if cached.flat {
+				flatClass, flatClassKey = true, classKey
+				if depth != 0 {
+					if rendered, ok := cached.renders[indent]; ok {
+						return rendered, false
+					}
+				}
+			}
+		} else {
+			for name, fieldType := range cached.types {
+				fields[name] = fieldType
+				rawFields[name] = cached.raw[name]
 			}
 		}
 	}
@@ -185,12 +259,16 @@ func (s *Server) formatHoverTable(doc *Document, typ TypeSet, depth, indent int,
 	if depth == 0 {
 		return "", true
 	}
-	names := make([]string, 0, len(fields))
-	for name := range fields {
-		names = append(names, name)
+	names := sortedNames
+	if names == nil {
+		names = make([]string, 0, len(fields))
+		for name := range fields {
+			names = append(names, name)
+		}
+		sort.Strings(names)
 	}
-	sort.Strings(names)
 	var b strings.Builder
+	b.Grow(2 + len(fields)*(indent*2+24))
 	b.WriteString("{\n")
 	more := false
 	for _, name := range names {
@@ -217,7 +295,16 @@ func (s *Server) formatHoverTable(doc *Document, typ TypeSet, depth, indent int,
 	}
 	b.WriteString(strings.Repeat("  ", indent))
 	b.WriteString("}")
-	return b.String(), more
+	result := b.String()
+	if flatClass {
+		cached := seen.classes[flatClassKey]
+		if cached.renders == nil {
+			cached.renders = make(map[int]string)
+		}
+		cached.renders[indent] = result
+		seen.classes[flatClassKey] = cached
+	}
+	return result, more
 }
 
 func isHoverIdentifier(name string) bool {

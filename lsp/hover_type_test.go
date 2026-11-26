@@ -123,7 +123,7 @@ local l = lo--[[@recursive_function]]op
 	}
 	doc := h.docForMarker("function")
 	union := TypeSet{Alternatives: []TypeSet{{CustomName: "Item"}, {Basics: TypeNil}}}
-	expanded, more := h.server.formatHoverType(doc, union, "", -1, 0, make(map[hoverTableKey]bool))
+	expanded, more := h.server.formatHoverType(doc, union, "", -1, 0, &hoverFormatState{active: make(map[hoverTableKey]bool)})
 	if more || !strings.Contains(expanded, "title: string") || !strings.Contains(expanded, "nil") {
 		t.Fatalf("inferred union = %q, more=%v", expanded, more)
 	}
