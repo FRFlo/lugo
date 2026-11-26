@@ -156,7 +156,10 @@ func (s *Server) lookupFiveMExportDefs(doc *Document, exportRes, funcName string
 }
 
 func (s *Server) handleHover(req Request) {
-	var params TextDocumentPositionParams
+	var params struct {
+		TextDocumentPositionParams
+		LugoTableDepth *int `json:"lugoTableDepth,omitempty"`
+	}
 
 	err := json.Unmarshal(req.Params, &params)
 	if err != nil {
@@ -668,12 +671,26 @@ func (s *Server) handleHover(req Request) {
 		return
 	}
 
+	depth := 1
+	if params.LugoTableDepth != nil {
+		depth = max(-1, *params.LugoTableDepth)
+	}
+	detail, more := s.hoverTableDetail(doc, ctx, offset, depth)
+	if detail != "" {
+		hoverText += "\n\n---\n\n**Type details**\n\n```lua\n" + detail + "\n```"
+	}
+	var tableInfo *HoverTableInfo
+	if detail != "" || more {
+		tableInfo = &HoverTableInfo{Depth: depth, More: more}
+	}
+
 	WriteMessage(s.Writer, Response{
 		RPC: "2.0",
 		ID:  req.ID,
 		Result: Hover{
-			Contents: MarkupContent{Kind: "markdown", Value: hoverText},
-			Range:    r,
+			Contents:  MarkupContent{Kind: "markdown", Value: hoverText},
+			Range:     r,
+			LugoTable: tableInfo,
 		},
 	})
 }
