@@ -76,6 +76,7 @@ for (const [pathApi, absolute, root] of [
 		path: require("node:path"), fs: { existsSync: () => true },
 		vscode: { workspace: { createFileSystemWatcher: () => ({}) } },
 		LanguageClient, State: { Running: 2 }, telemetry: undefined, client: undefined,
+		LUA_DOCUMENT_SELECTOR: [],
 		elapsedMilliseconds: () => 0,
 		triggerReindex: () => { reindexRequests++; },
 	};

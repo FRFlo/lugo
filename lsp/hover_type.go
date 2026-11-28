@@ -232,8 +232,12 @@ func (s *Server) formatHoverType(doc *Document, typ TypeSet, raw string, depth, 
 	if typ.DeclNode != 0 || typ.CustomName != "" {
 		shape, more := s.formatHoverTable(doc, typ, depth, indent, seen)
 		if shape != "" {
-			if typ.CustomName != "" || typ.Basics != TypeTable {
-				return typ.Format() + " " + shape, more
+			remaining := typ
+			remaining.Basics &^= TypeTable
+			remaining.DeclNode = ast.InvalidNode
+			remaining.DeclURI = ""
+			if remaining.Basics != TypeUnknown {
+				return shape + " | " + remaining.Format(), more
 			}
 			return shape, more
 		}
