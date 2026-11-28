@@ -68,6 +68,39 @@ func (s *Server) hoverIdentifierType(doc *Document, ctx *SymbolContext) TypeSet 
 	return typ
 }
 
+func (s *Server) hoverReceiverType(doc *Document, id ast.NodeID) (TypeSet, bool) {
+	node := doc.Tree.Nodes[id]
+	if node.Kind == ast.KindIdent {
+		def := doc.referenceAt(id)
+		global := def == ast.InvalidNode && string(doc.nodeSource(id)) != "self"
+		if !global {
+			for _, exported := range doc.ExportedGlobalDefs {
+				if exported.NodeID == def {
+					global = true
+					break
+				}
+			}
+		}
+		if global {
+			return s.hoverIdentifierType(doc, &SymbolContext{IdentNodeID: id, IsGlobal: true}), true
+		}
+	}
+	typ := doc.InferType(id)
+	if typ.DeclNode != ast.InvalidNode || typ.CustomName != "" || len(typ.Alternatives) != 0 {
+		return typ, false
+	}
+	if node.Kind == ast.KindMemberExpr && node.Left != ast.InvalidNode {
+		receiver, enriched := s.hoverReceiverType(doc, node.Left)
+		if enriched && (receiver.DeclNode != ast.InvalidNode || receiver.CustomName != "" || len(receiver.Alternatives) != 0) {
+			inferred := doc.inferMemberExprWithContext(node, nil, &symbolReceiverInfo{Known: true, Type: receiver}, true)
+			if inferred.DeclNode != ast.InvalidNode || inferred.CustomName != "" || len(inferred.Alternatives) != 0 {
+				return inferred, true
+			}
+		}
+	}
+	return typ, false
+}
+
 // hoverTableDetail uses the same declaration-backed types as member inference.
 func (s *Server) hoverTableDetail(doc *Document, ctx *SymbolContext, offset uint32, depth int, typ TypeSet) (string, bool) {
 	if doc == nil || ctx == nil {
@@ -78,6 +111,16 @@ func (s *Server) hoverTableDetail(doc *Document, ctx *SymbolContext, offset uint
 		parent := doc.Tree.Nodes[ctx.IdentNodeID].Parent
 		if parent != ast.InvalidNode {
 			typ = doc.InferType(parent)
+			node := doc.Tree.Nodes[parent]
+			if typ.DeclNode == ast.InvalidNode && typ.CustomName == "" && node.Kind == ast.KindMemberExpr && node.Left != ast.InvalidNode {
+				receiver, enriched := s.hoverReceiverType(doc, node.Left)
+				if enriched && (receiver.DeclNode != ast.InvalidNode || receiver.CustomName != "" || len(receiver.Alternatives) != 0) {
+					inferred := doc.inferMemberExprWithContext(node, nil, &symbolReceiverInfo{Known: true, Type: receiver}, true)
+					if inferred.DeclNode != ast.InvalidNode || inferred.CustomName != "" || len(inferred.Alternatives) != 0 {
+						typ = inferred
+					}
+				}
+			}
 		}
 		if typ.DeclNode == ast.InvalidNode && typ.CustomName == "" && ctx.TargetDoc != nil && ctx.TargetDefID != ast.InvalidNode {
 			typ = ctx.TargetDoc.InferType(ctx.TargetDefID)
