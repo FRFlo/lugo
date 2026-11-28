@@ -223,7 +223,7 @@ func (s *Server) formatHoverTable(doc *Document, typ TypeSet, depth, indent int,
 		classKey := hoverClassKey{doc: lookupDoc, name: typ.CustomName}
 		cached, exists := seen.classes[classKey]
 		if !exists {
-			cached = hoverClassFields{types: make(map[string]TypeSet), raw: make(map[string]string)}
+			cached = hoverClassFields{}
 			resource, scope := s.globalIndexContext(lookupDoc)
 			className := luaDocGenericClassName(typ.CustomName)
 			_, args, _ := splitLuaDocGenericType(typ.CustomName)
@@ -231,6 +231,10 @@ func (s *Server) formatHoverTable(doc *Document, typ TypeSet, depth, indent int,
 			reachable := s.luaDocClassFieldReachability(lookupDoc, hierarchy)
 			bindings := luaDocGenericBindingsForHierarchy(hierarchy, args)
 			classFields := s.luaDocClassFields(resource, scope, className, hierarchy)
+			if depth != 0 {
+				cached.types = make(map[string]TypeSet, (len(classFields)+1)/2)
+				cached.raw = make(map[string]string, (len(classFields)+1)/2)
+			}
 			classDepth := func(candidate LuaDocClassFieldLookup) int {
 				if candidate.ClassIndex < 0 || candidate.ClassIndex >= len(hierarchy) {
 					return len(hierarchy)
