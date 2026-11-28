@@ -258,11 +258,23 @@ func (s *Server) handleHover(req Request) {
 		identType TypeSet
 	)
 
+	depth := 1
+	if params.LugoTableDepth != nil {
+		depth = max(-1, *params.LugoTableDepth)
+	}
+	if ctx != nil && !ctx.IsProp {
+		identType = s.hoverIdentifierType(doc, ctx)
+	}
+	detail, more := s.hoverTableDetail(doc, ctx, offset, depth, identType)
+	displayType := func(summary string) string {
+		if detail != "" {
+			return detail
+		}
+		return summary
+	}
+
 	if ctx != nil {
 		r = new(getNodeRange(doc.Tree, ctx.IdentNodeID))
-		if !ctx.IsProp {
-			identType = s.hoverIdentifierType(doc, ctx)
-		}
 
 		if ctx.TargetURI != "" && ctx.TargetURI != uri {
 			fromFile = filepath.Base(ctx.TargetDoc.Path)
@@ -325,10 +337,13 @@ func (s *Server) handleHover(req Request) {
 					genericStr = "<" + strings.Join(gNames, ", ") + ">"
 				}
 
+				signature := "(" + paramsStr + ")" + returnStr
+				if expanded, ok := strings.CutPrefix(detail, "fun("); ok {
+					signature = "(" + expanded
+				}
+				code = "function " + ctx.DisplayName + genericStr + signature
 				if !ctx.IsGlobal && !ctx.IsProp && ctx.TargetDefID == ctx.IdentNodeID {
-					code = "local function " + ctx.DisplayName + genericStr + "(" + paramsStr + ")" + returnStr
-				} else {
-					code = "function " + ctx.DisplayName + genericStr + "(" + paramsStr + ")" + returnStr
+					code = "local " + code
 				}
 			} else {
 				if ctx.IsProp && (ctx.TargetURI != uri || ctx.TargetDefID != ctx.IdentNodeID) {
@@ -352,7 +367,7 @@ func (s *Server) handleHover(req Request) {
 							}
 						}
 					}
-					code = ctx.DisplayName + ": " + fieldType + valStr
+					code = ctx.DisplayName + ": " + displayType(fieldType) + valStr
 
 					luadoc.Description = matchedField.Desc
 					luadoc.Params = nil
@@ -368,6 +383,10 @@ func (s *Server) handleHover(req Request) {
 						code += " : " + strings.Join(parents, ", ")
 					}
 
+					if strings.HasPrefix(detail, "{") {
+						code += " " + detail
+					}
+
 					if luadoc.Class.Desc != "" {
 						if luadoc.Description != "" {
 							luadoc.Description = luadoc.Class.Desc + "\n\n" + luadoc.Description
@@ -376,7 +395,7 @@ func (s *Server) handleHover(req Request) {
 						}
 					}
 				} else if luadoc.Alias != nil {
-					code = "alias " + luadoc.Alias.Name + " = " + luadoc.Alias.Type
+					code = "alias " + luadoc.Alias.Name + " = " + displayType(luadoc.Alias.Type)
 
 					if luadoc.Alias.Desc != "" {
 						if luadoc.Description != "" {
@@ -386,7 +405,7 @@ func (s *Server) handleHover(req Request) {
 						}
 					}
 				} else if luadoc.Type != nil {
-					code = ctx.DisplayName + ": " + luadoc.Type.Type + valStr
+					code = ctx.DisplayName + ": " + displayType(luadoc.Type.Type) + valStr
 
 					if luadoc.Type.Desc != "" {
 						if luadoc.Description != "" {
@@ -407,7 +426,7 @@ func (s *Server) handleHover(req Request) {
 							callable = buildCallableHoverText(ctx.DisplayName, inferred)
 						}
 
-						typeStr := inferred.Format()
+						typeStr := displayType(inferred.Format())
 						if typeStr != "any" {
 							code = ctx.DisplayName + ": " + typeStr + valStr
 						} else {
@@ -427,7 +446,7 @@ func (s *Server) handleHover(req Request) {
 							callable = buildCallableHoverText(ctx.DisplayName, inferred)
 						}
 
-						typeStr := inferred.Format()
+						typeStr := displayType(inferred.Format())
 						if typeStr != "any" {
 							code = "local " + ctx.DisplayName + attrStr + ": " + typeStr + valStr
 						} else {
@@ -439,7 +458,7 @@ func (s *Server) handleHover(req Request) {
 							callable = buildCallableHoverText(ctx.DisplayName, inferred)
 						}
 
-						typeStr := inferred.Format()
+						typeStr := displayType(inferred.Format())
 						if typeStr != "any" {
 							code = "global " + ctx.DisplayName + ": " + typeStr + valStr
 						} else {
@@ -620,7 +639,7 @@ func (s *Server) handleHover(req Request) {
 			if inferred.IsCallable() {
 				callable = buildCallableHoverText(ctx.DisplayName, inferred)
 			}
-			typeStr := inferred.Format()
+			typeStr := displayType(inferred.Format())
 
 			if ctx.IsProp {
 				if typeStr != "any" {
@@ -662,14 +681,6 @@ func (s *Server) handleHover(req Request) {
 		return
 	}
 
-	depth := 1
-	if params.LugoTableDepth != nil {
-		depth = max(-1, *params.LugoTableDepth)
-	}
-	detail, more := s.hoverTableDetail(doc, ctx, offset, depth, identType)
-	if detail != "" {
-		hoverText += "\n\n---\n\n**Type details**\n\n```lua\n" + detail + "\n```"
-	}
 	var tableInfo *HoverTableInfo
 	if detail != "" || more {
 		tableInfo = &HoverTableInfo{Depth: depth, More: more}

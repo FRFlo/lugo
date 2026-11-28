@@ -23,6 +23,15 @@ func TestFiveMEventCallbackTableHover(t *testing.T) {
 			if hover == nil || hover.LugoTable == nil || !hover.LugoTable.More {
 				t.Fatalf("expected expandable ESX hover, got %#v", hover)
 			}
+			if !strings.HasPrefix(hover.Contents.Value, "```lua\nglobal ESX: ") ||
+				strings.Count(hover.Contents.Value, "```lua") != 1 ||
+				strings.Contains(hover.Contents.Value, "Type details") {
+				t.Fatalf("expected fields in the ESX definition: %s", hover.Contents.Value)
+			}
+			if !strings.Contains(hover.Contents.Value, "global ESX: {\n") ||
+				strings.Contains(hover.Contents.Value, "any {") {
+				t.Fatalf("table shape must replace table in the union: %s", hover.Contents.Value)
+			}
 			for _, want := range []string{"PlayerData: table", "GetPlayerData:"} {
 				if !strings.Contains(hover.Contents.Value, want) {
 					t.Errorf("hover missing %q: %s", want, hover.Contents.Value)
