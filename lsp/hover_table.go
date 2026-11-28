@@ -78,6 +78,17 @@ func (s *Server) hoverTableDetail(doc *Document, ctx *SymbolContext, offset uint
 		parent := doc.Tree.Nodes[ctx.IdentNodeID].Parent
 		if parent != ast.InvalidNode {
 			typ = doc.InferType(parent)
+			node := doc.Tree.Nodes[parent]
+			if typ.DeclNode == ast.InvalidNode && typ.CustomName == "" && node.Kind == ast.KindMemberExpr && node.Left != ast.InvalidNode && doc.Tree.Nodes[node.Left].Kind == ast.KindIdent {
+				receiverCtx := s.resolveSymbolAt(doc.URI, doc.Tree.Nodes[node.Left].Start)
+				if receiverCtx != nil && receiverCtx.IsGlobal {
+					receiver := s.hoverIdentifierType(doc, receiverCtx)
+					inferred := doc.inferMemberExprWithContext(node, nil, &symbolReceiverInfo{Known: true, Type: receiver}, true)
+					if inferred.DeclNode != ast.InvalidNode || inferred.CustomName != "" || len(inferred.Alternatives) != 0 {
+						typ = inferred
+					}
+				}
+			}
 		}
 		if typ.DeclNode == ast.InvalidNode && typ.CustomName == "" && ctx.TargetDoc != nil && ctx.TargetDefID != ast.InvalidNode {
 			typ = ctx.TargetDoc.InferType(ctx.TargetDefID)
