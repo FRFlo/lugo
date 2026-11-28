@@ -226,4 +226,4 @@ jobs:
 
     # Configure Marketplace Trusted Publishing for FRFlo/lugo and release.yml.
     - name: Publish VS Code extension to Marketplace
-      run: vsce publish --oidc --packagePath "lugo-${{ github.ref_name }}.vsix"
+      run: vsce publish --oidc --allow-proposed-apis editorHoverVerbosityLevel --packagePath "lugo-${{ github.ref_name }}.vsix"
