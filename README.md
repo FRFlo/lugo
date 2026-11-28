@@ -6,7 +6,7 @@ A ridiculously fast, zero-allocation Lua 5.4 parser and Language Server (LSP) wr
 
 Lugo is built from the ground up for maximum performance. By iterating over source code using a flat-array/arena architecture (`[]Node`) and storing only byte offsets, it heavily eliminates pointer allocations, heap strings and garbage collection pressure.
 
-[**Download the VS Code Insiders extension**](https://github.com/FRFlo/lugo/releases/latest)
+[**Install from the VS Code Marketplace**](https://marketplace.visualstudio.com/items?itemName=FRFlo.lugo-vscode-fivem-enhanced)
 
 ## Why Lugo?
 
@@ -41,7 +41,7 @@ Lugo implements a comprehensive suite of modern Language Server Protocol feature
 * **Document Highlights:** Click or move your cursor over any variable or function to instantly highlight all read/write usages within the current file.
 * **Smart Selection (Selection Range):** Press `Shift+Alt+RightArrow` to semantically expand your text selection based on the AST (Identifier -> Call Expression -> Statement -> Block -> Function -> File).
 * **Go to Definition & Hover:** Instant cross-file jumps. Fully parses LuaDoc (`@param`, `@return`, `@field`, `@class`, `@alias`, `@type`, `@generic`, `@overload`, `@see`, `@deprecated`) and renders beautifully formatted function signatures.
-* **Type hover details:** Inspect nested table fields, functions and LuaDoc types. Use the native **+** and **−** hover buttons in VS Code Insiders, or enable `lugo.hover.expandTypes` to expand available details by default.
+* **Type hover details:** Inspect nested table fields, functions and LuaDoc types. In VS Code, use **+ More detail** and **− Less detail** to change the displayed depth, or enable `lugo.hover.expandTypes` to expand available details by default.
 * **Hover Evaluation:** Lugo statically evaluates constant expressions (math, bitwise operations, string concatenation and logic) in real-time, displaying the computed result directly in the hover tooltip.
 * **Advanced Type Inference:** Lazily evaluates and caches types. Supports control-flow type narrowing (e.g., `type(x) == "string"`), loop variable unpacking (`ipairs`/`pairs`), `require` module aliasing/exports and deep metatable resolution (understands `setmetatable` and `__index` inheritance).
 * **Find References & Code Lens:** Find all usages of a symbol across your workspace. Automatically embeds clickable Code Lens reference counters directly above function definitions.
@@ -148,13 +148,7 @@ MCP requests are constrained to the workspace root and reject traversal, unsafe 
 ## Installation
 
 ### VS Code
-Download the `.vsix` from [GitHub Releases](https://github.com/FRFlo/lugo/releases/latest) and install it in VS Code Insiders with **Extensions: Install from VSIX...**. Relaunch Insiders with the hover API enabled for Lugo.
-
-```sh
-code-insiders --enable-proposed-api=FRFlo.lugo-vscode-fivem-enhanced .
-```
-
-The extension detects your OS and architecture and runs the bundled server.
+Simply install the extension from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=FRFlo.lugo-vscode-fivem-enhanced). The extension automatically detects your OS and architecture and runs the correct bundled Go binary. No external dependencies are required.
 
 ### Other Editors (Neovim, Helix, etc.)
 Lugo is entirely editor-agnostic and communicates using standard JSON-RPC over `stdio`. You can download the standalone LSP binaries for Windows, Linux and macOS from the [GitHub Releases](https://github.com/FRFlo/lugo/releases) page.
