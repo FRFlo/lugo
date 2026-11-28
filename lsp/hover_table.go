@@ -38,12 +38,41 @@ type hoverAlias struct {
 	typeName string
 }
 
+func (s *Server) hoverIdentifierType(doc *Document, ctx *SymbolContext) TypeSet {
+	typ := doc.InferType(ctx.IdentNodeID)
+	if typ.DeclNode != ast.InvalidNode || typ.CustomName != "" || len(typ.Alternatives) != 0 || s.GlobalIndex == nil || !ctx.IsGlobal {
+		return typ
+	}
+	resource := s.getDocumentFiveMProfile(doc).ResourceRoot
+	if resource == "" {
+		return typ
+	}
+
+	// The callback restoring a resource global can live in a different script
+	// from the initializer selected as its definition.
+	key := GlobalKey{PropHash: ast.HashBytes(doc.nodeSource(ctx.IdentNodeID))}
+	for _, symbol := range s.visibleGlobalSymbolsFromEntries(doc, s.GlobalIndex.SymbolsByHash(key), 0) {
+		source := s.Documents[symbol.URI]
+		if source == doc || s.getDocumentFiveMProfile(source).ResourceRoot != resource {
+			continue
+		}
+		value := source.getAssignedValue(symbol.NodeID)
+		if value == ast.InvalidNode || source.Tree.Nodes[value].Kind != ast.KindIdent {
+			continue
+		}
+		inferred := source.InferType(value)
+		if owner, _ := s.fiveMTableGlobalOwner(inferred); owner != nil && s.getDocumentFiveMProfile(owner).ResourceRoot != resource {
+			typ = mergeFiveMEventTypes(typ, inferred)
+		}
+	}
+	return typ
+}
+
 // hoverTableDetail uses the same declaration-backed types as member inference.
-func (s *Server) hoverTableDetail(doc *Document, ctx *SymbolContext, offset uint32, depth int) (string, bool) {
+func (s *Server) hoverTableDetail(doc *Document, ctx *SymbolContext, offset uint32, depth int, typ TypeSet) (string, bool) {
 	if doc == nil || ctx == nil {
 		return "", false
 	}
-	var typ TypeSet
 	var raw string
 	if ctx.IsProp {
 		parent := doc.Tree.Nodes[ctx.IdentNodeID].Parent
@@ -53,8 +82,6 @@ func (s *Server) hoverTableDetail(doc *Document, ctx *SymbolContext, offset uint
 		if typ.DeclNode == ast.InvalidNode && typ.CustomName == "" && ctx.TargetDoc != nil && ctx.TargetDefID != ast.InvalidNode {
 			typ = ctx.TargetDoc.InferType(ctx.TargetDefID)
 		}
-	} else if ctx.TargetDoc != nil && ctx.TargetDefID != ast.InvalidNode {
-		typ = ctx.TargetDoc.InferType(ctx.TargetDefID)
 	}
 	if ctx.TargetDoc != nil && ctx.TargetDefID != ast.InvalidNode {
 		if luadoc := ctx.TargetDoc.GetLuaDoc(ctx.TargetDefID); luadoc != nil {
@@ -164,6 +191,27 @@ func (s *Server) formatHoverTable(doc *Document, typ TypeSet, depth, indent int,
 					return "", true
 				}
 				fields[name] = owner.InferType(value)
+			}
+		}
+	}
+	if validTable && owner != doc {
+		if _, receiver := s.fiveMTableGlobalOwner(typ); receiver != 0 {
+			view := s.fiveMTableVisibilityDoc(owner, doc)
+			keys := s.GlobalIndex.FieldKeysForReceivers(map[uint64]bool{receiver: true})
+			for _, key := range keys {
+				for _, symbol := range s.visibleGlobalSymbolsFromEntries(view, s.GlobalIndex.SymbolsByHash(key), 0) {
+					fieldDoc := s.Documents[symbol.URI]
+					name := string(fieldDoc.nodeSource(symbol.NodeID))
+					if _, exists := fields[name]; exists || name == "" {
+						continue
+					}
+					if value := fieldDoc.getAssignedValue(symbol.NodeID); value != ast.InvalidNode {
+						if depth == 0 {
+							return "", true
+						}
+						fields[name] = fieldDoc.InferType(value)
+					}
+				}
 			}
 		}
 	}

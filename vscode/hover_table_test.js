@@ -6,7 +6,7 @@ const { createTableHoverController } = require("./hover_table");
 		constructor(line, character) { this.line = line; this.character = character; }
 		isEqual(other) { return this.line === other.line && this.character === other.character; }
 	}
-	class Selection { constructor(start, end) { this.start = start; this.end = end; } }
+	class Selection { constructor(start, end) { this.start = start; this.end = end; this.active = end; } }
 	class MarkdownString { constructor(value) { this.value = value; } }
 	const document = { uri: { toString: () => "file:///test.lua" }, version: 2, validatePosition: p => p };
 	const editor = { document, viewColumn: 1 };
@@ -15,7 +15,7 @@ const { createTableHoverController } = require("./hover_table");
 	const vscode = {
 		Position, Selection, MarkdownString,
 		workspace: { getConfiguration: () => ({ get: () => expandTypes }) },
-		window: { visibleTextEditors: [editor], showTextDocument: async () => editor },
+		window: { activeTextEditor: editor, visibleTextEditors: [editor], showTextDocument: async () => editor },
 		commands: { executeCommand: async command => commands.push(command) },
 	};
 	let requested;

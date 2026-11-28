@@ -255,10 +255,14 @@ func (s *Server) handleHover(req Request) {
 		fromFile  string
 		callable  string
 		r         *Range
+		identType TypeSet
 	)
 
 	if ctx != nil {
 		r = new(getNodeRange(doc.Tree, ctx.IdentNodeID))
+		if !ctx.IsProp {
+			identType = s.hoverIdentifierType(doc, ctx)
+		}
 
 		if ctx.TargetURI != "" && ctx.TargetURI != uri {
 			fromFile = filepath.Base(ctx.TargetDoc.Path)
@@ -392,22 +396,9 @@ func (s *Server) handleHover(req Request) {
 						}
 					}
 				} else {
-					var baseType TypeSet
-
-					if ctx.TargetDoc != nil && ctx.TargetDefID != ast.InvalidNode {
+					baseType := identType
+					if ctx.IsProp {
 						baseType = ctx.TargetDoc.InferType(ctx.TargetDefID)
-					} else if ctx.IsProp {
-						pID := doc.Tree.Nodes[ctx.IdentNodeID].Parent
-						if pID != ast.InvalidNode {
-							pNode := doc.Tree.Nodes[pID]
-
-							switch pNode.Kind {
-							case ast.KindMemberExpr:
-								baseType = doc.InferType(pID)
-							case ast.KindMethodCall, ast.KindMethodName:
-								baseType = doc.InferType(pID)
-							}
-						}
 					}
 
 					if ctx.IsProp {
@@ -609,7 +600,7 @@ func (s *Server) handleHover(req Request) {
 				}
 			}
 		} else {
-			var baseType TypeSet
+			baseType := identType
 
 			if ctx.IsProp {
 				pID := doc.Tree.Nodes[ctx.IdentNodeID].Parent
@@ -675,7 +666,7 @@ func (s *Server) handleHover(req Request) {
 	if params.LugoTableDepth != nil {
 		depth = max(-1, *params.LugoTableDepth)
 	}
-	detail, more := s.hoverTableDetail(doc, ctx, offset, depth)
+	detail, more := s.hoverTableDetail(doc, ctx, offset, depth, identType)
 	if detail != "" {
 		hoverText += "\n\n---\n\n**Type details**\n\n```lua\n" + detail + "\n```"
 	}

@@ -47,9 +47,13 @@ function createTableHoverController(vscode, getClient) {
 		const position = new vscode.Position(line, character);
 		if (!editor.document.validatePosition(position).isEqual(position)) return;
 		await vscode.window.showTextDocument(editor.document, { viewColumn: editor.viewColumn });
-		pending = { uri, version, line, character, depth };
 		editor.selection = new vscode.Selection(position, position);
 		await vscode.commands.executeCommand("editor.action.hideHover");
+		// VS Code can still dismiss the hover after handling the link click.
+		await new Promise(resolve => setTimeout(resolve, 100));
+		if (vscode.window.activeTextEditor !== editor || editor.document.version !== version ||
+			!editor.selection.active.isEqual(position)) return;
+		pending = { uri, version, line, character, depth };
 		await vscode.commands.executeCommand("editor.action.showHover", { focus: "autoFocusImmediately" });
 	}
 
