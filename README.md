@@ -125,10 +125,12 @@ See [tests/README.md](tests/README.md) for the fixture and test layers.
 
 ## MCP server
 
-`lugo-mcp` exposes the indexed workspace over MCP (stdio), using one process per workspace:
+The VS Code extension registers Lugo as an MCP server in VS Code and Cursor for each local workspace folder. Enable the Lugo tools in your editor’s MCP or agent settings; each server runs as a separate process. The extension follows `lugo.telemetry.enabled` for MCP telemetry. Cursor requires a version exposing its MCP extension API.
+
+`lugo --mcp` also exposes the indexed workspace over MCP (stdio) independently, using one process per workspace:
 
 ```bash
-lugo-mcp /path/to/project
+lugo --mcp /path/to/project
 ```
 
 The server registers read-only LSP tools such as `lugo_hover`, `lugo_completion`, `lugo_definition`, `lugo_references`, `lugo_document_symbols`, `lugo_workspace_symbols`, `lugo_format`, `lugo_range_format`, `lugo_diagnostics`, and `lugo_semantic_tokens`. Higher-level tools include `lugo_workspace`, `lugo_workspace_status`, `lugo_symbol_context`, `lugo_fivem_resources`, `lugo_fivem_events`, `lugo_fivem_exports`, `lugo_fivem_contracts`, and `lugo_reindex`. `lugo_validate_workspace_edit` and `lugo_preview_workspace_edit` validate or preview edits only; they never write files.

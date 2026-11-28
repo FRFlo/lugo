@@ -9,12 +9,28 @@ import (
 	"syscall"
 
 	"github.com/FRFlo/lugo/lsp"
+	"github.com/FRFlo/lugo/mcpserver"
 )
 
 // Version specifies the current build version of the Lugo binary.
 var Version = "dev"
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "--mcp" {
+		root := "."
+		if len(os.Args) > 2 {
+			root = os.Args[2]
+		}
+		if len(os.Args) > 3 {
+			fmt.Fprintln(os.Stderr, "usage: lugo --mcp [workspace]")
+			os.Exit(2)
+		}
+		if err := mcpserver.Run(root); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	ciFlag := flag.String("ci", "", "Path to CI configuration JSON file")
 	flag.Parse()
 

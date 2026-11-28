@@ -23,6 +23,7 @@
     "enabledApiProposals": ["editorHoverVerbosityLevel"],
     "activationEvents": [
         "onLanguage:lua",
+        "onMcpServerDefinitionProvider:lugo",
         "workspaceContains:**/*.lua",
         "workspaceContains:**/fxmanifest.lua",
         "workspaceContains:**/__resource.lua"
@@ -30,9 +31,10 @@
     "main": "./extension.js",
     "scripts": {
         "build": "esbuild ./extension.js --bundle --outfile=dist/extension.js --external:vscode --external:@opentelemetry/api --format=cjs --platform=node --target=node18",
-        "test": "node package_identity_test.js && node fivem_resources_test.js && node telemetry_test.js && node client_lifecycle_test.js && node hover_table_test.js"
+        "test": "node mcp_test.js && node package_identity_test.js && node fivem_resources_test.js && node telemetry_test.js && node client_lifecycle_test.js && node hover_table_test.js"
     },
     "contributes": {
+        "mcpServerDefinitionProviders": [{ "id": "lugo", "label": "Lugo" }],
         "languages": [
             {
                 "id": "lua",
