@@ -156,6 +156,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
     steps:
     - name: Checkout
       uses: actions/checkout@v6
@@ -222,3 +223,7 @@ jobs:
         name: "Release ${{ github.ref_name }}"
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    # Configure Marketplace Trusted Publishing for FRFlo/lugo and release.yml.
+    - name: Publish VS Code extension to Marketplace
+      run: vsce publish --oidc --packagePath "lugo-${{ github.ref_name }}.vsix"
