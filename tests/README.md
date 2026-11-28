@@ -20,7 +20,7 @@ Coverage layers:
 
 - `token/`, `lexer/`, `parser/`, `ast/`, `semantic/`: focused invariants,
   malformed input, reusable state, and zero-allocation gates.
-- `lsp/`, `cmd/lugo-mcp/`: in-process integration and public request contracts.
+- `lsp/`, `mcpserver/`: in-process integration and public request contracts.
 - `tests/e2e/*.go`: one file per scenario for spawned-process LSP/MCP smoke,
   document changes, navigation, semantic tokens, resource contracts, security
   boundaries, and the headless `--ci` binary entry point. Shared stdio and

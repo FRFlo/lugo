@@ -7,6 +7,7 @@ const { LanguageClient, ErrorAction, CloseAction, State } = require("vscode-lang
 const { PostHog } = require("posthog-node");
 const { discoverResources, parseManifest, renderResource } = require("./fivem_resources");
 const { createTableHoverProvider } = require("./hover_table");
+const { registerMcp } = require("./mcp");
 
 const LUA_DOCUMENT_SELECTOR = [
 	{ scheme: "file", language: "lua" },
@@ -549,6 +550,7 @@ async function addToIgnoredGlobs(folderUri) {
 }
 
 async function activate(context) {
+	registerMcp(vscode, context);
 	context.subscriptions.push(vscode.languages.registerHoverProvider(
 		LUA_DOCUMENT_SELECTOR,
 		createTableHoverProvider(vscode, () => client),

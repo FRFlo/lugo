@@ -7,7 +7,7 @@ import (
 )
 
 func TestMCPProcessRejectsTraversal(t *testing.T) {
-	p := startProcess(t, binaryEnv(t, "LUGO_MCP_BIN"), copyFixture(t))
+	p := startProcess(t, binaryEnv(t, "LUGO_MCP_BIN"), "--mcp", copyFixture(t))
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	p.sendLine(t, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{"protocolVersion": "2025-06-18", "capabilities": map[string]any{}, "clientInfo": map[string]any{"name": "security-e2e", "version": "1"}}})

@@ -1,4 +1,4 @@
-package main
+package mcpserver
 
 import (
 	"context"
@@ -37,14 +37,14 @@ func TestMCPStdioObservabilityArtifact(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		bin += ".exe"
 	}
-	build := exec.CommandContext(ctx, "go", "build", "-trimpath", "-o", bin, ".")
+	build := exec.CommandContext(ctx, "go", "build", "-trimpath", "-o", bin, "..")
 	build.Dir = "."
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build MCP: %v\n%s", err, output)
 	}
 
 	journal := filepath.Join(t.TempDir(), "trace.ndjson")
-	cmd := exec.CommandContext(ctx, bin, root)
+	cmd := exec.CommandContext(ctx, bin, "--mcp", root)
 	cmd.Env = append(os.Environ(),
 		"LUGO_TELEMETRY=true",
 		"LUGO_TELEMETRY_LOCAL_ONLY=true",

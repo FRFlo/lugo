@@ -296,7 +296,7 @@ func TestMain(m *testing.M) {
 	}
 	_, sourceFile, _, _ := runtime.Caller(0)
 	moduleRoot := filepath.Dir(filepath.Dir(filepath.Dir(sourceFile)))
-	for _, build := range [][2]string{{builtBinaries.lugo, "."}, {builtBinaries.mcp, "./cmd/lugo-mcp"}} {
+	for _, build := range [][2]string{{builtBinaries.lugo, "."}, {builtBinaries.mcp, "."}} {
 		if _, err := os.Stat(build[0]); err == nil {
 			continue
 		}

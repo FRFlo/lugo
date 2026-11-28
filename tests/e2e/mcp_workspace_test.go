@@ -10,7 +10,7 @@ import (
 func TestMCPProcessFiveMWorkspace(t *testing.T) {
 	binary := binaryEnv(t, "LUGO_MCP_BIN")
 	root := copyFixture(t)
-	p := startProcess(t, binary, root)
+	p := startProcess(t, binary, "--mcp", root)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	p.sendLine(t, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{

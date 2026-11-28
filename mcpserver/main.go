@@ -1,7 +1,7 @@
-// Command lugo-mcp exposes Lugo's parser, LSP and FiveM workspace model as
+// Package mcpserver exposes Lugo's parser, LSP and FiveM workspace model as
 // an MCP server. It is intentionally a single-workspace process: start one
 // instance per project root.
-package main
+package mcpserver
 
 import (
 	"context"
@@ -143,17 +143,8 @@ type locatedEdit struct {
 	index      int
 }
 
-func main() {
-	log.SetOutput(os.Stderr)
-	if err := run(); err != nil {
-		log.Print(err)
-		os.Exit(1)
-	}
-}
-
-// run keeps all telemetry cleanup inside a defer-safe function. main only
-// converts the final error to a process exit after the journal has flushed.
-func run() (runErr error) {
+// Run keeps telemetry cleanup defer-safe before returning an error to the caller.
+func Run(root string) (runErr error) {
 	telemetry, telemetryErr := lsp.InitTelemetry("mcp")
 	if telemetryErr != nil {
 		log.Printf("telemetry initialization failed: %v", telemetryErr)
@@ -179,10 +170,6 @@ func run() (runErr error) {
 		}
 	}()
 	lsp.RecordTelemetry(context.Background(), "lugo.mcp.lifecycle", map[string]any{"state": "started"})
-	root := "."
-	if len(os.Args) > 1 {
-		root = os.Args[1]
-	}
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		return fmt.Errorf("resolve MCP workspace: %w", err)
